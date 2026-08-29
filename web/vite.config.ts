@@ -3,8 +3,9 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-// The Go binary embeds dist/, so the build must stay self-contained: relative
-// asset paths and no code splitting surprises behind the SPA fallback.
+// The Go binary embeds internal/web/dist, so the bundle is built straight into
+// that package. The build must stay self-contained: relative asset paths and no
+// code splitting surprises behind the SPA fallback.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   base: './',
@@ -14,7 +15,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: 'dist',
+    outDir: path.resolve(import.meta.dirname, '../internal/web/dist'),
     emptyOutDir: true,
     chunkSizeWarningLimit: 900,
   },

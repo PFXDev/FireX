@@ -47,9 +47,9 @@ created by hand.
 
 ```bash
 make ui-deps          # once
-make build            # builds the UI, embeds it, produces ./firex
+make build            # builds the UI, embeds it, produces ./bin/firex
 
-FIREX_ADMIN_PASSWORD=change-me-now ./firex
+FIREX_ADMIN_PASSWORD=change-me-now ./bin/firex
 ```
 
 Without `FIREX_ADMIN_PASSWORD` a random password is generated and printed once
@@ -140,28 +140,50 @@ remains the authority across panels.
 
 ## Development
 
+### Layout
+
+```
+cmd/firex/            # main package: config, background loops, HTTP server
+internal/
+  clash/              # mihomo profile template expansion and rendering
+  config/             # environment-driven settings
+  model/              # GORM models and migrations
+  panel/              # 3x-ui REST client
+  paneltest/          # in-process fake 3x-ui used by the tests
+  provision/          # discovery, reconciliation, traffic and quota enforcement
+  server/             # admin API, subscription endpoint, UI mount
+  sharelink/          # share-link parsing and rewriting
+  store/              # database open/migrate
+  subscription/       # per-user subscription assembly
+  web/                # go:embed of the built UI (dist/ is generated)
+web/                  # React 19 + TypeScript + Vite frontend sources
+bin/                  # build output (generated)
+data/                 # SQLite database at runtime (generated)
+```
+
 The management UI is React 19 + TypeScript + Vite, styled with
 [shadcn/ui](https://ui.shadcn.com) (Base UI primitives, Tailwind v4) under
 `web/`. Components live in `web/src/components/ui/` as ordinary source — add
-more with `cd web && npx shadcn@latest add <component>`.
+more with `cd web && npx shadcn@latest add <component>`. `npm run build` writes
+the bundle into `internal/web/dist/`, which the Go build embeds.
 
 ```bash
-make ui-deps    # once: install the frontend dependencies
-make dev        # Vite dev server on :5173, proxying /api and /sub to :8080
-go run .        # backend on :8080
-make test       # Go tests
-make verify     # vet + test + typecheck + full build
+make ui-deps      # once: install the frontend dependencies
+make dev          # Vite dev server on :5173, proxying /api and /sub to :8080
+go run ./cmd/firex  # backend on :8080
+make test         # Go tests
+make verify       # vet + test + typecheck + full build
 ```
 
 The Go tests drive a fake 3x-ui (`internal/paneltest`) end to end: discovery,
 provisioning, traffic accounting and subscription rendering all run against it
 without a real panel.
 
-A fresh clone has no `web/dist` bundle, so a bare `go build ./...` fails on the
-`go:embed` in `web/embed.go`. Every `make` Go target depends on `dist-stub`,
-which is why `make test` beats `go test ./...` before the UI has been built
-once. A binary built from the stub serves the API and reports that the UI is
-missing; run `make ui` (or `make build`) for the real thing.
+A fresh clone has no UI bundle, only the tracked `internal/web/dist/.gitkeep`
+placeholder that satisfies the `go:embed` in `internal/web/embed.go` — so plain
+`go build ./...` and `go test ./...` work, and the resulting binary serves the
+API while reporting that the UI is missing. Run `make ui` (or `make build`) for
+the real thing; `make dist-stub` restores the placeholder after a `make clean`.
 
 ## License
 

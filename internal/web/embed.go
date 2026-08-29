@@ -1,8 +1,8 @@
 // Package web embeds the built management UI.
 //
-// The dist directory is produced by `make ui`; a source checkout only has the
-// placeholder, so Dist reports whether a real build is present rather than
-// failing the whole binary.
+// The dist directory is produced by `make ui` from the frontend sources in
+// /web; a source checkout only has the placeholder, so Dist reports whether a
+// real build is present rather than failing the whole binary.
 package web
 
 import (

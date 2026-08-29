@@ -34,8 +34,8 @@ go.work.sum
 # Local reference clones (read-only upstream sources)
 reference/
 
-# Built binary
-/firex
+# Built binaries
+/bin/
 
 # Runtime data (SQLite database)
 /data/
@@ -43,5 +43,8 @@ reference/
 # Frontend
 web/node_modules/
 web/*.tsbuildinfo
-# Build output; `make dist-stub` recreates the placeholder the go:embed needs.
-web/dist/
+
+# Built UI bundle. Only the .gitkeep placeholder is tracked, so that a fresh
+# clone satisfies the go:embed in internal/web/embed.go without a UI build.
+internal/web/dist/*
+!internal/web/dist/.gitkeep

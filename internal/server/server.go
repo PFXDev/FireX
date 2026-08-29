@@ -16,7 +16,7 @@ import (
 	"github.com/PFXDev/FireX/internal/provision"
 	"github.com/PFXDev/FireX/internal/store"
 	"github.com/PFXDev/FireX/internal/subscription"
-	"github.com/PFXDev/FireX/web"
+	"github.com/PFXDev/FireX/internal/web"
 )
 
 type Server struct {
