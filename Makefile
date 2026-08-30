@@ -6,8 +6,8 @@ DIST_DIR := internal/web/dist
 BIN_DIR  := bin
 
 # Stamped into internal/version so the updater can tell this build apart from a
-# published release. A plain `go build` or `make run` leaves the "dev"
-# placeholder, which the updater always considers out of date.
+# published release. A plain `go build` leaves the "dev" placeholder, which the
+# updater always considers out of date.
 VPKG       := github.com/PFXDev/FireX/internal/version
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -45,8 +45,8 @@ build-go: dist-stub ## Build the binary without rebuilding the UI
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(CMD)
 
 .PHONY: run
-run: dist-stub ## Run from source (build the UI once first for a usable panel)
-	go run $(CMD)
+run: build ## Build the frontend and backend, then run the compiled binary
+	./$(BIN_DIR)/$(BINARY)
 
 .PHONY: dev
 dev: ## Run the Vite dev server against a local backend on :8080

@@ -227,8 +227,8 @@ the bundle into `internal/web/dist/`, which the Go build embeds.
 
 ```bash
 make ui-deps      # once: install the frontend dependencies
+make run          # build the frontend and backend, then start FireX on :8080
 make dev          # Vite dev server on :5173, proxying /api and /sub to :8080
-go run ./cmd/firex  # backend on :8080
 make test         # Go tests
 make verify       # vet + test + typecheck + full build
 ```
