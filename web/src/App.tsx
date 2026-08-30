@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ThemeProvider, useTheme } from 'next-themes'
 import { toast } from 'sonner'
 import {
+  ChevronsUpDownIcon,
   FlameIcon,
   GaugeIcon,
   LayersIcon,
@@ -15,16 +16,28 @@ import {
 } from 'lucide-react'
 
 import { ApiError, api } from '@/api'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { Separator } from '@/components/ui/separator'
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
@@ -35,6 +48,7 @@ import {
 } from '@/components/ui/sidebar'
 import { Spinner } from '@/components/ui/spinner'
 import { Toaster } from '@/components/ui/sonner'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/format'
 import { OverviewPage } from '@/pages/Overview'
 import { PanelsPage } from '@/pages/Panels'
@@ -119,15 +133,21 @@ function Shell() {
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton size="lg" className="pointer-events-none">
-                <FlameIcon />
-                <span className="font-heading text-base font-semibold">FireX</span>
+              <SidebarMenuButton size="lg" render={<a href="#/overview" />}>
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                  <FlameIcon />
+                </div>
+                <div className="grid flex-1 text-left leading-tight">
+                  <span className="truncate font-heading font-semibold">FireX</span>
+                  <span className="truncate text-xs text-sidebar-foreground/70">3X-UI 控制平面</span>
+                </div>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
+            <SidebarGroupLabel>管理</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {ROUTES.map((r) => (
@@ -135,9 +155,7 @@ function Shell() {
                     <SidebarMenuButton
                       isActive={route === r.key}
                       tooltip={r.label}
-                      onClick={() => {
-                        window.location.hash = `#/${r.key}`
-                      }}
+                      render={<a href={`#/${r.key}`} />}
                     >
                       <r.icon />
                       <span>{r.label}</span>
@@ -151,31 +169,21 @@ function Shell() {
         <SidebarFooter>
           <SidebarMenu>
             <SidebarMenuItem>
-              <ThemeToggleButton />
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip="退出登录"
-                onClick={async () => {
-                  await api.post('/auth/logout')
-                  setUsername(null)
-                }}
-              >
-                <LogOutIcon />
-                <span>{username}</span>
-              </SidebarMenuButton>
+              <NavUser username={username} onSignedOut={() => setUsername(null)} />
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>
       </Sidebar>
       <SidebarInset>
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-          <SidebarTrigger />
-          <span className="text-sm text-muted-foreground">
-            {ROUTES.find((r) => r.key === route)?.label}
-          </span>
+        <header className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur-md">
+          <SidebarTrigger className="-ml-1" />
+          <Separator orientation="vertical" className="mr-1 h-4" />
+          <span className="text-sm font-medium">{ROUTES.find((r) => r.key === route)?.label}</span>
+          <div className="ml-auto flex items-center gap-1">
+            <ThemeToggle />
+          </div>
         </header>
-        <div className="flex flex-1 flex-col gap-6 p-6">
+        <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
           <Page route={route} />
         </div>
       </SidebarInset>
@@ -183,17 +191,71 @@ function Shell() {
   )
 }
 
-function ThemeToggleButton() {
+function NavUser({ username, onSignedOut }: { username: string; onSignedOut: () => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<SidebarMenuButton size="lg" />}>
+        <Avatar size="sm">
+          <AvatarFallback className="bg-primary/10 font-medium text-primary uppercase">
+            {username.slice(0, 2)}
+          </AvatarFallback>
+        </Avatar>
+        <div className="grid flex-1 text-left leading-tight">
+          <span className="truncate font-medium">{username}</span>
+          <span className="truncate text-xs text-sidebar-foreground/70">管理员</span>
+        </div>
+        <ChevronsUpDownIcon className="ml-auto" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="right" align="end" className="min-w-52">
+        <DropdownMenuLabel>{username}</DropdownMenuLabel>
+        <DropdownMenuGroup>
+          <DropdownMenuItem
+            onClick={() => {
+              window.location.hash = '#/settings'
+            }}
+          >
+            <SettingsIcon />
+            设置
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuItem
+            variant="destructive"
+            onClick={async () => {
+              await api.post('/auth/logout')
+              onSignedOut()
+            }}
+          >
+            <LogOutIcon />
+            退出登录
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme()
   const dark = resolvedTheme !== 'light'
+  const label = dark ? '切换到浅色主题' : '切换到深色主题'
   return (
-    <SidebarMenuButton
-      tooltip={dark ? '切换到浅色' : '切换到深色'}
-      onClick={() => setTheme(dark ? 'light' : 'dark')}
-    >
-      {dark ? <SunIcon /> : <MoonIcon />}
-      <span>{dark ? '浅色主题' : '深色主题'}</span>
-    </SidebarMenuButton>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={label}
+            onClick={() => setTheme(dark ? 'light' : 'dark')}
+          />
+        }
+      >
+        {dark ? <SunIcon /> : <MoonIcon />}
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -233,13 +295,13 @@ function Login({ onSignedIn }: { onSignedIn: () => void }) {
   }
 
   return (
-    <div className="flex min-h-svh items-center justify-center p-6">
+    <div className="flex min-h-svh items-center justify-center bg-muted/40 p-6">
       <Card className="w-full max-w-sm">
-        <CardHeader className="items-center text-center">
-          <CardTitle className="flex items-center justify-center gap-2 text-2xl">
-            <FlameIcon className="size-6 text-primary" />
-            FireX
-          </CardTitle>
+        <CardHeader className="justify-items-center text-center">
+          <div className="flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+            <FlameIcon className="size-5" />
+          </div>
+          <CardTitle className="text-xl">FireX</CardTitle>
           <CardDescription>3X-UI 多面板统一管理</CardDescription>
         </CardHeader>
         <CardContent>
@@ -260,12 +322,12 @@ function Login({ onSignedIn }: { onSignedIn: () => void }) {
                 <Input
                   id="login-password"
                   type="password"
-                  value={password}
                   autoComplete="current-password"
                   onChange={(e) => setPassword(e.target.value)}
+                  value={password}
                 />
               </Field>
-              <Button type="submit" disabled={busy}>
+              <Button type="submit" size="lg" disabled={busy}>
                 {busy && <Spinner data-icon="inline-start" />}
                 {busy ? '登录中…' : '登录'}
               </Button>

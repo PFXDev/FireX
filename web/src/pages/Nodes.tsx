@@ -360,7 +360,7 @@ export function NodesPage() {
 
 function NodeStatus({ node }: { node: Node }) {
   if (node.missing) return <StatusBadge tone="bad">已失联</StatusBadge>
-  if (!node.remoteEnabled) return <StatusBadge tone="idle">面板已禁用</StatusBadge>
+  if (!node.remoteEnabled) return <StatusBadge tone="warn">面板已禁用</StatusBadge>
   if (node.enabled) return <StatusBadge tone="good">启用</StatusBadge>
   return <StatusBadge tone="idle">停用</StatusBadge>
 }

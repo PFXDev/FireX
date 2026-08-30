@@ -97,7 +97,7 @@ export function SettingsPage() {
                 id="clash-template"
                 rows={22}
                 spellCheck={false}
-                className="font-mono text-xs"
+                className="max-h-[60vh] font-mono text-xs"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
               />

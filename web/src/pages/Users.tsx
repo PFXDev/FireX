@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { CopyIcon, MoreHorizontalIcon, PlusIcon, UsersIcon } from 'lucide-react'
+import { CopyIcon, MoreHorizontalIcon, PlusIcon, TriangleAlertIcon, UsersIcon } from 'lucide-react'
 
 import { api } from '@/api'
 import type { Plan, SubscriptionPreview, User } from '@/api'
@@ -430,7 +430,8 @@ export function UsersPage() {
               </Field>
 
               {preview.data.warnings.length > 0 && (
-                <Alert variant="destructive">
+                <Alert variant="warning">
+                  <TriangleAlertIcon />
                   <AlertTitle>生成订阅时有警告</AlertTitle>
                   <AlertDescription>
                     <ul className="flex flex-col gap-1">
@@ -490,7 +491,7 @@ export function UsersPage() {
                   <Textarea
                     readOnly
                     rows={14}
-                    className="font-mono text-xs"
+                    className="max-h-[50vh] font-mono text-xs"
                     value={preview.data.renderError || preview.data.clash}
                   />
                 </TabsContent>
@@ -553,6 +554,6 @@ function UserStatus({ user }: { user: User }) {
       </StatusBadge>
     )
   }
-  if (user.syncState === 'pending') return <StatusBadge tone="idle">待下发</StatusBadge>
+  if (user.syncState === 'pending') return <StatusBadge tone="warn">待下发</StatusBadge>
   return <StatusBadge tone="good">正常</StatusBadge>
 }

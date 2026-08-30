@@ -8,6 +8,12 @@
 @theme inline {
     --font-heading: var(--font-sans);
     --font-sans: 'Geist Variable', sans-serif;
+    --color-brand: var(--brand);
+    --color-brand-foreground: var(--brand-foreground);
+    --color-success: var(--success);
+    --color-success-foreground: var(--success-foreground);
+    --color-warning: var(--warning);
+    --color-warning-foreground: var(--warning-foreground);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -48,91 +54,103 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/*
+ * FireX brand palette.
+ *
+ * `--brand` is the product colour #018eee, kept exact so logo, focus rings and
+ * chart-1 render the real thing. Everything else is derived from its hue (249):
+ * the neutrals carry a trace of that hue so surfaces, borders and muted text
+ * read as one family instead of grey-plus-a-blue-button, and `--primary` is
+ * the brand shifted in lightness per scheme so button labels clear WCAG AA
+ * (light: 4.6:1 white-on-blue, dark: 7.7:1 near-black-on-blue). The raw brand
+ * colour only fills roles with the 3:1 non-text threshold.
+ *
+ * Dark mode is a true-black scheme: the background sits at the bottom of the
+ * scale and surfaces are separated by the hairline rings and borders the
+ * components already carry, not by big fill jumps — below oklch 0.15 the sRGB
+ * steps are too small to read as elevation on their own.
+ */
 :root {
+    --brand: oklch(0.6341 0.1747 249.01);
+    --brand-foreground: oklch(0.145 0.02 252);
+
     --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
+    --foreground: oklch(0.16 0.02 255);
     --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
+    --card-foreground: oklch(0.16 0.02 255);
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.16 0.02 255);
+    --primary: oklch(0.552 0.152 249);
+    --primary-foreground: oklch(0.985 0.007 249);
+    --secondary: oklch(0.968 0.008 249);
+    --secondary-foreground: oklch(0.26 0.022 252);
+    --muted: oklch(0.968 0.008 249);
+    --muted-foreground: oklch(0.552 0.026 252);
+    --accent: oklch(0.955 0.018 249);
+    --accent-foreground: oklch(0.4 0.1 249);
     --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+    --success: oklch(0.52 0.13 150);
+    --success-foreground: oklch(0.985 0.007 150);
+    --warning: oklch(0.55 0.12 68);
+    --warning-foreground: oklch(0.985 0.007 68);
+    --border: oklch(0.925 0.012 249);
+    --input: oklch(0.925 0.012 249);
+    --ring: oklch(0.6341 0.1747 249.01);
+    --chart-1: oklch(0.6341 0.1747 249.01);
+    --chart-2: oklch(0.72 0.122 205);
+    --chart-3: oklch(0.55 0.17 273);
+    --chart-4: oklch(0.8 0.13 178);
+    --chart-5: oklch(0.46 0.15 262);
     --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --sidebar: oklch(0.977 0.006 249);
+    --sidebar-foreground: oklch(0.16 0.02 255);
+    --sidebar-primary: oklch(0.552 0.152 249);
+    --sidebar-primary-foreground: oklch(0.985 0.007 249);
+    --sidebar-accent: oklch(0.94 0.022 249);
+    --sidebar-accent-foreground: oklch(0.38 0.104 249);
+    --sidebar-border: oklch(0.918 0.013 249);
+    --sidebar-ring: oklch(0.6341 0.1747 249.01);
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
+    --brand: oklch(0.6341 0.1747 249.01);
+    --brand-foreground: oklch(0.145 0.02 252);
+
+    --background: oklch(0.06 0.008 258);
+    --foreground: oklch(0.97 0.006 249);
+    --card: oklch(0.165 0.016 258);
+    --card-foreground: oklch(0.97 0.006 249);
+    --popover: oklch(0.205 0.018 258);
+    --popover-foreground: oklch(0.97 0.006 249);
+    --primary: oklch(0.72 0.145 249);
+    --primary-foreground: oklch(0.175 0.03 252);
+    --secondary: oklch(0.245 0.021 258);
+    --secondary-foreground: oklch(0.97 0.006 249);
+    --muted: oklch(0.245 0.021 258);
+    --muted-foreground: oklch(0.712 0.022 253);
+    --accent: oklch(0.29 0.034 252);
+    --accent-foreground: oklch(0.97 0.006 249);
     --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
-}
-
-/* FireX brand: keep the neutral shadcn scale, swap the accent for the
-   product's orange in both schemes. */
-:root {
-    --primary: oklch(0.709 0.155 46.5);
-    --primary-foreground: oklch(0.205 0 0);
-    --ring: oklch(0.709 0.155 46.5);
-    --sidebar-primary: oklch(0.709 0.155 46.5);
-    --sidebar-primary-foreground: oklch(0.205 0 0);
-}
-
-.dark {
-    --primary: oklch(0.709 0.155 46.5);
-    --primary-foreground: oklch(0.205 0 0);
-    --ring: oklch(0.709 0.155 46.5);
-    --sidebar-primary: oklch(0.709 0.155 46.5);
-    --sidebar-primary-foreground: oklch(0.205 0 0);
+    --success: oklch(0.75 0.155 152);
+    --success-foreground: oklch(0.175 0.03 152);
+    --warning: oklch(0.8 0.135 75);
+    --warning-foreground: oklch(0.175 0.03 75);
+    --border: oklch(1 0 0 / 12%);
+    --input: oklch(1 0 0 / 16%);
+    --ring: oklch(0.6341 0.1747 249.01);
+    --chart-1: oklch(0.6341 0.1747 249.01);
+    --chart-2: oklch(0.72 0.122 205);
+    --chart-3: oklch(0.62 0.16 273);
+    --chart-4: oklch(0.8 0.13 178);
+    --chart-5: oklch(0.55 0.15 262);
+    --sidebar: oklch(0.1 0.011 258);
+    --sidebar-foreground: oklch(0.97 0.006 249);
+    --sidebar-primary: oklch(0.72 0.145 249);
+    --sidebar-primary-foreground: oklch(0.175 0.03 252);
+    --sidebar-accent: oklch(0.27 0.034 252);
+    --sidebar-accent-foreground: oklch(0.97 0.006 249);
+    --sidebar-border: oklch(1 0 0 / 12%);
+    --sidebar-ring: oklch(0.6341 0.1747 249.01);
 }
 
 @layer base {
@@ -144,5 +162,13 @@
     }
   html {
     @apply font-sans;
+    }
+  ::selection {
+    @apply bg-brand/25;
+    }
+  /* Prose-level inline code: the registry has no Code component, and these
+     appear in Card descriptions and Dialog copy across Settings and Users. */
+  :not(pre) > code {
+    @apply rounded-sm bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground;
     }
 }

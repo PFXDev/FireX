@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { RefreshCwIcon, ServerOffIcon } from 'lucide-react'
+import { RefreshCwIcon, ServerOffIcon, TriangleAlertIcon } from 'lucide-react'
 
 import { api } from '@/api'
 import type { Overview } from '@/api'
@@ -50,9 +50,25 @@ export function OverviewPage() {
         <PageHeader title="总览" description="面板健康状态与全局用量" />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           {Array.from({ length: 6 }, (_, i) => (
-            <Skeleton key={i} className="h-24 w-full" />
+            <Card key={i}>
+              <CardHeader>
+                <Skeleton className="h-4 w-16" />
+                <Skeleton className="h-7 w-20" />
+              </CardHeader>
+            </Card>
           ))}
         </div>
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-5 w-24" />
+            <Skeleton className="h-4 w-32" />
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            {Array.from({ length: 3 }, (_, i) => (
+              <Skeleton key={i} className="h-9 w-full" />
+            ))}
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -84,6 +100,7 @@ export function OverviewPage() {
 
       {data.failedSyncs > 0 && (
         <Alert variant="destructive">
+          <TriangleAlertIcon />
           <AlertTitle>有 {data.failedSyncs} 条下发记录失败</AlertTitle>
           <AlertDescription>到「用户」页查看具体面板和错误原因，修复后可单独重发。</AlertDescription>
         </Alert>
@@ -142,11 +159,11 @@ export function OverviewPage() {
 function Stat({ label, value, sub }: { label: string; value: number | string; sub?: string }) {
   return (
     <Card>
-      <CardContent className="flex flex-col gap-1">
-        <span className="text-xs tracking-wide text-muted-foreground uppercase">{label}</span>
-        <span className="font-heading text-2xl font-semibold tabular-nums">{value}</span>
-        {sub && <span className="text-xs text-muted-foreground">{sub}</span>}
-      </CardContent>
+      <CardHeader>
+        <CardDescription className="text-xs tracking-wide uppercase">{label}</CardDescription>
+        <CardTitle className="text-2xl font-semibold tabular-nums">{value}</CardTitle>
+      </CardHeader>
+      {sub && <CardContent className="text-xs text-muted-foreground">{sub}</CardContent>}
     </Card>
   )
 }

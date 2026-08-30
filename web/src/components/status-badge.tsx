@@ -1,15 +1,15 @@
 import { Badge } from '@/components/ui/badge'
 
 /**
- * Tone maps a FireX state onto the badge variants the theme provides: `good`
- * is the brand accent, `idle` is neutral, `bad` is destructive. The palette
- * has no dedicated success colour, so "healthy" reads as branded rather than
- * green.
+ * Tone maps a FireX state onto a Badge variant. The theme carries dedicated
+ * `success` and `warning` tokens alongside `destructive`, so healthy states
+ * read green rather than competing with the brand-blue primary buttons.
  */
-export type Tone = 'good' | 'idle' | 'bad'
+export type Tone = 'good' | 'warn' | 'idle' | 'bad'
 
-const VARIANT: Record<Tone, 'default' | 'outline' | 'destructive'> = {
-  good: 'default',
+const VARIANT: Record<Tone, 'success' | 'warning' | 'outline' | 'destructive'> = {
+  good: 'success',
+  warn: 'warning',
   idle: 'outline',
   bad: 'destructive',
 }
