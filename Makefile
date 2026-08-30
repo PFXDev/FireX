@@ -4,7 +4,18 @@ PKG      := ./...
 UI_DIR   := web
 DIST_DIR := internal/web/dist
 BIN_DIR  := bin
-LDFLAGS  := -s -w
+
+# Stamped into internal/version so the updater can tell this build apart from a
+# published release. A plain `go build` or `make run` leaves the "dev"
+# placeholder, which the updater always considers out of date.
+VPKG       := github.com/PFXDev/FireX/internal/version
+VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS    := -s -w \
+	-X $(VPKG).Version=$(VERSION) \
+	-X $(VPKG).Commit=$(COMMIT) \
+	-X $(VPKG).BuildTime=$(BUILD_TIME)
 
 .PHONY: help
 help: ## Show available targets

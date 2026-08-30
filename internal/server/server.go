@@ -16,6 +16,7 @@ import (
 	"github.com/PFXDev/FireX/internal/provision"
 	"github.com/PFXDev/FireX/internal/store"
 	"github.com/PFXDev/FireX/internal/subscription"
+	"github.com/PFXDev/FireX/internal/updater"
 	"github.com/PFXDev/FireX/internal/web"
 )
 
@@ -24,16 +25,17 @@ type Server struct {
 	db   *store.DB
 	mgr  *provision.Manager
 	subs *subscription.Service
+	upd  *updater.Updater
 
 	engine *gin.Engine
 	http   *http.Server
 }
 
-func New(cfg *config.Config, db *store.DB, mgr *provision.Manager, subs *subscription.Service) *Server {
+func New(cfg *config.Config, db *store.DB, mgr *provision.Manager, subs *subscription.Service, upd *updater.Updater) *Server {
 	if !cfg.Debug {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	s := &Server{cfg: cfg, db: db, mgr: mgr, subs: subs}
+	s := &Server{cfg: cfg, db: db, mgr: mgr, subs: subs, upd: upd}
 	s.engine = gin.New()
 	s.engine.Use(gin.Recovery())
 	if cfg.Debug {
@@ -87,6 +89,15 @@ func (s *Server) routes() {
 
 	authed.GET("/settings/clashTemplate", s.getClashTemplate)
 	authed.PUT("/settings/clashTemplate", s.setClashTemplate)
+
+	// Self-update sits behind the admin session like everything else. The
+	// session lives in the database, so it survives the restart an update
+	// causes and the UI keeps polling straight through.
+	authed.GET("/version", s.handleVersion)
+	authed.GET("/update/status", s.handleUpdateStatus)
+	authed.POST("/update/check", s.handleUpdateCheck)
+	authed.POST("/update/apply", s.handleUpdateApply)
+	authed.POST("/update/dismiss", s.handleUpdateDismiss)
 
 	s.mountUI()
 }

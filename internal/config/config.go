@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/PFXDev/FireX/internal/updater"
 )
 
 type Config struct {
@@ -23,6 +25,10 @@ type Config struct {
 	SyncInterval     time.Duration
 	TrafficInterval  time.Duration
 	DiscoverInterval time.Duration
+
+	// Update drives self-updates from GitHub releases. Enabled only gates the
+	// periodic check; an admin can always trigger one from the UI.
+	Update updater.Config
 }
 
 func Load() *Config {
@@ -38,7 +44,20 @@ func Load() *Config {
 		SyncInterval:     envDuration("FIREX_SYNC_INTERVAL", 2*time.Minute),
 		TrafficInterval:  envDuration("FIREX_TRAFFIC_INTERVAL", time.Minute),
 		DiscoverInterval: envDuration("FIREX_DISCOVER_INTERVAL", 5*time.Minute),
+		Update: updater.Config{
+			// Self-updating is opt-in: replacing the binary under a running
+			// fleet is the operator's call, not a default.
+			Enabled:       envBool("FIREX_UPDATE_ENABLED", false),
+			Channel:       env("FIREX_UPDATE_CHANNEL", "stable"),
+			CheckInterval: int(envDuration("FIREX_UPDATE_INTERVAL", time.Hour).Seconds()),
+			Source:        env("FIREX_UPDATE_SOURCE", updater.SourceGitHub),
+			ProxyBaseURL:  env("FIREX_UPDATE_PROXY_BASE_URL", updater.DefaultProxyBaseURL),
+			Repo:          env("FIREX_UPDATE_REPO", updater.DefaultRepo),
+		},
 	}
+	// Settle the update block here so /api/version reports the same values the
+	// updater acts on, rather than whatever casing the environment used.
+	c.Update = updater.Normalize(c.Update)
 	return c
 }
 

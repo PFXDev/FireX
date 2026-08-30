@@ -79,9 +79,65 @@ All configuration is environment variables; there is no config file.
 | `FIREX_TRAFFIC_INTERVAL`   | `1m`             | Traffic collection and quota enforcement interval               |
 | `FIREX_DISCOVER_INTERVAL`  | `5m`             | Inbound discovery interval                                      |
 | `FIREX_DEBUG`              | `false`          | Verbose logging and SQL tracing                                 |
+| `FIREX_UPDATE_ENABLED`     | `false`          | Check for new releases periodically                             |
+| `FIREX_UPDATE_CHANNEL`     | `stable`         | `stable` (installs automatically) or `dev` (waits for approval) |
+| `FIREX_UPDATE_INTERVAL`    | `1h`             | Update check interval, floored at one minute                    |
+| `FIREX_UPDATE_SOURCE`      | `github`         | `github` for direct downloads, `proxy` for a mirror             |
+| `FIREX_UPDATE_PROXY_BASE_URL` | `https://dl.repo.chycloud.top` | Mirror used when the source is `proxy`       |
+| `FIREX_UPDATE_REPO`        | `PFXDev/FireX`   | `owner/name` of the repository releases come from               |
 
 Set `FIREX_SUB_BASE_URL` when running behind a reverse proxy, otherwise the
 subscription URLs shown in the UI use whatever `Host` the browser sent.
+
+## Updates
+
+FireX updates itself from its own GitHub releases. The **System** page shows the
+running build and drives the whole flow; `FIREX_UPDATE_ENABLED` only controls
+the periodic check, so an admin can always trigger one by hand.
+
+```
+GET  /api/version          # running build plus the update settings
+GET  /api/update/status    # state, progress, last check, error
+POST /api/update/check     # look for a newer release, download nothing
+POST /api/update/apply     # install a pending build, or run the whole pass
+POST /api/update/dismiss   # discard a downloaded pre-release
+```
+
+All five sit behind the admin session, like the rest of `/api`. Sessions live in
+the database, so they survive the restart an update causes.
+
+Two channels, because they answer different questions:
+
+- **stable** compares semver against the newest `v*` tag and installs it
+  unattended — you opted into tracking releases.
+- **dev** follows the rolling `dev` prerelease, compares the build's commit
+  rather than its version string, and stops after downloading. An admin
+  confirms the restart from the System page.
+
+**How a release is verified.** Each release ships one `SHA256SUMS` covering all
+of its binaries. The updater downloads the binary, fetches the manifest, selects
+its own line by exact file name, and refuses to install if the manifest is
+missing, has no entry for this platform, or disagrees with the bytes on disk.
+There is no fallback to installing unverified — an optional check is no check.
+
+There is deliberately **no release signature**. The consequence is real and
+accepted: an attacker who controls the download channel can serve a poisoned
+binary alongside a matching `SHA256SUMS`. What holds that off is HTTPS and the
+default of pulling from GitHub directly; only point `FIREX_UPDATE_SOURCE` at a
+mirror you run yourself.
+
+**Applying an update** waits for in-flight panel work to drain (up to ten
+minutes), shuts down the listener, closes the database, replaces the binary in
+place and re-executes it. On Unix the PID is unchanged, so a supervisor never
+sees the service leave; on Windows a detached PowerShell script performs the
+swap. FireX keeps no job table, so nothing needs recovering afterwards: the next
+discovery and reconcile cycle re-converges every panel.
+
+Releases come from `.github/workflows/cross-compile.yml`: pushes to `main`
+refresh the rolling `dev` prerelease, and a `v*` tag publishes a stable release.
+Asset names are `firex-{goos}-{goarch}[.exe]` and must stay identical to
+`targetName()` in `internal/updater` — a name only one side knows about is a
+permanent 404 for those machines.
 
 ## Subscriptions
 
@@ -155,6 +211,8 @@ internal/
   sharelink/          # share-link parsing and rewriting
   store/              # database open/migrate
   subscription/       # per-user subscription assembly
+  updater/            # self-update: release discovery, checksum, restart
+  version/            # build identity stamped in by the release workflow
   web/                # go:embed of the built UI (dist/ is generated)
 web/                  # React 19 + TypeScript + Vite frontend sources
 bin/                  # build output (generated)

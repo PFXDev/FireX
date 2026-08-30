@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gorm.io/gorm"
@@ -34,6 +35,11 @@ type Manager struct {
 
 	mu      sync.Mutex
 	clients map[uint]*cachedClient
+
+	// inFlight counts panel-facing passes in progress. FireX keeps no job
+	// table to recover from, so instead of resuming interrupted work the
+	// updater simply waits for this to drain before restarting.
+	inFlight atomic.Int64
 }
 
 type cachedClient struct {
@@ -44,6 +50,16 @@ type cachedClient struct {
 func NewManager(db *store.DB) *Manager {
 	return &Manager{db: db, clients: map[uint]*cachedClient{}}
 }
+
+// busy marks a panel-facing pass as running; the returned func ends it. Calls
+// nest, so an outer ReconcileAll stays busy across each ReconcileUser.
+func (m *Manager) busy() func() {
+	m.inFlight.Add(1)
+	return func() { m.inFlight.Add(-1) }
+}
+
+// IsBusy reports whether a discovery, reconcile or traffic pass is running.
+func (m *Manager) IsBusy() bool { return m.inFlight.Load() > 0 }
 
 // ClientFor returns a cached HTTP client for the panel, rebuilding it when the
 // panel's address or credentials changed.
@@ -76,6 +92,8 @@ func EmailFor(u *model.User) string { return u.Username + EmailSuffix }
 // vanished are flagged Missing rather than deleted so plan membership and the
 // admin's labels survive a panel outage.
 func (m *Manager) DiscoverPanel(ctx context.Context, p *model.Panel) error {
+	defer m.busy()()
+
 	client := m.ClientFor(p)
 	status, err := client.Status(ctx)
 	if err != nil {
@@ -150,6 +168,8 @@ func (m *Manager) markPanelOffline(p *model.Panel, cause error) {
 // DiscoverAll refreshes every enabled panel, returning the first error while
 // still processing the rest.
 func (m *Manager) DiscoverAll(ctx context.Context) error {
+	defer m.busy()()
+
 	var panels []model.Panel
 	if err := m.db.Where("enabled = ?", true).Find(&panels).Error; err != nil {
 		return err
@@ -265,6 +285,8 @@ func (m *Manager) planFor(u *model.User) (*model.Plan, error) {
 // were removed from. A failure on one panel is recorded and does not abort the
 // others.
 func (m *Manager) ReconcileUser(ctx context.Context, u *model.User) error {
+	defer m.busy()()
+
 	desired, err := m.DesiredFor(u)
 	if err != nil {
 		return err
@@ -377,6 +399,8 @@ func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.
 // ReconcileAll converges every user. Used by the periodic sync job and after
 // bulk edits such as changing a plan's node set.
 func (m *Manager) ReconcileAll(ctx context.Context) error {
+	defer m.busy()()
+
 	var users []model.User
 	if err := m.db.Find(&users).Error; err != nil {
 		return err
@@ -392,6 +416,8 @@ func (m *Manager) ReconcileAll(ctx context.Context) error {
 
 // ReconcileUsersOfPlan converges everyone on a plan whose node set changed.
 func (m *Manager) ReconcileUsersOfPlan(ctx context.Context, planID uint) error {
+	defer m.busy()()
+
 	var users []model.User
 	if err := m.db.Where("plan_id = ?", planID).Find(&users).Error; err != nil {
 		return err
@@ -410,6 +436,8 @@ func (m *Manager) ReconcileUsersOfPlan(ctx context.Context, planID uint) error {
 // CollectTraffic folds each panel's per-client counters into the users' global
 // totals and disables anyone who crossed their limit or expiry.
 func (m *Manager) CollectTraffic(ctx context.Context) error {
+	defer m.busy()()
+
 	var panels []model.Panel
 	if err := m.db.Where("enabled = ?", true).Find(&panels).Error; err != nil {
 		return err
@@ -492,6 +520,8 @@ func counterDelta(last, current int64) int64 {
 // EnforceLimits flips the Depleted flag for users past their quota and pushes
 // the resulting enable/disable to the panels.
 func (m *Manager) EnforceLimits(ctx context.Context) error {
+	defer m.busy()()
+
 	var users []model.User
 	if err := m.db.Find(&users).Error; err != nil {
 		return err

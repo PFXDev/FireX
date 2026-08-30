@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 	"github.com/PFXDev/FireX/internal/provision"
 	"github.com/PFXDev/FireX/internal/store"
 	"github.com/PFXDev/FireX/internal/subscription"
+	"github.com/PFXDev/FireX/internal/updater"
 )
 
 type harness struct {
@@ -49,7 +51,12 @@ func newHarness(t *testing.T) *harness {
 
 	cfg := &config.Config{}
 	mgr := provision.NewManager(db)
-	srv := New(cfg, db, mgr, subscription.NewService(db, mgr))
+	srv := New(cfg, db, mgr, subscription.NewService(db, mgr), updater.New(
+		func() updater.Config { return cfg.Update },
+		func() string { return cfg.DataDir },
+		log.New(io.Discard, "", 0),
+		updater.RestartHooks{},
+	))
 	ts := httptest.NewServer(srv.engine)
 	t.Cleanup(ts.Close)
 

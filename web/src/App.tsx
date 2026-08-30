@@ -3,6 +3,7 @@ import { ThemeProvider, useTheme } from 'next-themes'
 import { toast } from 'sonner'
 import {
   ChevronsUpDownIcon,
+  CpuIcon,
   FlameIcon,
   GaugeIcon,
   LayersIcon,
@@ -56,6 +57,7 @@ import { NodesPage } from '@/pages/Nodes'
 import { PlansPage } from '@/pages/Plans'
 import { UsersPage } from '@/pages/Users'
 import { SettingsPage } from '@/pages/Settings'
+import { SystemPage } from '@/pages/System'
 
 const ROUTES = [
   { key: 'overview', label: '总览', icon: GaugeIcon },
@@ -64,6 +66,7 @@ const ROUTES = [
   { key: 'plans', label: '套餐', icon: TicketIcon },
   { key: 'users', label: '用户', icon: UsersIcon },
   { key: 'settings', label: '设置', icon: SettingsIcon },
+  { key: 'system', label: '系统', icon: CpuIcon },
 ] as const
 
 type RouteKey = (typeof ROUTES)[number]['key']
@@ -271,6 +274,8 @@ function Page({ route }: { route: RouteKey }) {
       return <UsersPage />
     case 'settings':
       return <SettingsPage />
+    case 'system':
+      return <SystemPage />
     default:
       return <OverviewPage />
   }

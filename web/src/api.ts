@@ -136,3 +136,37 @@ export interface SubscriptionPreview {
   renderError: string
   userinfo: string
 }
+
+export interface VersionInfo {
+  version: string
+  commit: string
+  buildTime: string
+  updateEnabled: boolean
+  updateChannel: string
+  updateSource: string
+  updateRepo: string
+}
+
+/** State machine: idle → checking → downloading → ready (dev) | applying → idle, or failed. */
+export type UpdateState = 'idle' | 'checking' | 'downloading' | 'ready' | 'applying' | 'failed'
+
+export interface UpdateStatus {
+  state: UpdateState
+  currentVersion: string
+  latestVersion: string
+  isPrerelease: boolean
+  progress: number
+  downloadProgress: number
+  error: string
+  lastCheck: string
+  releaseNotes: string
+}
+
+export interface UpdateCheck {
+  hasUpdate: boolean
+  currentVersion: string
+  latestVersion: string
+  isPrerelease: boolean
+  releaseNotes: string
+  channel: string
+}
