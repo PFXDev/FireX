@@ -177,8 +177,8 @@ func (p *Panel) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// inboundPayload mirrors 3x-ui's list shape: clients live inside the settings
-// JSON string, traffic in clientStats.
+// inboundPayload mirrors 3x-ui v3.7's list shape: JSON-backed fields are
+// nested objects on the wire, while traffic lives in clientStats.
 func (p *Panel) inboundPayload() []map[string]any {
 	out := make([]map[string]any, 0, len(p.inbounds))
 	for _, ib := range p.inbounds {
@@ -199,7 +199,10 @@ func (p *Panel) inboundPayload() []map[string]any {
 		out = append(out, map[string]any{
 			"id": ib.ID, "port": ib.Port, "protocol": ib.Protocol,
 			"remark": ib.Remark, "tag": ib.Tag, "enable": ib.Enable,
-			"settings": string(settings), "clientStats": stats,
+			"settings":       json.RawMessage(settings),
+			"streamSettings": json.RawMessage(`{"network":"tcp","security":"none"}`),
+			"sniffing":       json.RawMessage(`{"enabled":false}`),
+			"clientStats":    stats,
 		})
 	}
 	return out

@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 )
@@ -52,9 +53,51 @@ type Inbound struct {
 	Protocol    string          `json:"protocol"`
 	Tag         string          `json:"tag"`
 	ClientStats []ClientTraffic `json:"clientStats"`
-	// Settings and StreamSettings arrive as JSON-encoded strings.
+	// 3x-ui v3.7+ returns these as nested JSON objects, while older panels
+	// return JSON-encoded strings. UnmarshalJSON normalizes both shapes to the
+	// JSON text consumed by the membership parser.
 	Settings       string `json:"settings"`
 	StreamSettings string `json:"streamSettings"`
+	Sniffing       string `json:"sniffing"`
+}
+
+// UnmarshalJSON accepts both generations of the 3x-ui inbound wire format.
+// The panel stores these fields as strings internally, but since v3.7 its API
+// marshals valid JSON text as nested JSON instead of an escaped string.
+func (i *Inbound) UnmarshalJSON(data []byte) error {
+	type alias Inbound
+	aux := struct {
+		*alias
+		Settings       json.RawMessage `json:"settings"`
+		StreamSettings json.RawMessage `json:"streamSettings"`
+		Sniffing       json.RawMessage `json:"sniffing"`
+	}{
+		alias: (*alias)(i),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	i.Settings = jsonTextFromRaw(aux.Settings)
+	i.StreamSettings = jsonTextFromRaw(aux.StreamSettings)
+	i.Sniffing = jsonTextFromRaw(aux.Sniffing)
+	return nil
+}
+
+// jsonTextFromRaw mirrors 3x-ui's own compatibility decoder: null or a
+// missing field becomes empty, a legacy JSON string is unwrapped, and modern
+// nested JSON is preserved as text.
+func jsonTextFromRaw(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err == nil {
+			return text
+		}
+	}
+	return string(trimmed)
 }
 
 // RemoteClient is the subset of 3x-ui's client model FireX writes. Fields the
