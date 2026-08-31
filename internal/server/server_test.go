@@ -248,7 +248,7 @@ func TestFullFlowServesClashSubscription(t *testing.T) {
 	}
 }
 
-func TestSubscriptionFallsBackToBase64(t *testing.T) {
+func TestKnownLegacyClientReceivesBase64(t *testing.T) {
 	h := newHarness(t)
 	u := h.seed()
 
@@ -276,6 +276,22 @@ func TestSubscriptionFallsBackToBase64(t *testing.T) {
 	}
 }
 
+func TestSubscriptionDefaultsToMihomo(t *testing.T) {
+	h := newHarness(t)
+	u := h.seed()
+
+	resp, body := h.do(http.MethodGet, "/sub/"+u.SubToken, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /sub = %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "proxy-groups:") {
+		t.Errorf("default subscription is not a mihomo profile:\n%s", body)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/yaml") {
+		t.Errorf("Content-Type = %q, want text/yaml", got)
+	}
+}
+
 func TestSubscriptionTargetQueryOverridesUserAgent(t *testing.T) {
 	h := newHarness(t)
 	u := h.seed()
@@ -290,6 +306,29 @@ func TestSubscriptionTargetQueryOverridesUserAgent(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "proxy-groups") {
 		t.Errorf("?target=clash did not win over the user agent:\n%s", body)
+	}
+}
+
+func TestMihomoTargetAlias(t *testing.T) {
+	h := newHarness(t)
+	u := h.seed()
+
+	resp, body := h.do(http.MethodGet, "/sub/"+u.SubToken+"?target=mihomo", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /sub?target=mihomo = %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "proxy-groups:") {
+		t.Errorf("?target=mihomo did not return a mihomo profile:\n%s", body)
+	}
+}
+
+func TestSingBoxTargetIsDisabled(t *testing.T) {
+	h := newHarness(t)
+	u := h.seed()
+
+	resp, body := h.do(http.MethodGet, "/sub/"+u.SubToken+"?target=sing-box", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("GET /sub?target=sing-box = %d, want 400: %s", resp.StatusCode, body)
 	}
 }
 

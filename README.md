@@ -5,8 +5,8 @@ Management interface for Xray (3X-UI).
 FireX is a control plane over a fleet of independent 3x-ui panels. You define
 users and plans once; FireX pushes the matching client to every panel a user's
 plan covers, aggregates their traffic across panels, and serves each user a
-single subscription URL that renders as a Clash (mihomo) profile or a base64
-share-link list.
+single subscription URL that renders as a mihomo (Clash-compatible) profile by
+default, with a base64 share-link list available for legacy clients.
 
 It is built for a single operator: there is no self-service signup, no billing,
 and no user-facing portal — just an admin UI and a subscription endpoint.
@@ -142,13 +142,17 @@ permanent 404 for those machines.
 ## Subscriptions
 
 ```
-GET /sub/<token>              # format chosen from the User-Agent
+GET /sub/<token>              # mihomo by default
 GET /sub/<token>?target=clash
+GET /sub/<token>?target=mihomo
 GET /sub/<token>?target=base64
 ```
 
-Clash-family user agents (clash, mihomo, meta, stash, …) get a mihomo profile;
-everything else gets the base64 share-link list. The response carries
+The default response is a mihomo profile. Known legacy clients such as v2rayN
+still receive the base64 share-link list automatically, and callers can select
+either format explicitly with `target`. sing-box output is not enabled and an
+unsupported target is rejected instead of silently returning another format.
+The response carries
 `Subscription-Userinfo` with the aggregate upload, download, quota and expiry,
 so clients can show remaining traffic.
 

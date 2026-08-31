@@ -17,9 +17,15 @@ import (
 // every panel it is provisioned on.
 const subTimeout = 25 * time.Second
 
-// clashAgents are the user-agent markers of clients that want a mihomo profile
-// rather than a base64 link list.
-var clashAgents = []string{"clash", "mihomo", "meta", "stash", "clashx", "flclash", "shadowrocket-clash"}
+const (
+	targetMihomo = "mihomo"
+	targetBase64 = "base64"
+)
+
+// base64Agents are legacy clients that cannot consume a mihomo profile. Every
+// other client gets mihomo by default; base64 remains available explicitly via
+// ?target=base64.
+var base64Agents = []string{"v2rayn"} // Matches both v2rayN and v2rayNG.
 
 func (s *Server) handleSubscription(c *gin.Context) {
 	token := c.Param("token")
@@ -29,9 +35,10 @@ func (s *Server) handleSubscription(c *gin.Context) {
 		return
 	}
 
-	target := strings.ToLower(strings.TrimSpace(c.Query("target")))
-	if target == "" {
-		target = detectTarget(c.GetHeader("User-Agent"))
+	target, ok := subscriptionTarget(c.Query("target"), c.GetHeader("User-Agent"))
+	if !ok {
+		c.String(http.StatusBadRequest, "unsupported subscription target")
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), subTimeout)
@@ -48,14 +55,14 @@ func (s *Server) handleSubscription(c *gin.Context) {
 	c.Header("Profile-Update-Interval", "12")
 	c.Header("Cache-Control", "no-store")
 	filename := u.Username
-	if target == "clash" {
+	if target == targetMihomo {
 		filename += ".yaml"
 	} else {
 		filename += ".txt"
 	}
 	c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(filename))
 
-	if target == "clash" {
+	if target == targetMihomo {
 		yaml, err := s.subs.Clash(result)
 		if err != nil {
 			c.String(http.StatusInternalServerError, "template render failed: %v", err)
@@ -70,12 +77,29 @@ func (s *Server) handleSubscription(c *gin.Context) {
 
 func detectTarget(userAgent string) string {
 	ua := strings.ToLower(userAgent)
-	for _, marker := range clashAgents {
+	for _, marker := range base64Agents {
 		if strings.Contains(ua, marker) {
-			return "clash"
+			return targetBase64
 		}
 	}
-	return "base64"
+	return targetMihomo
+}
+
+// subscriptionTarget accepts both the product name (mihomo) and its familiar
+// Clash compatibility name. sing-box is intentionally not an output target;
+// unsupported targets fail closed instead of silently receiving another
+// format.
+func subscriptionTarget(requested, userAgent string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(requested)) {
+	case "":
+		return detectTarget(userAgent), true
+	case "clash", targetMihomo:
+		return targetMihomo, true
+	case targetBase64:
+		return targetBase64, true
+	default:
+		return "", false
+	}
 }
 
 // recordFetch is best-effort telemetry for the admin UI; a write failure must
