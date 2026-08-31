@@ -21,6 +21,13 @@ type Node struct {
 
 type Input struct {
 	Nodes []Node
+	// Groups are the admin's node groups with membership already narrowed to
+	// the nodes above. Only the visual routing path reads them.
+	Groups []Group
+	// Routing, when set, replaces whatever `proxy-groups` and `rules` the
+	// template carries. Nil keeps the legacy token expansion, which is what
+	// the YAML editing mode relies on.
+	Routing *Routing
 }
 
 // Group-list tokens the template may use inside proxy-groups.
@@ -80,9 +87,17 @@ func Render(template string, in Input) (string, error) {
 	}
 	root.Set("proxies", proxies)
 
-	groups, err := expandGroups(root, in.Nodes, names, regions, opts)
-	if err != nil {
-		return "", err
+	var groups []any
+	if in.Routing != nil {
+		var rules []any
+		groups, rules = in.Routing.compile(in)
+		root.Set("rules", rules)
+	} else {
+		var err error
+		groups, err = expandGroups(root, in.Nodes, names, regions, opts)
+		if err != nil {
+			return "", err
+		}
 	}
 	groups, dropped := pruneGroups(groups)
 	root.Set("proxy-groups", groups)

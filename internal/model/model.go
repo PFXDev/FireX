@@ -93,6 +93,59 @@ func (n *Node) DisplayName() string {
 	return name
 }
 
+// NodeGroup types, mirroring the mihomo proxy-group types FireX generates.
+const (
+	GroupTypeURLTest     = "url-test"
+	GroupTypeSelect      = "select"
+	GroupTypeFallback    = "fallback"
+	GroupTypeLoadBalance = "load-balance"
+)
+
+// NodeGroup bundles hand-picked nodes into one client-visible proxy-group,
+// normally one region on one line ("🇭🇰 香港 IEPL"). Membership is explicit
+// rather than derived from a node's region text, so retyping a region cannot
+// silently reshape a user's subscription, and each group carries its own
+// probe settings instead of sharing one global set.
+type NodeGroup struct {
+	ID    uint   `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name  string `json:"name" gorm:"uniqueIndex;not null"`
+	Emoji string `json:"emoji"`
+	// Region and Line are descriptive: they drive nothing at render time, they
+	// let the UI sort and filter a long group list.
+	Region string `json:"region" gorm:"index"`
+	Line   string `json:"line" gorm:"index"`
+
+	Type      string `json:"type" gorm:"default:url-test"`
+	TestURL   string `json:"testUrl"`
+	Interval  int    `json:"interval" gorm:"default:300"`
+	Tolerance int    `json:"tolerance" gorm:"default:50"`
+
+	SortOrder int    `json:"sortOrder" gorm:"default:100"`
+	Enabled   bool   `json:"enabled" gorm:"default:true"`
+	Remark    string `json:"remark"`
+
+	// GORM rewrites a field named UpdatedAt on every save, and defaults to
+	// unix seconds for an integer one; the tags keep both stamps in the
+	// milliseconds the rest of FireX speaks.
+	CreatedAt int64 `json:"createdAt" gorm:"autoCreateTime:milli"`
+	UpdatedAt int64 `json:"updatedAt" gorm:"autoUpdateTime:milli"`
+}
+
+// DisplayName is the proxy-group name clients see.
+func (g *NodeGroup) DisplayName() string {
+	if g.Emoji != "" {
+		return g.Emoji + " " + g.Name
+	}
+	return g.Name
+}
+
+// NodeGroupNode is one node's membership in one group. A node may belong to
+// several groups — a Hong Kong relay can sit in both "🇭🇰 香港" and "中转".
+type NodeGroupNode struct {
+	GroupID uint `json:"groupId" gorm:"primaryKey"`
+	NodeID  uint `json:"nodeId" gorm:"primaryKey;index"`
+}
+
 type Plan struct {
 	ID           uint   `json:"id" gorm:"primaryKey;autoIncrement"`
 	Name         string `json:"name" gorm:"uniqueIndex;not null"`
@@ -198,5 +251,6 @@ func AllModels() []any {
 	return []any{
 		&Admin{}, &Session{}, &Panel{}, &Node{}, &Plan{},
 		&PlanNode{}, &User{}, &UserPanel{}, &Setting{},
+		&NodeGroup{}, &NodeGroupNode{},
 	}
 }

@@ -218,6 +218,10 @@ export function SettingsPage() {
                     <p className="mt-2">
                       渲染时会替换 <code>proxies</code>；空分组会被移除，关联规则也会同步改写。
                     </p>
+                    <p className="mt-2">
+                      分流页处于可视化模式时，模板里的 <code>proxy-groups</code> 与 <code>rules</code>
+                      会被生成的内容覆盖，此处只保留 DNS、嗅探等基础配置；上述占位符仅在 YAML 模式下生效。
+                    </p>
                   </AlertDescription>
                 </Alert>
 

@@ -226,7 +226,9 @@ func uniqueName(name string, used map[string]bool) string {
 	return candidate
 }
 
-// Clash renders the result as a mihomo profile using the stored template.
+// Clash renders the result as a mihomo profile using the stored template. In
+// visual mode the template only supplies the base config; node groups and the
+// routing model own proxy-groups and rules.
 func (s *Service) Clash(result *Result) (string, error) {
 	template := s.db.GetSetting(SettingKeyClashTemplate, clash.DefaultTemplate)
 	nodes := make([]clash.Node, 0, len(result.Entries))
@@ -238,7 +240,12 @@ func (s *Service) Clash(result *Result) (string, error) {
 			Entry:  e.Clash,
 		})
 	}
-	return clash.Render(template, clash.Input{Nodes: nodes})
+	in := clash.Input{Nodes: nodes}
+	if Mode(s.db) == ModeVisual {
+		in.Groups = GroupsFor(s.db, result.Entries)
+		in.Routing, _ = Routing(s.db)
+	}
+	return clash.Render(template, in)
 }
 
 // Base64 renders the result as the newline-joined, base64-encoded share link

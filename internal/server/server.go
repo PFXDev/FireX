@@ -74,6 +74,12 @@ func (s *Server) routes() {
 	authed.POST("/nodes/bulk", s.bulkUpdateNodes)
 	authed.DELETE("/nodes/:id", s.deleteNode)
 
+	authed.GET("/node-groups", s.listNodeGroups)
+	authed.POST("/node-groups", s.createNodeGroup)
+	authed.POST("/node-groups/generate", s.generateNodeGroups)
+	authed.PUT("/node-groups/:id", s.updateNodeGroup)
+	authed.DELETE("/node-groups/:id", s.deleteNodeGroup)
+
 	authed.GET("/plans", s.listPlans)
 	authed.POST("/plans", s.createPlan)
 	authed.PUT("/plans/:id", s.updatePlan)
@@ -89,6 +95,11 @@ func (s *Server) routes() {
 
 	authed.GET("/settings/clashTemplate", s.getClashTemplate)
 	authed.PUT("/settings/clashTemplate", s.setClashTemplate)
+
+	authed.GET("/settings/routing", s.getRouting)
+	authed.PUT("/settings/routing", s.setRouting)
+	authed.POST("/settings/routing/reset", s.resetRouting)
+	authed.POST("/settings/routing/preview", s.previewRouting)
 
 	// Self-update sits behind the admin session like everything else. The
 	// session lives in the database, so it survives the restart an update

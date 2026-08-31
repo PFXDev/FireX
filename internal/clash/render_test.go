@@ -238,12 +238,3 @@ func TestProxyEntryShadowsocksWithPluginIsSkipped(t *testing.T) {
 		t.Error("ProxyEntry() accepted an ss proxy whose plugin options were dropped")
 	}
 }
-
-func contains(list []string, want string) bool {
-	for _, v := range list {
-		if v == want {
-			return true
-		}
-	}
-	return false
-}

@@ -27,6 +27,9 @@ and no user-facing portal — just an admin UI and a subscription endpoint.
 - **Node** — one inbound on one panel, discovered automatically and shown to
   clients as a single proxy. FireX owns the display name, emoji, region and
   tags; rediscovery never overwrites them.
+- **Node group** — hand-picked nodes from any number of panels presented as one
+  proxy-group, normally one region on one line (`🇭🇰 香港 IEPL`). Membership is
+  explicit, and one node may sit in several groups.
 - **Plan** — a set of nodes plus default quota, duration and device limit.
 - **User** — one identity with one UUID reused across every node, one
   subscription token, and traffic totalled across all panels.
@@ -59,9 +62,13 @@ on first start. Open `http://localhost:8080`, sign in, then:
    inbounds immediately.
 2. **Nodes** — newly discovered nodes are disabled on purpose. Give them a name,
    emoji and region, then enable the ones you want to sell.
-3. **Plans** — create a plan and tick the nodes it includes.
-4. **Users** — create a user on that plan. FireX pushes the client to every
+3. **Groups** — bundle those nodes into the proxy-groups clients will see, one
+   per region and line. Optional: with no groups, nodes are grouped by region.
+4. **Plans** — create a plan and tick the nodes it includes.
+5. **Users** — create a user on that plan. FireX pushes the client to every
    panel involved and hands you the subscription URL.
+6. **Routing** — compose the policy groups and rules that decide which group a
+   given kind of traffic uses.
 
 ## Configuration
 
@@ -160,11 +167,48 @@ Share links come from each panel's own link generator, so Reality keys, host
 overrides and external addresses stay correct. FireX only rewrites the display
 name and converts them into mihomo proxy entries.
 
-## Clash template
+## Grouping and routing
 
-Settings → Clash template holds the profile FireX renders per user. It is a
-normal mihomo config; FireX replaces `proxies` and expands these tokens inside
-`proxy-groups`:
+A mihomo profile is two things: a base config (DNS, sniffer, ports) and a policy
+layout (`proxy-groups` plus `rules`). FireX always takes the base from the YAML
+template, and offers two ways to own the policy layout. Which one applies is the
+**mode** on the Routing page.
+
+### Visual mode (default)
+
+Groups and rules are edited as data, not YAML.
+
+- **Nodes → Groups** creates a node group: a name, an emoji, the region and line
+  it stands for, its proxy-group type (`select`, `url-test`, `fallback`,
+  `load-balance`) with its own probe URL, interval and tolerance, and the nodes
+  it contains. Membership is ticked by hand across every panel, so a group is a
+  deliberate product decision rather than a side effect of how someone typed a
+  region.
+- **Routing** composes *policy groups* (`🚀 节点选择`, `🤖 AI 服务`, …) out of
+  node groups, other policy groups, `DIRECT`/`REJECT`, and two dynamic entries:
+  every node group, or every node the user may use. The rule list underneath is
+  an ordered set of `matcher, value, target` rows, with `no-resolve` offered
+  only on the IP matchers that read it, and a final MATCH target.
+
+Everything references a group by its **bare name**, never by the name clients
+see, so changing an emoji cannot orphan a rule. Renaming or deleting a node
+group rewrites the stored routing in the same request, and the UI reports how
+many references moved.
+
+With **no node groups defined at all**, groups are derived from the nodes'
+region text instead — one url-test group per region, exactly as before. The
+Groups page offers to materialise that same split as real rows to start from.
+
+Saving validates before it stores: unknown references, a policy group with no
+members, a comma in a name (rules are comma-separated), a name that collides
+with a node group, an unknown matcher, and loops between policy groups are all
+rejected with the reason. The Routing page's preview renders the whole profile
+against the real node groups so an admin can read what a client would receive.
+
+### YAML mode
+
+The template keeps `proxy-groups` and `rules`, and FireX expands these tokens
+inside `proxy-groups`:
 
 | Token              | As a group entry                    | Inside a group's `proxies` list      |
 | ------------------ | ----------------------------------- | ------------------------------------ |
@@ -175,17 +219,27 @@ normal mihomo config; FireX replaces `proxies` and expands these tokens inside
 | `<FILTER:regexp>`  | —                                   | nodes whose name matches the regexp  |
 
 A region group is named after the region text you typed on the node, so use
-something display-ready like `🇭🇰 香港`.
+something display-ready like `🇭🇰 香港`. An optional top-level `firex:` block
+tunes the generated region groups (`region-group-type`, `test-url`, `interval`,
+`tolerance`) and is stripped from the output. Node groups are ignored in this
+mode.
 
-Groups that expand to nothing — a user whose plan has no node in that region —
-are dropped, and any rule pointing at a dropped group is repointed, because
-mihomo refuses to load a config with an empty `proxy-group`. An optional
-top-level `firex:` block tunes the generated region groups
-(`region-group-type`, `test-url`, `interval`, `tolerance`) and is stripped from
-the output.
+### Both modes
 
-Saving a template renders it against a probe node first, so a broken template is
-rejected in the UI instead of at the client.
+`proxies` is always replaced with the user's own nodes. Groups that end up empty
+— a user whose plan holds no node in that group — are dropped, and any rule
+pointing at a dropped group is repointed, because mihomo refuses to load a
+config with an empty `proxy-group`. Saving a template renders it against a probe
+node first, so a broken template is rejected in the UI instead of at the client.
+
+```
+GET  /api/node-groups            # groups with their member node ids
+POST /api/node-groups/generate   # materialise the region split as groups
+GET  /api/settings/routing       # mode, model, built-in default, editor options
+PUT  /api/settings/routing       # validate and store
+POST /api/settings/routing/reset # back to the built-in default
+POST /api/settings/routing/preview
+```
 
 ## Quota enforcement
 
@@ -205,7 +259,7 @@ remains the authority across panels.
 ```
 cmd/firex/            # main package: config, background loops, HTTP server
 internal/
-  clash/              # mihomo profile template expansion and rendering
+  clash/              # mihomo rendering: routing model, groups, template tokens
   config/             # environment-driven settings
   model/              # GORM models and migrations
   panel/              # 3x-ui REST client
@@ -214,7 +268,7 @@ internal/
   server/             # admin API, subscription endpoint, UI mount
   sharelink/          # share-link parsing and rewriting
   store/              # database open/migrate
-  subscription/       # per-user subscription assembly
+  subscription/       # per-user subscription assembly, node group resolution
   updater/            # self-update: release discovery, checksum, restart
   version/            # build identity stamped in by the release workflow
   web/                # go:embed of the built UI (dist/ is generated)

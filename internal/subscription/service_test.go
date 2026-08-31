@@ -151,6 +151,58 @@ func TestClashOutputGroupsByRegion(t *testing.T) {
 	}
 }
 
+// TestClashOutputUsesExplicitNodeGroups covers the hand-picked grouping that
+// replaces the region fallback as soon as any group exists: a group narrows to
+// the members this user actually holds, and one holding none is pruned.
+func TestClashOutputUsesExplicitNodeGroups(t *testing.T) {
+	f := newFixture(t)
+
+	var nodes []model.Node
+	f.db.Order("sort_order ASC").Find(&nodes)
+
+	iepl := model.NodeGroup{Name: "香港 IEPL", Emoji: "🇭🇰", Type: model.GroupTypeURLTest, Enabled: true, SortOrder: 1}
+	f.db.Create(&iepl)
+	f.db.Create(&model.NodeGroupNode{GroupID: iepl.ID, NodeID: nodes[0].ID})
+
+	// A group whose only member sits outside the user's plan must not render.
+	orphan := model.NodeGroup{Name: "首尔", Type: model.GroupTypeURLTest, Enabled: true, SortOrder: 2}
+	f.db.Create(&orphan)
+	f.db.Create(&model.NodeGroupNode{GroupID: orphan.ID, NodeID: 9999})
+
+	result, err := f.svc.Build(context.Background(), f.user)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	out, err := f.svc.Clash(result)
+	if err != nil {
+		t.Fatalf("Clash() error = %v", err)
+	}
+	var cfg struct {
+		Groups []struct {
+			Name    string   `yaml:"name"`
+			Proxies []string `yaml:"proxies"`
+		} `yaml:"proxy-groups"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &cfg); err != nil {
+		t.Fatalf("rendered profile is not valid YAML: %v\n%s", err, out)
+	}
+
+	var found []string
+	for _, g := range cfg.Groups {
+		found = append(found, g.Name)
+		if g.Name == "🇭🇰 香港 IEPL" && (len(g.Proxies) != 1 || g.Proxies[0] != "🇭🇰 HK 01") {
+			t.Errorf("IEPL members = %v, want just the HK node", g.Proxies)
+		}
+	}
+	for _, name := range []string{"🇭🇰 香港", "🇯🇵 日本", "首尔"} {
+		for _, got := range found {
+			if got == name {
+				t.Errorf("group %q rendered; region fallback and empty groups must both be gone: %v", name, found)
+			}
+		}
+	}
+}
+
 func TestBase64OutputCarriesRenamedLinks(t *testing.T) {
 	f := newFixture(t)
 	result, err := f.svc.Build(context.Background(), f.user)

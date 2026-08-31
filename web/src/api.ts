@@ -124,6 +124,74 @@ export interface Node {
   planCount: number
 }
 
+/** A hand-picked bundle of nodes, rendered as one proxy-group per group. */
+export interface NodeGroup {
+  id: number
+  name: string
+  emoji: string
+  region: string
+  line: string
+  type: string
+  testUrl: string
+  interval: number
+  tolerance: number
+  sortOrder: number
+  enabled: boolean
+  remark: string
+  nodeIds: number[]
+  enabledNodes: number
+}
+
+/**
+ * How a policy-group entry or rule target is expressed. Everything references
+ * a group by its bare name, so renaming an emoji never orphans a rule.
+ */
+export type MemberKind = 'policy' | 'node-group' | 'all-groups' | 'all-nodes' | 'builtin'
+
+export interface RoutingMember {
+  kind: MemberKind
+  ref: string
+}
+
+export interface PolicyGroup {
+  name: string
+  icon: string
+  type: string
+  members: RoutingMember[]
+  testUrl: string
+  interval: number
+  tolerance: number
+}
+
+export interface RoutingRule {
+  type: string
+  value: string
+  target: RoutingMember
+  noResolve: boolean
+  disabled: boolean
+}
+
+export interface Routing {
+  groups: PolicyGroup[]
+  rules: RoutingRule[]
+  final: RoutingMember
+}
+
+/** visual composes groups and rules from data; yaml leaves the template in charge. */
+export type RoutingMode = 'visual' | 'yaml'
+
+export interface RoutingResponse {
+  mode: RoutingMode
+  routing: Routing
+  isDefault: boolean
+  default: Routing
+  options: {
+    groupTypes: string[]
+    ruleTypes: string[]
+    builtins: string[]
+  }
+}
+
 export interface Plan {
   id: number
   name: string

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ThemeProvider, useTheme } from 'next-themes'
 import { toast } from 'sonner'
 import {
+  BoxesIcon,
   ChevronsUpDownIcon,
   CircleAlertIcon,
   CpuIcon,
@@ -13,6 +14,7 @@ import {
   ServerIcon,
   SettingsIcon,
   ShieldCheckIcon,
+  SplitIcon,
   SunIcon,
   TicketIcon,
   UsersIcon,
@@ -67,7 +69,9 @@ import { errorMessage } from '@/lib/format'
 import { OverviewPage } from '@/pages/Overview'
 import { PanelsPage } from '@/pages/Panels'
 import { NodesPage } from '@/pages/Nodes'
+import { NodeGroupsPage } from '@/pages/NodeGroups'
 import { PlansPage } from '@/pages/Plans'
+import { RoutingPage } from '@/pages/Routing'
 import { UsersPage } from '@/pages/Users'
 import { SettingsPage } from '@/pages/Settings'
 import { SystemPage } from '@/pages/System'
@@ -76,8 +80,10 @@ const ROUTES = [
   { key: 'overview', label: '总览', group: '工作台', icon: GaugeIcon },
   { key: 'panels', label: '面板', group: '资源管理', icon: ServerIcon },
   { key: 'nodes', label: '节点', group: '资源管理', icon: LayersIcon },
+  { key: 'node-groups', label: '分组', group: '资源管理', icon: BoxesIcon },
   { key: 'plans', label: '套餐', group: '资源管理', icon: TicketIcon },
   { key: 'users', label: '用户', group: '资源管理', icon: UsersIcon },
+  { key: 'routing', label: '分流', group: '运维配置', icon: SplitIcon },
   { key: 'settings', label: '设置', group: '运维配置', icon: SettingsIcon },
   { key: 'system', label: '系统', group: '运维配置', icon: CpuIcon },
 ] as const
@@ -340,10 +346,14 @@ function Page({ route }: { route: RouteKey }) {
       return <PanelsPage />
     case 'nodes':
       return <NodesPage />
+    case 'node-groups':
+      return <NodeGroupsPage />
     case 'plans':
       return <PlansPage />
     case 'users':
       return <UsersPage />
+    case 'routing':
+      return <RoutingPage />
     case 'settings':
       return <SettingsPage />
     case 'system':
