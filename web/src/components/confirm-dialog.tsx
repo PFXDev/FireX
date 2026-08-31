@@ -43,7 +43,7 @@ export function ConfirmDialog({
         if (!busy) onOpenChange(next)
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent aria-busy={busy}>
         <AlertDialogHeader>
           <AlertDialogMedia>
             <TriangleAlertIcon />
@@ -61,13 +61,16 @@ export function ConfirmDialog({
               try {
                 await onConfirm()
                 onOpenChange(false)
+              } catch {
+                // Callers own the contextual toast. Keeping the dialog open
+                // makes the failed action explicit and allows a safe retry.
               } finally {
                 setBusy(false)
               }
             }}
           >
             {busy && <Spinner data-icon="inline-start" />}
-            {confirmLabel}
+            {busy ? '处理中…' : confirmLabel}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

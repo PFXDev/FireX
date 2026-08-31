@@ -34,9 +34,9 @@ export function formatTime(ms: number): string {
 
 export function formatExpiry(ms: number): string {
   if (!ms) return '永久'
-  const days = Math.ceil((ms - Date.now()) / 86400000)
   const date = new Date(ms).toLocaleDateString('zh-CN')
-  if (days < 0) return `${date} (已过期)`
+  if (ms <= Date.now()) return `${date} (已过期)`
+  const days = Math.ceil((ms - Date.now()) / 86400000)
   return `${date} (${days} 天)`
 }
 

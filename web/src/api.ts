@@ -1,5 +1,7 @@
 // Typed wrapper over the FireX admin API. Every call is cookie-authenticated;
-// a 401 means the session lapsed, which App turns back into the login screen.
+// business-level 401 responses verify the session before stale auth is cleared.
+
+export const FIREX_UNAUTHORIZED_EVENT = 'firex:unauthorized'
 
 export class ApiError extends Error {
   status: number
@@ -9,7 +11,51 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+type UnauthorizedHandling = 'verify-session' | 'session-invalid' | 'ignore'
+
+type RequestOptions = {
+  unauthorized?: UnauthorizedHandling
+}
+
+let sessionVerification: Promise<void> | null = null
+
+function emitUnauthorized(path: string) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(FIREX_UNAUTHORIZED_EVENT, { detail: { path } }))
+}
+
+function verifySession(path: string) {
+  if (typeof window === 'undefined' || sessionVerification) return
+
+  sessionVerification = fetch('/api/auth/me', {
+    credentials: 'include',
+  })
+    .then((res) => {
+      if (res.status === 401) emitUnauthorized(path)
+    })
+    .catch(() => {
+      // A network/server failure does not prove the session is invalid. The
+      // next protected request will retry verification if it also returns 401.
+    })
+    .finally(() => {
+      sessionVerification = null
+    })
+}
+
+function handleUnauthorized(path: string, handling: UnauthorizedHandling) {
+  if (handling === 'session-invalid') {
+    emitUnauthorized(path)
+  } else if (handling === 'verify-session') {
+    verifySession(path)
+  }
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  options: RequestOptions = {},
+): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
     credentials: 'include',
@@ -17,18 +63,28 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   const text = await res.text()
-  const data = text ? JSON.parse(text) : null
+  let data = null
+  try {
+    data = text ? JSON.parse(text) : null
+  } catch (err) {
+    if (res.ok) throw err
+  }
   if (!res.ok) {
-    throw new ApiError(res.status, data?.error ?? `请求失败 (${res.status})`)
+    const error = new ApiError(res.status, data?.error ?? `请求失败 (${res.status})`)
+    if (res.status === 401) handleUnauthorized(path, options.unauthorized ?? 'verify-session')
+    throw error
   }
   return data as T
 }
 
 export const api = {
-  get: <T,>(path: string) => request<T>('GET', path),
-  post: <T,>(path: string, body?: unknown) => request<T>('POST', path, body ?? {}),
-  put: <T,>(path: string, body?: unknown) => request<T>('PUT', path, body ?? {}),
-  del: <T,>(path: string) => request<T>('DELETE', path),
+  get: <T,>(path: string, options?: RequestOptions) => request<T>('GET', path, undefined, options),
+  post: <T,>(path: string, body?: unknown, options?: RequestOptions) =>
+    request<T>('POST', path, body ?? {}, options),
+  put: <T,>(path: string, body?: unknown, options?: RequestOptions) =>
+    request<T>('PUT', path, body ?? {}, options),
+  del: <T,>(path: string, options?: RequestOptions) =>
+    request<T>('DELETE', path, undefined, options),
 }
 
 export interface Panel {
