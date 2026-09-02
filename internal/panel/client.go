@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,6 +20,15 @@ import (
 )
 
 const defaultTimeout = 20 * time.Second
+
+// Panels sit behind a WAN link, so a resolver that answers SERVFAIL or a
+// connection refused mid-restart is a blip often enough that a single one must
+// not report a healthy panel as offline. Reads are safe to repeat; writes are
+// not.
+const (
+	readRetries    = 2
+	readRetryDelay = 500 * time.Millisecond
+)
 
 type Client struct {
 	baseURL string
@@ -70,30 +80,18 @@ func IsNotFound(err error) bool {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
-	var reader io.Reader
+	var payload []byte
 	if body != nil {
 		buf, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("encode %s: %w", path, err)
 		}
-		reader = bytes.NewReader(buf)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
-	if err != nil {
-		return fmt.Errorf("build %s: %w", path, err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Accept", "application/json")
-	// The panel answers 404 instead of 401 for unauthenticated browser-shaped
-	// requests; this header makes an auth failure surface as a real 401.
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		payload = buf
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := c.send(ctx, method, path, payload)
 	if err != nil {
-		return fmt.Errorf("call %s: %w", path, err)
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -115,6 +113,72 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		}
 	}
 	return nil
+}
+
+// send issues the request and hands back the panel's response. A GET that
+// never reached the panel is retried: the whole read is repeatable, and once
+// the panel has answered, the answer stands. Writes go out exactly once,
+// because a retried add or delete would be a second edit, not a second look.
+func (c *Client) send(ctx context.Context, method, path string, payload []byte) (*http.Response, error) {
+	attempts := 1
+	if method == http.MethodGet {
+		attempts += readRetries
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-time.After(time.Duration(attempt) * readRetryDelay):
+			case <-ctx.Done():
+				return nil, lastErr
+			}
+		}
+
+		var reader io.Reader
+		if payload != nil {
+			reader = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
+		if err != nil {
+			return nil, fmt.Errorf("build %s: %w", path, err)
+		}
+		req.Header.Set("Authorization", "Bearer "+c.token)
+		req.Header.Set("Accept", "application/json")
+		// The panel answers 404 instead of 401 for unauthenticated browser-shaped
+		// requests; this header makes an auth failure surface as a real 401.
+		req.Header.Set("X-Requested-With", "XMLHttpRequest")
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+
+		resp, err := c.http.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = fmt.Errorf("call %s: %w", path, err)
+		if ctx.Err() != nil || !retryable(err) {
+			break
+		}
+	}
+	return nil, lastErr
+}
+
+// retryable reports whether a transport error is a blip on the way out — a
+// resolver that answered SERVFAIL, a connection refused at dial time — as
+// opposed to a panel that is genuinely misconfigured. A name that does not
+// exist, a request that ran out of time, and a connection that broke after the
+// request was already on the wire are all left alone.
+func retryable(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return !dnsErr.IsNotFound
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return false
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
 func shortBody(status int, raw []byte) string {
