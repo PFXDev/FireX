@@ -52,11 +52,12 @@ created by hand.
 make ui-deps          # once
 make build            # builds the UI, embeds it, produces ./bin/firex
 
-FIREX_ADMIN_PASSWORD=change-me-now ./bin/firex
+./bin/firex
 ```
 
-Without `FIREX_ADMIN_PASSWORD` a random password is generated and printed once
-on first start. Open `http://localhost:8080`, sign in, then:
+First start writes `./data/config.json` from the built-in template and, because
+that file has no `adminPassword` yet, generates one and prints it once. Open
+`http://localhost:8080`, sign in, then:
 
 1. **Panels** — add each 3x-ui with its base URL and API token. FireX pulls its
    inbounds immediately.
@@ -72,34 +73,81 @@ on first start. Open `http://localhost:8080`, sign in, then:
 
 ## Configuration
 
-All configuration is environment variables; there is no config file.
+All configuration lives in one JSON file, `./data/config.json`, next to the
+database. Nothing is read from the environment. `-config` points the binary at a
+different file, and an update re-executes with the same argument:
 
-| Variable                   | Default          | Purpose                                                        |
-| -------------------------- | ---------------- | -------------------------------------------------------------- |
-| `FIREX_LISTEN`             | `:8080`          | Listen address                                                  |
-| `FIREX_DATA_DIR`           | `./data`         | Directory for the SQLite database                               |
-| `FIREX_DB`                 | `$DATA_DIR/firex.db` | Explicit database path                                      |
-| `FIREX_SUB_BASE_URL`       | derived from request | Public origin for subscription URLs, e.g. `https://sub.example.com` |
-| `FIREX_ADMIN_USER`         | `admin`          | Bootstrap admin username (first run only)                       |
-| `FIREX_ADMIN_PASSWORD`     | generated        | Bootstrap admin password (first run only)                       |
-| `FIREX_SYNC_INTERVAL`      | `2m`             | Full user reconcile interval                                    |
-| `FIREX_TRAFFIC_INTERVAL`   | `1m`             | Traffic collection and quota enforcement interval               |
-| `FIREX_DISCOVER_INTERVAL`  | `5m`             | Inbound discovery interval                                      |
-| `FIREX_DEBUG`              | `false`          | Verbose logging and SQL tracing                                 |
-| `FIREX_UPDATE_ENABLED`     | `false`          | Check for new releases periodically                             |
-| `FIREX_UPDATE_CHANNEL`     | `stable`         | `stable` (installs automatically) or `dev` (waits for approval) |
-| `FIREX_UPDATE_INTERVAL`    | `1h`             | Update check interval, floored at one minute                    |
-| `FIREX_UPDATE_SOURCE`      | `github`         | `github` for direct downloads, `proxy` for a mirror             |
-| `FIREX_UPDATE_PROXY_BASE_URL` | `https://dl.repo.chycloud.top` | Mirror used when the source is `proxy`       |
-| `FIREX_UPDATE_REPO`        | `PFXDev/FireX`   | `owner/name` of the repository releases come from               |
+```bash
+./bin/firex -config /etc/firex/config.json
+```
 
-Set `FIREX_SUB_BASE_URL` when running behind a reverse proxy, otherwise the
+The file is released from a template compiled into the binary on first start,
+and completed on every start after that: a setting it never mentions — because
+an older build wrote it, or because it was typed by hand — is filled in with its
+default and written back, so the file always lists everything the running build
+understands. A value FireX cannot act on (a blank listen address, a zero
+interval, an unknown update source) is replaced the same way, and a key this
+build does not know — a typo, or a setting from a newer version — is dropped on
+the way through. What it will not do is guess: a malformed file, or a duration
+written as anything but a string, aborts startup.
+
+```json
+{
+  "listen": ":8080",
+  "dataDir": "./data",
+  "dbPath": "",
+  "subBaseUrl": "",
+  "debug": false,
+  "adminUser": "admin",
+  "adminPassword": "",
+  "syncInterval": "2m0s",
+  "trafficInterval": "1m0s",
+  "discoverInterval": "5m0s",
+  "update": {
+    "enabled": false,
+    "channel": "stable",
+    "checkInterval": "1h0m0s",
+    "source": "github",
+    "proxyBaseUrl": "https://dl.repo.chycloud.top",
+    "repo": "PFXDev/FireX"
+  }
+}
+```
+
+| Setting                | Purpose                                                          |
+| ---------------------- | ---------------------------------------------------------------- |
+| `listen`               | Listen address                                                    |
+| `dataDir`              | Directory for the database and staged updates                     |
+| `dbPath`               | Explicit database path; empty follows `dataDir`                   |
+| `subBaseUrl`           | Public origin for subscription URLs; empty derives it per request |
+| `debug`                | Verbose logging and SQL tracing                                   |
+| `adminUser`            | Bootstrap admin username (first run only)                         |
+| `adminPassword`        | Bootstrap admin password (first run only); empty generates one    |
+| `syncInterval`         | Full user reconcile interval                                      |
+| `trafficInterval`      | Traffic collection and quota enforcement interval                 |
+| `discoverInterval`     | Inbound discovery interval                                        |
+| `update.enabled`       | Check for new releases periodically                               |
+| `update.channel`       | `stable` (installs automatically) or `dev` (waits for approval)   |
+| `update.checkInterval` | Update check interval, floored at one minute                      |
+| `update.source`        | `github` for direct downloads, `proxy` for a mirror               |
+| `update.proxyBaseUrl`  | Mirror used when the source is `proxy`                            |
+| `update.repo`          | `owner/name` of the repository releases come from                 |
+
+Durations are anything `time.ParseDuration` accepts: `"90s"`, `"2m"`, `"1h30m"`.
+Relative paths resolve against the working directory, not against the config
+file. `adminUser` and `adminPassword` are read only while no admin exists — the
+file is written `0600` because of that one setting, and editing it later changes
+nothing. Set `subBaseUrl` when running behind a reverse proxy, otherwise the
 subscription URLs shown in the UI use whatever `Host` the browser sent.
+
+Changes take effect on restart; FireX never reloads the file underneath itself.
+Everything an admin can change while it runs — the mihomo template, the routing
+matrix, panels, plans, users — lives in the database instead, edited from the UI.
 
 ## Updates
 
 FireX updates itself from its own GitHub releases. The **System** page shows the
-running build and drives the whole flow; `FIREX_UPDATE_ENABLED` only controls
+running build and drives the whole flow; `update.enabled` only controls
 the periodic check, so an admin can always trigger one by hand.
 
 ```
@@ -130,7 +178,7 @@ There is no fallback to installing unverified — an optional check is no check.
 There is deliberately **no release signature**. The consequence is real and
 accepted: an attacker who controls the download channel can serve a poisoned
 binary alongside a matching `SHA256SUMS`. What holds that off is HTTPS and the
-default of pulling from GitHub directly; only point `FIREX_UPDATE_SOURCE` at a
+default of pulling from GitHub directly; only point `update.source` at a
 mirror you run yourself.
 
 **Applying an update** waits for in-flight panel work to drain (up to ten
@@ -260,7 +308,7 @@ remains the authority across panels.
 cmd/firex/            # main package: config, background loops, HTTP server
 internal/
   clash/              # mihomo rendering: routing model, groups, template tokens
-  config/             # environment-driven settings
+  config/             # the JSON config file: template, completion, validation
   model/              # GORM models and migrations
   panel/              # 3x-ui REST client
   paneltest/          # in-process fake 3x-ui used by the tests

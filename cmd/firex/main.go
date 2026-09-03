@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"log"
 	"net/http"
 	"os"
@@ -22,7 +23,16 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	// The path is a flag rather than a setting because it is the one thing the
+	// config file cannot tell us. An update re-executes with this same argv, so
+	// a non-default location survives the restart.
+	configPath := flag.String("config", config.DefaultPath, "path to the JSON config file")
+	flag.Parse()
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("firex: %v", err)
+	}
 	log.Printf("firex: %s (commit=%s, built=%s)", version.Version, version.Commit, version.BuildTime)
 
 	db, err := store.Open(cfg.DBPath, cfg.Debug)
@@ -40,7 +50,7 @@ func main() {
 			log.Printf("firex: created admin %q with generated password: %s", cfg.AdminUser, generated)
 			log.Printf("firex: this password is shown once; change it after signing in")
 		} else {
-			log.Printf("firex: created admin %q from FIREX_ADMIN_PASSWORD", cfg.AdminUser)
+			log.Printf("firex: created admin %q from the password in %s", cfg.AdminUser, *configPath)
 		}
 	}
 
@@ -56,7 +66,7 @@ func main() {
 
 	var srv *server.Server
 	upd := updater.New(
-		func() updater.Config { return cfg.Update },
+		func() updater.Config { return cfg.Update.Updater() },
 		func() string { return cfg.DataDir },
 		log.Default(),
 		updater.RestartHooks{
@@ -86,15 +96,15 @@ func main() {
 	)
 	srv = server.New(cfg, db, mgr, subs, upd)
 
-	go runLoop(bgCtx, "discover", cfg.DiscoverInterval, 0, func(ctx context.Context) error {
+	go runLoop(bgCtx, "discover", cfg.DiscoverInterval.Duration(), 0, func(ctx context.Context) error {
 		return mgr.DiscoverAll(ctx)
 	})
 	// Reconcile trails discovery so a freshly seen node can be provisioned in
 	// the same cycle rather than the next one.
-	go runLoop(bgCtx, "reconcile", cfg.SyncInterval, 15*time.Second, func(ctx context.Context) error {
+	go runLoop(bgCtx, "reconcile", cfg.SyncInterval.Duration(), 15*time.Second, func(ctx context.Context) error {
 		return mgr.ReconcileAll(ctx)
 	})
-	go runLoop(bgCtx, "traffic", cfg.TrafficInterval, 30*time.Second, func(ctx context.Context) error {
+	go runLoop(bgCtx, "traffic", cfg.TrafficInterval.Duration(), 30*time.Second, func(ctx context.Context) error {
 		return mgr.CollectTraffic(ctx)
 	})
 	upd.StartBackground(bgCtx)

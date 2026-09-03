@@ -52,7 +52,7 @@ func newHarness(t *testing.T) *harness {
 	cfg := &config.Config{}
 	mgr := provision.NewManager(db)
 	srv := New(cfg, db, mgr, subscription.NewService(db, mgr), updater.New(
-		func() updater.Config { return cfg.Update },
+		func() updater.Config { return cfg.Update.Updater() },
 		func() string { return cfg.DataDir },
 		log.New(io.Discard, "", 0),
 		updater.RestartHooks{},
