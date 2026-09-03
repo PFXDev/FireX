@@ -1,61 +1,57 @@
-// Package clash renders a per-user mihomo (Clash.Meta) config from an
-// admin-editable YAML template plus the set of nodes the user may use.
+// Package clash renders a mihomo (Clash.Meta) config: it takes an
+// admin-editable YAML template for the base settings and substitutes in the
+// proxies, proxy-groups and rules that another package has already resolved for
+// one particular user.
+//
+// Nothing here knows about profiles, policies or node groups — by the time
+// Input arrives, every member list is a plain list of names.
 package clash
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// Node is one subscription entry: the rendered proxy plus the metadata the
-// template's group tokens select on.
-type Node struct {
-	Name   string
-	Region string
-	Tags   []string
-	Entry  *Ordered
+// Proxy is one client-visible proxy: the name it goes by and its mihomo
+// mapping.
+type Proxy struct {
+	Name  string
+	Entry *Ordered
+}
+
+// Group is one proxy-group to emit. Name is what clients see, and Members are
+// the proxy or group names it references, already resolved.
+type Group struct {
+	Name      string
+	Type      string
+	TestURL   string
+	Interval  int
+	Tolerance int
+	Members   []string
 }
 
 type Input struct {
-	Nodes []Node
-	// Groups are the admin's node groups with membership already narrowed to
-	// the nodes above. Only the visual routing path reads them.
+	Proxies []Proxy
+	// Groups is the whole proxy-group list in emit order: the policies a client
+	// leads with first, then the node groups they draw from.
 	Groups []Group
-	// Routing, when set, replaces whatever `proxy-groups` and `rules` the
-	// template carries. Nil keeps the legacy token expansion, which is what
-	// the YAML editing mode relies on.
-	Routing *Routing
+	// Rules are complete mihomo rule lines, the trailing MATCH included.
+	Rules []string
 }
 
-// Group-list tokens the template may use inside proxy-groups.
+// GroupTypes are the mihomo proxy-group types FireX generates.
+var GroupTypes = []string{"select", "url-test", "fallback", "load-balance"}
+
+// Probe defaults for the group types that latency-test.
 const (
-	tokenAll          = "<ALL>"
-	tokenRegionGroups = "<REGION_GROUPS>"
-	prefixRegion      = "<REGION:"
-	prefixTag         = "<TAG:"
-	prefixFilter      = "<FILTER:"
+	DefaultTestURL   = "https://www.gstatic.com/generate_204"
+	DefaultInterval  = 300
+	DefaultTolerance = 50
 )
 
-type renderOpts struct {
-	regionGroupType string
-	testURL         string
-	interval        int
-	tolerance       int
-}
-
-func defaultRenderOpts() renderOpts {
-	return renderOpts{
-		regionGroupType: "url-test",
-		testURL:         "https://www.gstatic.com/generate_204",
-		interval:        300,
-		tolerance:       50,
-	}
-}
-
-// Render substitutes the user's nodes into the template and returns YAML.
+// Render substitutes the user's config into the template and returns YAML.
 func Render(template string, in Input) (string, error) {
 	if strings.TrimSpace(template) == "" {
 		template = DefaultTemplate
@@ -75,33 +71,32 @@ func Render(template string, in Input) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("clash: template root must be a mapping")
 	}
+	// Templates carried over from the token era may still hold a `firex:` block
+	// that tuned the generated region groups. It means nothing now and mihomo
+	// would reject the unknown key, so drop it on the way through.
+	root.delete("firex")
 
-	opts := extractOpts(root)
-	names, regions := indexNodes(in.Nodes)
-
-	proxies := make([]any, 0, len(in.Nodes))
-	for _, n := range in.Nodes {
-		if n.Entry != nil {
-			proxies = append(proxies, n.Entry)
+	proxies := make([]any, 0, len(in.Proxies))
+	for _, p := range in.Proxies {
+		if p.Entry != nil {
+			proxies = append(proxies, p.Entry)
 		}
 	}
 	root.Set("proxies", proxies)
 
-	var groups []any
-	if in.Routing != nil {
-		var rules []any
-		groups, rules = in.Routing.compile(in)
-		root.Set("rules", rules)
-	} else {
-		var err error
-		groups, err = expandGroups(root, in.Nodes, names, regions, opts)
-		if err != nil {
-			return "", err
-		}
+	groups := make([]any, 0, len(in.Groups))
+	for _, g := range in.Groups {
+		groups = append(groups, groupNode(g))
 	}
-	groups, dropped := pruneGroups(groups)
+	groups, _ = pruneGroups(groups)
 	root.Set("proxy-groups", groups)
-	rewriteRules(root, dropped, firstGroupName(groups))
+
+	rules := make([]any, 0, len(in.Rules))
+	for _, rule := range in.Rules {
+		rules = append(rules, rule)
+	}
+	root.Set("rules", rules)
+	rewriteRules(root, surviving(groups), firstGroupName(groups))
 
 	out, err := yaml.Marshal(root)
 	if err != nil {
@@ -110,200 +105,39 @@ func Render(template string, in Input) (string, error) {
 	return string(out), nil
 }
 
-// extractOpts consumes the optional top-level `firex` block, which tunes the
-// generated region groups, and removes it so it never reaches the client.
-func extractOpts(root *Ordered) renderOpts {
-	opts := defaultRenderOpts()
-	raw, ok := root.Get("firex")
-	if !ok {
-		return opts
+func groupNode(g Group) *Ordered {
+	node := NewOrdered()
+	node.Set("name", g.Name)
+	node.Set("type", g.Type)
+	applyProbe(node, g.Type, g.TestURL, g.Interval, g.Tolerance)
+	members := make([]any, 0, len(g.Members))
+	for _, m := range g.Members {
+		members = append(members, m)
 	}
-	root.delete("firex")
-	cfg, ok := raw.(*Ordered)
-	if !ok {
-		return opts
-	}
-	if v, ok := cfg.Get("region-group-type"); ok {
-		if s, ok := v.(string); ok && s != "" {
-			opts.regionGroupType = s
-		}
-	}
-	if v, ok := cfg.Get("test-url"); ok {
-		if s, ok := v.(string); ok && s != "" {
-			opts.testURL = s
-		}
-	}
-	if v, ok := cfg.Get("interval"); ok {
-		if n, ok := toInt(v); ok && n > 0 {
-			opts.interval = n
-		}
-	}
-	if v, ok := cfg.Get("tolerance"); ok {
-		if n, ok := toInt(v); ok && n > 0 {
-			opts.tolerance = n
-		}
-	}
-	return opts
+	node.Set("proxies", members)
+	return node
 }
 
-// indexNodes returns every renderable proxy name and the region order in which
-// region groups should be generated.
-func indexNodes(nodes []Node) (names []string, regions []string) {
-	seenRegion := map[string]bool{}
-	for _, n := range nodes {
-		if n.Entry == nil {
-			continue
-		}
-		names = append(names, n.Name)
-		if n.Region != "" && !seenRegion[n.Region] {
-			seenRegion[n.Region] = true
-			regions = append(regions, n.Region)
-		}
+// applyProbe adds the latency-test fields, but only for the group types that
+// read them — mihomo rejects `url` on a select group.
+func applyProbe(node *Ordered, groupType, testURL string, interval, tolerance int) {
+	if groupType == "select" {
+		return
 	}
-	return names, regions
-}
-
-func expandGroups(root *Ordered, nodes []Node, allNames, regions []string, opts renderOpts) ([]any, error) {
-	raw, ok := root.Get("proxy-groups")
-	if !ok {
-		return nil, nil
+	if testURL == "" {
+		testURL = DefaultTestURL
 	}
-	items, ok := raw.([]any)
-	if !ok {
-		return nil, fmt.Errorf("clash: proxy-groups must be a list")
+	if interval <= 0 {
+		interval = DefaultInterval
 	}
-	regionGroupNames := regions
-
-	out := make([]any, 0, len(items)+len(regions))
-	for _, item := range items {
-		if s, ok := item.(string); ok && strings.TrimSpace(s) == tokenRegionGroups {
-			for _, region := range regions {
-				out = append(out, regionGroup(region, nodesInRegion(nodes, region), opts))
-			}
-			continue
+	node.Set("url", testURL)
+	node.Set("interval", interval)
+	if groupType == "url-test" {
+		if tolerance <= 0 {
+			tolerance = DefaultTolerance
 		}
-		group, ok := item.(*Ordered)
-		if !ok {
-			out = append(out, item)
-			continue
-		}
-		listRaw, has := group.Get("proxies")
-		if !has {
-			out = append(out, group)
-			continue
-		}
-		list, ok := listRaw.([]any)
-		if !ok {
-			out = append(out, group)
-			continue
-		}
-		expanded, err := expandList(list, nodes, allNames, regionGroupNames)
-		if err != nil {
-			return nil, err
-		}
-		group.Set("proxies", expanded)
-		out = append(out, group)
+		node.Set("tolerance", tolerance)
 	}
-	return out, nil
-}
-
-func expandList(list []any, nodes []Node, allNames, regionGroupNames []string) ([]any, error) {
-	seen := map[string]bool{}
-	out := make([]any, 0, len(list))
-	add := func(name string) {
-		if name == "" || seen[name] {
-			return
-		}
-		seen[name] = true
-		out = append(out, name)
-	}
-	for _, item := range list {
-		s, ok := item.(string)
-		if !ok {
-			out = append(out, item)
-			continue
-		}
-		token := strings.TrimSpace(s)
-		switch {
-		case token == tokenAll:
-			for _, n := range allNames {
-				add(n)
-			}
-		case token == tokenRegionGroups:
-			for _, n := range regionGroupNames {
-				add(n)
-			}
-		case strings.HasPrefix(token, prefixRegion) && strings.HasSuffix(token, ">"):
-			region := token[len(prefixRegion) : len(token)-1]
-			for _, n := range nodesInRegion(nodes, region) {
-				add(n)
-			}
-		case strings.HasPrefix(token, prefixTag) && strings.HasSuffix(token, ">"):
-			tag := token[len(prefixTag) : len(token)-1]
-			for _, n := range nodesWithTag(nodes, tag) {
-				add(n)
-			}
-		case strings.HasPrefix(token, prefixFilter) && strings.HasSuffix(token, ">"):
-			expr := token[len(prefixFilter) : len(token)-1]
-			re, err := regexp.Compile(expr)
-			if err != nil {
-				return nil, fmt.Errorf("clash: bad <FILTER:%s>: %w", expr, err)
-			}
-			for _, n := range allNames {
-				if re.MatchString(n) {
-					add(n)
-				}
-			}
-		default:
-			add(token)
-		}
-	}
-	return out, nil
-}
-
-func regionGroup(region string, members []string, opts renderOpts) *Ordered {
-	g := NewOrdered()
-	g.Set("name", region)
-	g.Set("type", opts.regionGroupType)
-	if opts.regionGroupType == "url-test" || opts.regionGroupType == "fallback" || opts.regionGroupType == "load-balance" {
-		g.Set("url", opts.testURL)
-		g.Set("interval", opts.interval)
-	}
-	if opts.regionGroupType == "url-test" {
-		g.Set("tolerance", opts.tolerance)
-	}
-	members_ := make([]any, 0, len(members))
-	for _, m := range members {
-		members_ = append(members_, m)
-	}
-	g.Set("proxies", members_)
-	return g
-}
-
-func nodesInRegion(nodes []Node, region string) []string {
-	var out []string
-	for _, n := range nodes {
-		if n.Entry != nil && n.Region == region {
-			out = append(out, n.Name)
-		}
-	}
-	return out
-}
-
-func nodesWithTag(nodes []Node, tag string) []string {
-	var out []string
-	for _, n := range nodes {
-		if n.Entry == nil {
-			continue
-		}
-		for _, t := range n.Tags {
-			if t == tag {
-				out = append(out, n.Name)
-				break
-			}
-		}
-	}
-	return out
 }
 
 // pruneGroups removes groups left with no members — mihomo rejects an empty
@@ -355,12 +189,29 @@ func pruneGroups(groups []any) (kept []any, dropped map[string]bool) {
 	}
 }
 
-// rewriteRules repoints rules at a group that pruning removed. Built-in
-// targets (DIRECT/REJECT/…) are never rewritten.
-func rewriteRules(root *Ordered, dropped map[string]bool, fallbackGroup string) {
-	if len(dropped) == 0 {
-		return
+// builtinTargets are the rule targets that need no proxy-group behind them.
+var builtinTargets = map[string]bool{
+	"DIRECT": true, "REJECT": true, "REJECT-DROP": true,
+	"PASS": true, "GLOBAL": true, "COMPATIBLE": true,
+}
+
+func surviving(groups []any) map[string]bool {
+	out := map[string]bool{}
+	for _, item := range groups {
+		if g, ok := item.(*Ordered); ok {
+			if name, ok := groupName(g); ok {
+				out[name] = true
+			}
+		}
 	}
+	return out
+}
+
+// rewriteRules repoints every rule whose target no longer exists — a group that
+// pruning removed, or one the caller named but never emitted. mihomo refuses to
+// load a config that references a missing group, and an expired user with no
+// proxies left still has to receive something loadable.
+func rewriteRules(root *Ordered, known map[string]bool, fallbackGroup string) {
 	raw, ok := root.Get("rules")
 	if !ok {
 		return
@@ -384,7 +235,7 @@ func rewriteRules(root *Ordered, dropped map[string]bool, fallbackGroup string) 
 		idx := targetIndex(parts)
 		if idx >= 0 {
 			target := strings.TrimSpace(parts[idx])
-			if dropped[target] {
+			if !known[target] && !builtinTargets[strings.ToUpper(target)] {
 				parts[idx] = replacement
 				rule = strings.Join(parts, ",")
 			}
@@ -438,18 +289,6 @@ func (o *Ordered) delete(key string) {
 			return
 		}
 	}
-}
-
-func toInt(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	}
-	return 0, false
 }
 
 // nodeToValue converts a parsed YAML tree into Go values, keeping mappings in

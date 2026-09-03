@@ -174,7 +174,7 @@ export function OverviewPage() {
   const counts = data.counts
   const onlinePanels = data.panels.filter((panel) => panel.status === 'online').length
   const panelRate = percentage(onlinePanels, counts.panels)
-  const nodeRate = percentage(counts.enabledNodes, counts.nodes)
+  const nodeRate = percentage(counts.enabledInbounds, counts.inbounds)
   const userRate = percentage(counts.activeUsers, counts.users)
   const hasAttention = data.failedSyncs > 0 || syncProblems.length > 0
 
@@ -280,27 +280,27 @@ export function OverviewPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>节点</CardTitle>
+            <CardTitle>入站</CardTitle>
             <CardDescription>可用节点与失联情况</CardDescription>
             <CardAction>
               <Badge
                 variant={
-                  counts.nodes === 0 ? 'outline' : counts.missingNodes > 0 ? 'destructive' : 'success'
+                  counts.inbounds === 0 ? 'outline' : counts.missingInbounds > 0 ? 'destructive' : 'success'
                 }
               >
                 <LayersIcon data-icon="inline-start" />
-                {counts.nodes === 0
+                {counts.inbounds === 0
                   ? '尚未发现'
-                  : counts.missingNodes > 0
-                    ? `${counts.missingNodes} 个失联`
+                  : counts.missingInbounds > 0
+                    ? `${counts.missingInbounds} 个失联`
                     : '状态正常'}
               </Badge>
             </CardAction>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <div className="flex items-end gap-2">
-              <strong className="font-heading text-3xl font-semibold tabular-nums">{counts.enabledNodes}</strong>
-              <span className="pb-1 text-sm text-muted-foreground">/ {counts.nodes} 启用</span>
+              <strong className="font-heading text-3xl font-semibold tabular-nums">{counts.enabledInbounds}</strong>
+              <span className="pb-1 text-sm text-muted-foreground">/ {counts.inbounds} 启用</span>
             </div>
             <Progress value={nodeRate}>
               <ProgressLabel>启用率</ProgressLabel>

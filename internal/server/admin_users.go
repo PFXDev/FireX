@@ -9,6 +9,7 @@ import (
 
 	"github.com/PFXDev/FireX/internal/model"
 	"github.com/PFXDev/FireX/internal/provision"
+	"github.com/PFXDev/FireX/internal/routing"
 	"github.com/PFXDev/FireX/internal/subscription"
 )
 
@@ -16,12 +17,16 @@ import (
 
 type planRow struct {
 	model.Plan
-	NodeIDs   []uint `json:"nodeIds"`
-	UserCount int64  `json:"userCount"`
+	ProfileName string `json:"profileName"`
+	// UsableInbounds is what the bound profile currently grants, so a plan that
+	// routes nowhere is visible without opening the profile.
+	UsableInbounds int   `json:"usableInbounds"`
+	UserCount      int64 `json:"userCount"`
 }
 
 type planRequest struct {
 	Name         string `json:"name"`
+	ProfileID    *uint  `json:"profileId"`
 	TrafficBytes int64  `json:"trafficBytes"`
 	DurationDays int    `json:"durationDays"`
 	DeviceLimit  int    `json:"deviceLimit"`
@@ -29,7 +34,6 @@ type planRequest struct {
 	Enabled      *bool  `json:"enabled"`
 	SortOrder    *int   `json:"sortOrder"`
 	Remark       string `json:"remark"`
-	NodeIDs      []uint `json:"nodeIds"`
 }
 
 func (s *Server) listPlans(c *gin.Context) {
@@ -38,12 +42,18 @@ func (s *Server) listPlans(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
+	var profiles []model.Profile
+	s.db.Find(&profiles)
+	profileNames := map[uint]string{}
+	for _, p := range profiles {
+		profileNames[p.ID] = p.Name
+	}
 	out := make([]planRow, 0, len(plans))
 	for _, p := range plans {
-		row := planRow{Plan: p, NodeIDs: []uint{}}
-		s.db.Model(&model.PlanNode{}).Where("plan_id = ?", p.ID).Pluck("node_id", &row.NodeIDs)
+		row := planRow{Plan: p, ProfileName: profileNames[p.ProfileID]}
 		s.db.Model(&model.User{}).Where("plan_id = ?", p.ID).Count(&row.UserCount)
-		row.NodeIDs = jsonList(row.NodeIDs)
+		inbounds, _ := routing.InboundsForProfile(s.db, p.ProfileID)
+		row.UsableInbounds = len(inbounds)
 		out = append(out, row)
 	}
 	c.JSON(http.StatusOK, out)
@@ -62,6 +72,7 @@ func (s *Server) createPlan(c *gin.Context) {
 	now := provision.NowMs()
 	plan := model.Plan{
 		Name:         strings.TrimSpace(req.Name),
+		ProfileID:    valueOr(req.ProfileID, 0),
 		TrafficBytes: req.TrafficBytes,
 		DurationDays: req.DurationDays,
 		DeviceLimit:  req.DeviceLimit,
@@ -74,10 +85,6 @@ func (s *Server) createPlan(c *gin.Context) {
 	}
 	if err := s.db.Create(&plan).Error; err != nil {
 		fail(c, http.StatusBadRequest, err)
-		return
-	}
-	if err := s.setPlanNodes(plan.ID, req.NodeIDs); err != nil {
-		fail(c, http.StatusInternalServerError, err)
 		return
 	}
 	c.JSON(http.StatusOK, plan)
@@ -101,6 +108,9 @@ func (s *Server) updatePlan(c *gin.Context) {
 	if strings.TrimSpace(req.Name) != "" {
 		plan.Name = strings.TrimSpace(req.Name)
 	}
+	if req.ProfileID != nil {
+		plan.ProfileID = *req.ProfileID
+	}
 	plan.TrafficBytes = req.TrafficBytes
 	plan.DurationDays = req.DurationDays
 	plan.DeviceLimit = req.DeviceLimit
@@ -117,34 +127,14 @@ func (s *Server) updatePlan(c *gin.Context) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	if req.NodeIDs != nil {
-		if err := s.setPlanNodes(plan.ID, req.NodeIDs); err != nil {
-			fail(c, http.StatusInternalServerError, err)
-			return
-		}
-	}
 	s.subs.InvalidateAll()
 
-	// Node-set and device-limit changes have to reach the panels, so push the
-	// plan's users before answering.
+	// Switching profile changes the inbound set, and the device limit is pushed
+	// to the panels too, so the plan's users go out before we answer.
 	ctx, cancel := opCtx()
 	defer cancel()
 	syncErr := s.mgr.ReconcileUsersOfPlan(ctx, plan.ID)
 	c.JSON(http.StatusOK, gin.H{"plan": plan, "syncError": errString(syncErr)})
-}
-
-func (s *Server) setPlanNodes(planID uint, nodeIDs []uint) error {
-	if err := s.db.Where("plan_id = ?", planID).Delete(&model.PlanNode{}).Error; err != nil {
-		return err
-	}
-	if len(nodeIDs) == 0 {
-		return nil
-	}
-	rows := make([]model.PlanNode, 0, len(nodeIDs))
-	for _, nodeID := range nodeIDs {
-		rows = append(rows, model.PlanNode{PlanID: planID, NodeID: nodeID})
-	}
-	return s.db.Create(&rows).Error
 }
 
 func (s *Server) deletePlan(c *gin.Context) {
@@ -158,7 +148,6 @@ func (s *Server) deletePlan(c *gin.Context) {
 		failMsg(c, http.StatusConflict, "plan still has users; move them to another plan first")
 		return
 	}
-	s.db.Where("plan_id = ?", id).Delete(&model.PlanNode{})
 	if err := s.db.Delete(&model.Plan{}, id).Error; err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
@@ -170,12 +159,12 @@ func (s *Server) deletePlan(c *gin.Context) {
 
 type userRow struct {
 	model.User
-	PlanName  string   `json:"planName"`
-	Used      int64    `json:"used"`
-	NodeCount int      `json:"nodeCount"`
-	SyncState string   `json:"syncState"`
-	SyncError []string `json:"syncErrors"`
-	SubURL    string   `json:"subUrl"`
+	PlanName     string   `json:"planName"`
+	Used         int64    `json:"used"`
+	InboundCount int      `json:"inboundCount"`
+	SyncState    string   `json:"syncState"`
+	SyncError    []string `json:"syncErrors"`
+	SubURL       string   `json:"subUrl"`
 }
 
 type userRequest struct {
@@ -213,12 +202,12 @@ func (s *Server) listUsers(c *gin.Context) {
 			SyncError: []string{},
 			SubURL:    base + "/sub/" + u.SubToken,
 		}
-		nodes, _ := s.mgr.NodesForUser(&u)
-		row.NodeCount = len(nodes)
+		inbounds, _ := s.mgr.InboundsForUser(&u)
+		row.InboundCount = len(inbounds)
 
 		var records []model.UserPanel
 		s.db.Where("user_id = ?", u.ID).Find(&records)
-		if len(records) == 0 && row.NodeCount > 0 {
+		if len(records) == 0 && row.InboundCount > 0 {
 			row.SyncState = model.SyncStatePending
 		}
 		for _, rec := range records {
@@ -454,7 +443,6 @@ func (s *Server) previewSubscription(c *gin.Context) {
 
 	type entryView struct {
 		Name     string `json:"name"`
-		Region   string `json:"region"`
 		Protocol string `json:"protocol"`
 		Panel    uint   `json:"panelId"`
 		Clash    bool   `json:"clashSupported"`
@@ -464,9 +452,8 @@ func (s *Server) previewSubscription(c *gin.Context) {
 	for _, e := range result.Entries {
 		views = append(views, entryView{
 			Name:     e.Name,
-			Region:   e.Node.Region,
-			Protocol: e.Node.Protocol,
-			Panel:    e.Node.PanelID,
+			Protocol: e.Inbound.Protocol,
+			Panel:    e.Inbound.PanelID,
 			Clash:    e.Clash != nil,
 			Link:     e.Link,
 		})

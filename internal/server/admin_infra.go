@@ -12,6 +12,7 @@ import (
 	"github.com/PFXDev/FireX/internal/model"
 	"github.com/PFXDev/FireX/internal/panel"
 	"github.com/PFXDev/FireX/internal/provision"
+	"github.com/PFXDev/FireX/internal/routing"
 )
 
 // discoverTimeout bounds a single panel round-trip triggered from the UI.
@@ -54,14 +55,14 @@ func (s *Server) listPanels(c *gin.Context) {
 	}
 	type row struct {
 		model.Panel
-		NodeCount    int64 `json:"nodeCount"`
-		EnabledNodes int64 `json:"enabledNodes"`
+		InboundCount    int64 `json:"inboundCount"`
+		EnabledInbounds int64 `json:"enabledInbounds"`
 	}
 	out := make([]row, 0, len(panels))
 	for _, p := range panels {
 		r := row{Panel: p}
-		s.db.Model(&model.Node{}).Where("panel_id = ?", p.ID).Count(&r.NodeCount)
-		s.db.Model(&model.Node{}).Where("panel_id = ? AND enabled = ? AND missing = ?", p.ID, true, false).Count(&r.EnabledNodes)
+		s.db.Model(&model.Inbound{}).Where("panel_id = ?", p.ID).Count(&r.InboundCount)
+		s.db.Model(&model.Inbound{}).Where("panel_id = ? AND enabled = ? AND missing = ?", p.ID, true, false).Count(&r.EnabledInbounds)
 		// The token is a panel-wide admin credential; never echo it back.
 		r.APIToken = ""
 		out = append(out, r)
@@ -170,12 +171,14 @@ func (s *Server) deletePanel(c *gin.Context) {
 		}
 	}
 
-	var nodeIDs []uint
-	s.db.Model(&model.Node{}).Where("panel_id = ?", p.ID).Pluck("id", &nodeIDs)
-	if len(nodeIDs) > 0 {
-		s.db.Where("node_id IN ?", nodeIDs).Delete(&model.PlanNode{})
+	var inboundIDs []uint
+	s.db.Model(&model.Inbound{}).Where("panel_id = ?", p.ID).Pluck("id", &inboundIDs)
+	// Group membership has to go with the inbounds; a dangling row would keep
+	// inflating every group's member count for good.
+	if len(inboundIDs) > 0 {
+		s.db.Where("inbound_id IN ?", inboundIDs).Delete(&model.NodeGroupInbound{})
 	}
-	s.db.Where("panel_id = ?", p.ID).Delete(&model.Node{})
+	s.db.Where("panel_id = ?", p.ID).Delete(&model.Inbound{})
 	s.db.Where("panel_id = ?", p.ID).Delete(&model.UserPanel{})
 	if err := s.db.Delete(&model.Panel{}, p.ID).Error; err != nil {
 		fail(c, http.StatusInternalServerError, err)
@@ -203,8 +206,8 @@ func (s *Server) discoverPanel(c *gin.Context) {
 		return
 	}
 	var count int64
-	s.db.Model(&model.Node{}).Where("panel_id = ? AND missing = ?", p.ID, false).Count(&count)
-	c.JSON(http.StatusOK, gin.H{"ok": true, "nodes": count})
+	s.db.Model(&model.Inbound{}).Where("panel_id = ? AND missing = ?", p.ID, false).Count(&count)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "inbounds": count})
 }
 
 // testPanel checks credentials before the admin commits them.
@@ -242,21 +245,23 @@ func (s *Server) testPanel(c *gin.Context) {
 	})
 }
 
-// -------------------------------------------------------------------- nodes
+// ----------------------------------------------------------------- inbounds
 
-type nodeRow struct {
-	model.Node
+type inboundRow struct {
+	model.Inbound
 	PanelName string `json:"panelName"`
-	PlanCount int64  `json:"planCount"`
+	// GroupCount is how many node groups hold this inbound. Zero means it
+	// reaches nobody, whatever its enabled flag says.
+	GroupCount int64 `json:"groupCount"`
 }
 
-func (s *Server) listNodes(c *gin.Context) {
-	var nodes []model.Node
+func (s *Server) listInbounds(c *gin.Context) {
+	var inbounds []model.Inbound
 	q := s.db.Order("sort_order ASC, id ASC")
 	if panelID := c.Query("panelId"); panelID != "" {
 		q = q.Where("panel_id = ?", panelID)
 	}
-	if err := q.Find(&nodes).Error; err != nil {
+	if err := q.Find(&inbounds).Error; err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -266,148 +271,156 @@ func (s *Server) listNodes(c *gin.Context) {
 	for _, p := range panels {
 		names[p.ID] = p.Name
 	}
-	out := make([]nodeRow, 0, len(nodes))
-	for _, n := range nodes {
-		row := nodeRow{Node: n, PanelName: names[n.PanelID]}
-		s.db.Model(&model.PlanNode{}).Where("node_id = ?", n.ID).Count(&row.PlanCount)
-		out = append(out, row)
+
+	counts := map[uint]int64{}
+	var tally []struct {
+		InboundID uint
+		N         int64
+	}
+	s.db.Model(&model.NodeGroupInbound{}).
+		Select("inbound_id, COUNT(*) AS n").Group("inbound_id").Scan(&tally)
+	for _, row := range tally {
+		counts[row.InboundID] = row.N
+	}
+
+	out := make([]inboundRow, 0, len(inbounds))
+	for _, n := range inbounds {
+		out = append(out, inboundRow{Inbound: n, PanelName: names[n.PanelID], GroupCount: counts[n.ID]})
 	}
 	c.JSON(http.StatusOK, out)
 }
 
-type nodeRequest struct {
-	Name       string   `json:"name"`
-	Region     string   `json:"region"`
-	Emoji      string   `json:"emoji"`
-	Tags       []string `json:"tags"`
-	SortOrder  *int     `json:"sortOrder"`
-	Enabled    *bool    `json:"enabled"`
-	UDP        *bool    `json:"udp"`
-	Multiplier *float64 `json:"multiplier"`
+type inboundRequest struct {
+	Name      string `json:"name"`
+	Emoji     string `json:"emoji"`
+	SortOrder *int   `json:"sortOrder"`
+	Enabled   *bool  `json:"enabled"`
+	UDP       *bool  `json:"udp"`
 }
 
-func (s *Server) updateNode(c *gin.Context) {
+func (s *Server) updateInbound(c *gin.Context) {
 	id, ok := paramID(c)
 	if !ok {
 		return
 	}
-	var req nodeRequest
+	var req inboundRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	var node model.Node
-	if err := s.db.First(&node, id).Error; err != nil {
-		failMsg(c, http.StatusNotFound, "node not found")
+	var inbound model.Inbound
+	if err := s.db.First(&inbound, id).Error; err != nil {
+		failMsg(c, http.StatusNotFound, "inbound not found")
 		return
 	}
-	wasEnabled := node.Enabled
-	node.Name = req.Name
-	node.Region = strings.TrimSpace(req.Region)
-	node.Emoji = strings.TrimSpace(req.Emoji)
-	node.Tags = strings.Join(req.Tags, ",")
+	wasEnabled := inbound.Enabled
+	inbound.Name = strings.TrimSpace(req.Name)
+	inbound.Emoji = strings.TrimSpace(req.Emoji)
 	if req.SortOrder != nil {
-		node.SortOrder = *req.SortOrder
+		inbound.SortOrder = *req.SortOrder
 	}
 	if req.Enabled != nil {
-		node.Enabled = *req.Enabled
+		inbound.Enabled = *req.Enabled
 	}
 	if req.UDP != nil {
-		node.UDP = *req.UDP
+		inbound.UDP = *req.UDP
 	}
-	if req.Multiplier != nil {
-		node.Multiplier = *req.Multiplier
-	}
-	node.UpdatedAt = provision.NowMs()
-	if err := s.db.Save(&node).Error; err != nil {
+	inbound.UpdatedAt = provision.NowMs()
+	if err := s.db.Save(&inbound).Error; err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
 	s.subs.InvalidateAll()
-	if wasEnabled != node.Enabled {
-		s.reconcileNodeUsers(node.ID)
+	if wasEnabled != inbound.Enabled {
+		s.reconcileInbound(inbound.ID)
 	}
-	c.JSON(http.StatusOK, node)
+	c.JSON(http.StatusOK, inbound)
 }
 
-type nodeBulkRequest struct {
-	IDs       []uint   `json:"ids"`
-	Enabled   *bool    `json:"enabled"`
-	Region    *string  `json:"region"`
-	Tags      []string `json:"tags"`
-	SortOrder *int     `json:"sortOrder"`
+type inboundBulkRequest struct {
+	IDs       []uint `json:"ids"`
+	Enabled   *bool  `json:"enabled"`
+	SortOrder *int   `json:"sortOrder"`
 }
 
-func (s *Server) bulkUpdateNodes(c *gin.Context) {
-	var req nodeBulkRequest
+func (s *Server) bulkUpdateInbounds(c *gin.Context) {
+	var req inboundBulkRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
 	if len(req.IDs) == 0 {
-		failMsg(c, http.StatusBadRequest, "no nodes selected")
+		failMsg(c, http.StatusBadRequest, "no inbounds selected")
 		return
 	}
 	updates := map[string]any{"updated_at": provision.NowMs()}
 	if req.Enabled != nil {
 		updates["enabled"] = *req.Enabled
 	}
-	if req.Region != nil {
-		updates["region"] = strings.TrimSpace(*req.Region)
-	}
-	if req.Tags != nil {
-		updates["tags"] = strings.Join(req.Tags, ",")
-	}
 	if req.SortOrder != nil {
 		updates["sort_order"] = *req.SortOrder
 	}
-	if err := s.db.Model(&model.Node{}).Where("id IN ?", req.IDs).Updates(updates).Error; err != nil {
+	if err := s.db.Model(&model.Inbound{}).Where("id IN ?", req.IDs).Updates(updates).Error; err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
 	s.subs.InvalidateAll()
 	if req.Enabled != nil {
-		for _, id := range req.IDs {
-			s.reconcileNodeUsers(id)
-		}
+		// One pass for the whole selection: several inbounds usually reach the
+		// same plans, and reconciling each separately would re-push every user
+		// once per inbound.
+		s.reconcileInbounds(req.IDs)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "updated": len(req.IDs)})
 }
 
-// deleteNode drops a node whose inbound no longer exists upstream. A live node
-// must be removed on the panel first, or discovery would just recreate it.
-func (s *Server) deleteNode(c *gin.Context) {
+// deleteInbound drops an inbound that no longer exists upstream. A live one must
+// be removed on the panel first, or discovery would just recreate it.
+func (s *Server) deleteInbound(c *gin.Context) {
 	id, ok := paramID(c)
 	if !ok {
 		return
 	}
-	var node model.Node
-	if err := s.db.First(&node, id).Error; err != nil {
-		failMsg(c, http.StatusNotFound, "node not found")
+	var inbound model.Inbound
+	if err := s.db.First(&inbound, id).Error; err != nil {
+		failMsg(c, http.StatusNotFound, "inbound not found")
 		return
 	}
-	if !node.Missing {
-		failMsg(c, http.StatusConflict, "node still exists on its panel; delete the inbound there first")
+	if !inbound.Missing {
+		failMsg(c, http.StatusConflict, "inbound still exists on its panel; delete it there first")
 		return
 	}
-	s.db.Where("node_id = ?", node.ID).Delete(&model.PlanNode{})
-	if err := s.db.Delete(&model.Node{}, node.ID).Error; err != nil {
+	plans := routing.PlansUsingInbound(s.db, inbound.ID)
+	s.db.Where("inbound_id = ?", inbound.ID).Delete(&model.NodeGroupInbound{})
+	if err := s.db.Delete(&model.Inbound{}, inbound.ID).Error; err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
 	s.subs.InvalidateAll()
+	s.reconcilePlans(plans)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// reconcileNodeUsers re-pushes everyone whose plan includes this node.
-func (s *Server) reconcileNodeUsers(nodeID uint) {
+// reconcileInbound re-pushes everyone whose profile reaches this inbound.
+func (s *Server) reconcileInbound(inboundID uint) {
+	s.reconcilePlans(routing.PlansUsingInbound(s.db, inboundID))
+}
+
+func (s *Server) reconcileInbounds(inboundIDs []uint) {
+	var plans []uint
+	for _, id := range inboundIDs {
+		plans = append(plans, routing.PlansUsingInbound(s.db, id)...)
+	}
+	s.reconcilePlans(plans)
+}
+
+func (s *Server) reconcilePlans(planIDs []uint) {
+	if len(planIDs) == 0 {
+		return
+	}
 	ctx, cancel := opCtx()
 	defer cancel()
-	var planIDs []uint
-	s.db.Model(&model.PlanNode{}).Where("node_id = ?", nodeID).Pluck("plan_id", &planIDs)
-	for _, planID := range planIDs {
-		_ = s.mgr.ReconcileUsersOfPlan(ctx, planID)
-	}
+	_ = s.mgr.ReconcileUsersOfPlans(ctx, planIDs)
 }
 
 func errString(err error) string {

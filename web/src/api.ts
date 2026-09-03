@@ -98,103 +98,128 @@ export interface Panel {
   lastError: string
   lastSeenAt: number
   xrayVersion: string
-  nodeCount: number
-  enabledNodes: number
+  inboundCount: number
+  enabledInbounds: number
 }
 
-export interface Node {
+/** One inbound on one panel. Classification lives on the node group instead. */
+export interface Inbound {
   id: number
   panelId: number
   panelName: string
-  inboundId: number
+  remoteId: number
   inboundTag: string
   protocol: string
   port: number
   remoteRemark: string
   remoteEnabled: boolean
   name: string
-  region: string
   emoji: string
-  tags: string
   sortOrder: number
   enabled: boolean
   udp: boolean
-  multiplier: number
   missing: boolean
-  planCount: number
+  /** How many node groups hold it. Zero means it reaches nobody. */
+  groupCount: number
 }
 
-/** A hand-picked bundle of nodes, rendered as one proxy-group per group. */
+export interface NodeGroupTag {
+  key: string
+  value: string
+}
+
+/** A hand-picked bundle of inbounds, rendered as one proxy-group. */
 export interface NodeGroup {
   id: number
   name: string
   emoji: string
-  region: string
-  line: string
   type: string
   testUrl: string
   interval: number
   tolerance: number
+  multiplier: number
   sortOrder: number
   enabled: boolean
   remark: string
-  nodeIds: number[]
-  enabledNodes: number
+  tags: NodeGroupTag[]
+  inboundIds: number[]
+  usableInbounds: number
+  profileCount: number
+}
+
+/** A tier's routing: which node groups its users reach, plus its egress column. */
+export interface Profile {
+  id: number
+  name: string
+  /** Takes every enabled node group instead of an explicit whitelist. */
+  allGroups: boolean
+  sortOrder: number
+  enabled: boolean
+  remark: string
+  groupIds: number[]
+  planCount: number
+  usableInbounds: number
 }
 
 /**
- * How a policy-group entry or rule target is expressed. Everything references
- * a group by its bare name, so renaming an emoji never orphans a rule.
+ * How an egress member is expressed. Everything references a node group or
+ * policy by its bare name, so renaming an emoji never orphans a reference.
  */
-export type MemberKind = 'policy' | 'node-group' | 'all-groups' | 'all-nodes' | 'builtin'
+export type MemberKind = 'node-group' | 'policy' | 'builtin' | 'all-node-groups' | 'all-inbounds'
 
-export interface RoutingMember {
+export interface EgressMember {
   kind: MemberKind
   ref: string
 }
 
-export interface PolicyGroup {
-  name: string
-  icon: string
-  type: string
-  members: RoutingMember[]
-  testUrl: string
-  interval: number
-  tolerance: number
-}
-
-export interface RoutingRule {
+export interface PolicyRule {
   type: string
   value: string
-  target: RoutingMember
   noResolve: boolean
   disabled: boolean
 }
 
-export interface Routing {
-  groups: PolicyGroup[]
-  rules: RoutingRule[]
-  final: RoutingMember
+/** One matrix row: a reusable rule list plus its identity in the client. */
+export interface Policy {
+  id: number
+  name: string
+  icon: string
+  /** Renders as MATCH; exactly one enabled policy carries it. */
+  isFinal: boolean
+  enabled: boolean
+  remark: string
+  rules: PolicyRule[]
 }
 
-/** visual composes groups and rules from data; yaml leaves the template in charge. */
-export type RoutingMode = 'visual' | 'yaml'
+/** One matrix cell. profileId 0 is the default column every profile falls back to. */
+export interface Egress {
+  policyIndex: number
+  profileId: number
+  type: string
+  testUrl: string
+  interval: number
+  tolerance: number
+  hidden: boolean
+  members: EgressMember[]
+}
 
-export interface RoutingResponse {
-  mode: RoutingMode
-  routing: Routing
-  isDefault: boolean
-  default: Routing
+export interface RoutingMatrix {
+  policies: Policy[]
+  egresses: Egress[]
   options: {
-    groupTypes: string[]
     ruleTypes: string[]
+    noResolveTypes: Record<string, boolean>
+    groupTypes: string[]
     builtins: string[]
+    memberKinds: MemberKind[]
   }
 }
 
 export interface Plan {
   id: number
   name: string
+  profileId: number
+  profileName: string
   trafficBytes: number
   durationDays: number
   deviceLimit: number
@@ -202,7 +227,7 @@ export interface Plan {
   enabled: boolean
   sortOrder: number
   remark: string
-  nodeIds: number[]
+  usableInbounds: number
   userCount: number
 }
 
@@ -223,7 +248,7 @@ export interface User {
   remark: string
   lastSubAt: number
   lastSubUa: string
-  nodeCount: number
+  inboundCount: number
   syncState: string
   syncErrors: string[]
   subUrl: string
@@ -232,9 +257,11 @@ export interface User {
 export interface Overview {
   counts: {
     panels: number
-    nodes: number
-    enabledNodes: number
-    missingNodes: number
+    inbounds: number
+    enabledInbounds: number
+    missingInbounds: number
+    nodeGroups: number
+    profiles: number
     plans: number
     users: number
     activeUsers: number
@@ -249,7 +276,6 @@ export interface SubscriptionPreview {
   subUrl: string
   entries: {
     name: string
-    region: string
     protocol: string
     panelId: number
     clashSupported: boolean

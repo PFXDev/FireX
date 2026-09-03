@@ -1,6 +1,6 @@
 // Package provision keeps the remote 3x-ui panels converged on FireX's model:
-// it discovers inbounds as nodes, pushes each user's client to exactly the
-// panels their plan covers, and folds per-panel counters into a global total.
+// it discovers inbounds, pushes each user's client to exactly the panels their
+// profile reaches, and folds per-panel counters into a global total.
 package provision
 
 import (
@@ -20,6 +20,7 @@ import (
 
 	"github.com/PFXDev/FireX/internal/model"
 	"github.com/PFXDev/FireX/internal/panel"
+	"github.com/PFXDev/FireX/internal/routing"
 	"github.com/PFXDev/FireX/internal/store"
 )
 
@@ -88,9 +89,9 @@ func EmailFor(u *model.User) string { return u.Username + EmailSuffix }
 
 // ---------------------------------------------------------------- discovery
 
-// DiscoverPanel refreshes the panel's health and its node rows. Inbounds that
-// vanished are flagged Missing rather than deleted so plan membership and the
-// admin's labels survive a panel outage.
+// DiscoverPanel refreshes the panel's health and its inbound rows. Inbounds
+// that vanished are flagged Missing rather than deleted so group membership and
+// the admin's labels survive a panel outage.
 func (m *Manager) DiscoverPanel(ctx context.Context, p *model.Panel) error {
 	defer m.busy()()
 
@@ -111,43 +112,42 @@ func (m *Manager) DiscoverPanel(ctx context.Context, p *model.Panel) error {
 	seen := make([]int, 0, len(inbounds))
 	for _, ib := range inbounds {
 		seen = append(seen, ib.ID)
-		var node model.Node
-		err := m.db.Where("panel_id = ? AND inbound_id = ?", p.ID, ib.ID).First(&node).Error
+		var row model.Inbound
+		err := m.db.Where("panel_id = ? AND remote_id = ?", p.ID, ib.ID).First(&row).Error
 		if store.IsNotFound(err) {
-			node = model.Node{
+			row = model.Inbound{
 				PanelID:   p.ID,
-				InboundID: ib.ID,
+				RemoteID:  ib.ID,
 				Name:      ib.Remark,
 				SortOrder: 100,
 				UDP:       true,
 				// A newly discovered inbound stays out of every subscription
-				// until an admin reviews and enables it.
-				Enabled:    false,
-				Multiplier: 1,
-				CreatedAt:  now,
+				// until an admin reviews it and puts it in a node group.
+				Enabled:   false,
+				CreatedAt: now,
 			}
 		} else if err != nil {
-			return fmt.Errorf("load node: %w", err)
+			return fmt.Errorf("load inbound: %w", err)
 		}
-		node.InboundTag = ib.Tag
-		node.Protocol = ib.Protocol
-		node.Port = ib.Port
-		node.RemoteRemark = ib.Remark
-		node.RemoteEnabled = ib.Enable
-		node.Missing = false
-		node.LastSeenAt = now
-		node.UpdatedAt = now
-		if err := m.db.Save(&node).Error; err != nil {
-			return fmt.Errorf("save node: %w", err)
+		row.InboundTag = ib.Tag
+		row.Protocol = ib.Protocol
+		row.Port = ib.Port
+		row.RemoteRemark = ib.Remark
+		row.RemoteEnabled = ib.Enable
+		row.Missing = false
+		row.LastSeenAt = now
+		row.UpdatedAt = now
+		if err := m.db.Save(&row).Error; err != nil {
+			return fmt.Errorf("save inbound: %w", err)
 		}
 	}
 
-	q := m.db.Model(&model.Node{}).Where("panel_id = ?", p.ID)
+	q := m.db.Model(&model.Inbound{}).Where("panel_id = ?", p.ID)
 	if len(seen) > 0 {
-		q = q.Where("inbound_id NOT IN ?", seen)
+		q = q.Where("remote_id NOT IN ?", seen)
 	}
 	if err := q.Updates(map[string]any{"missing": true, "updated_at": now}).Error; err != nil {
-		return fmt.Errorf("flag missing nodes: %w", err)
+		return fmt.Errorf("flag missing inbounds: %w", err)
 	}
 
 	p.Status = model.PanelStatusOnline
@@ -200,11 +200,11 @@ func (d desiredClient) hash() string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// DesiredFor groups the nodes a user may use by panel, and builds the client
+// DesiredFor groups the inbounds a user may use by panel, and builds the client
 // record each panel should hold. Panels absent from the map must not hold a
 // client for this user at all.
 func (m *Manager) DesiredFor(u *model.User) (map[uint]desiredClient, error) {
-	nodes, err := m.NodesForUser(u)
+	inbounds, err := m.InboundsForUser(u)
 	if err != nil {
 		return nil, err
 	}
@@ -214,8 +214,8 @@ func (m *Manager) DesiredFor(u *model.User) (map[uint]desiredClient, error) {
 	}
 
 	byPanel := map[uint][]int{}
-	for _, n := range nodes {
-		byPanel[n.PanelID] = append(byPanel[n.PanelID], n.InboundID)
+	for _, n := range inbounds {
+		byPanel[n.PanelID] = append(byPanel[n.PanelID], n.RemoteID)
 	}
 
 	limitIP := 0
@@ -248,22 +248,16 @@ func (m *Manager) DesiredFor(u *model.User) (map[uint]desiredClient, error) {
 	return out, nil
 }
 
-// NodesForUser is the user's plan membership filtered down to nodes that can
-// actually carry traffic right now, in display order.
-func (m *Manager) NodesForUser(u *model.User) ([]model.Node, error) {
-	if u.PlanID == 0 {
-		return nil, nil
+// InboundsForUser is everything the user's profile grants, filtered down to the
+// inbounds that can actually carry traffic right now, in display order. The
+// profile's node-group whitelist is the only thing consulted — rules and
+// egresses never widen or narrow it.
+func (m *Manager) InboundsForUser(u *model.User) ([]model.Inbound, error) {
+	plan, err := m.planFor(u)
+	if err != nil || plan == nil {
+		return nil, err
 	}
-	var nodes []model.Node
-	err := m.db.
-		Joins("JOIN plan_nodes ON plan_nodes.node_id = nodes.id").
-		Joins("JOIN panels ON panels.id = nodes.panel_id").
-		Where("plan_nodes.plan_id = ?", u.PlanID).
-		Where("nodes.enabled = ? AND nodes.missing = ?", true, false).
-		Where("panels.enabled = ?", true).
-		Order("nodes.sort_order ASC, nodes.id ASC").
-		Find(&nodes).Error
-	return nodes, err
+	return routing.InboundsForProfile(m.db, plan.ProfileID)
 }
 
 func (m *Manager) planFor(u *model.User) (*model.Plan, error) {
@@ -414,7 +408,7 @@ func (m *Manager) ReconcileAll(ctx context.Context) error {
 	return firstErr
 }
 
-// ReconcileUsersOfPlan converges everyone on a plan whose node set changed.
+// ReconcileUsersOfPlan converges everyone on a plan whose inbound set changed.
 func (m *Manager) ReconcileUsersOfPlan(ctx context.Context, planID uint) error {
 	defer m.busy()()
 
@@ -425,6 +419,23 @@ func (m *Manager) ReconcileUsersOfPlan(ctx context.Context, planID uint) error {
 	var firstErr error
 	for i := range users {
 		if err := m.ReconcileUser(ctx, &users[i]); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// ReconcileUsersOfPlans converges every user on any of these plans. A node group
+// edit can touch several profiles at once, and each of those several plans.
+func (m *Manager) ReconcileUsersOfPlans(ctx context.Context, planIDs []uint) error {
+	seen := map[uint]bool{}
+	var firstErr error
+	for _, planID := range planIDs {
+		if seen[planID] {
+			continue
+		}
+		seen[planID] = true
+		if err := m.ReconcileUsersOfPlan(ctx, planID); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

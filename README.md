@@ -3,9 +3,9 @@
 Management interface for Xray (3X-UI).
 
 FireX is a control plane over a fleet of independent 3x-ui panels. You define
-users and plans once; FireX pushes the matching client to every panel a user's
-plan covers, aggregates their traffic across panels, and serves each user a
-single subscription URL that renders as a mihomo (Clash-compatible) profile by
+users, plans and routing once; FireX pushes the matching client to every panel a
+user's plan reaches, aggregates their traffic across panels, and serves each user
+a single subscription URL that renders as a mihomo (Clash-compatible) profile by
 default, with a base64 share-link list available for legacy clients.
 
 It is built for a single operator: there is no self-service signup, no billing,
@@ -24,15 +24,33 @@ and no user-facing portal — just an admin UI and a subscription endpoint.
 - **Panel** — one remote 3x-ui install, reached over its REST API with an
   admin-scoped API token. Panels stay ordinary independent installs; FireX
   never needs them clustered.
-- **Node** — one inbound on one panel, discovered automatically and shown to
-  clients as a single proxy. FireX owns the display name, emoji, region and
-  tags; rediscovery never overwrites them.
-- **Node group** — hand-picked nodes from any number of panels presented as one
-  proxy-group, normally one region on one line (`🇭🇰 香港 IEPL`). Membership is
-  explicit, and one node may sit in several groups.
-- **Plan** — a set of nodes plus default quota, duration and device limit.
-- **User** — one identity with one UUID reused across every node, one
+- **Inbound** — one inbound on one panel, discovered automatically and shown to
+  clients as a single proxy. FireX owns the display name and emoji; rediscovery
+  never overwrites them.
+- **Node group** (节点组) — hand-picked inbounds from any number of panels
+  presented as one proxy-group, normally one region on one line
+  (`🇭🇰 香港 IEPL`). It carries key/value tags (地区, 线路, 落地) for filtering,
+  and one inbound may sit in several groups. This is the finest unit anything
+  else addresses.
+- **Policy** (分流策略) — a reusable rule list plus the identity it takes in the
+  client's group list (`🤖 AI 服务`). Policies are global and globally ordered:
+  every user sees the same rules in the same order.
+- **Profile** (分流方案) — one tier's routing: the node groups its users may
+  reach, plus the column of egress overrides that differ from the defaults.
+- **Egress** (出口) — one cell of the matrix: which node groups policy P uses
+  for profile F, and how it picks between them.
+- **Plan** — quota, duration, device limit, and the profile it binds.
+- **User** — one identity with one UUID reused across every inbound, one
   subscription token, and traffic totalled across all panels.
+
+```
+user ─ plan ─ profile ─┬─ node group whitelist ─ inbound ─ panel   ← what is pushed
+                       └─ egress (per policy) ──────────────────   ← how traffic splits
+```
+
+**Only the profile's whitelist decides which inbounds a user is provisioned
+onto.** Editing rules or egresses changes what a client renders and never writes
+to a panel.
 
 Provisioning state is tracked per (user, panel) because 3x-ui keys a client and
 its traffic counters by a panel-unique email. FireX writes clients as
@@ -61,15 +79,18 @@ that file has no `adminPassword` yet, generates one and prints it once. Open
 
 1. **Panels** — add each 3x-ui with its base URL and API token. FireX pulls its
    inbounds immediately.
-2. **Nodes** — newly discovered nodes are disabled on purpose. Give them a name,
-   emoji and region, then enable the ones you want to sell.
-3. **Groups** — bundle those nodes into the proxy-groups clients will see, one
-   per region and line. Optional: with no groups, nodes are grouped by region.
-4. **Plans** — create a plan and tick the nodes it includes.
-5. **Users** — create a user on that plan. FireX pushes the client to every
+2. **Inbounds** — newly discovered inbounds are disabled on purpose. Give them a
+   name and emoji, then enable the ones you want to sell.
+3. **Node groups** — bundle those inbounds into the proxy-groups clients will
+   see, one per region and line, and tag them. Nothing reaches a user until it
+   is in a group.
+4. **Routing** — the matrix. Rows are policies, columns are profiles. Create a
+   profile per tier and tick the node groups it may use; the default column
+   usually says "every node group", which each profile narrows to its own
+   whitelist automatically.
+5. **Plans** — create a plan, set quota and duration, bind a profile.
+6. **Users** — create a user on that plan. FireX pushes the client to every
    panel involved and hands you the subscription URL.
-6. **Routing** — compose the policy groups and rules that decide which group a
-   given kind of traffic uses.
 
 ## Configuration
 
@@ -215,79 +236,81 @@ Share links come from each panel's own link generator, so Reality keys, host
 overrides and external addresses stay correct. FireX only rewrites the display
 name and converts them into mihomo proxy entries.
 
-## Grouping and routing
+## Routing
 
 A mihomo profile is two things: a base config (DNS, sniffer, ports) and a policy
-layout (`proxy-groups` plus `rules`). FireX always takes the base from the YAML
-template, and offers two ways to own the policy layout. Which one applies is the
-**mode** on the Routing page.
+layout (`proxy-groups` plus `rules`). The YAML template owns the base and only
+the base — the policy layout always comes from the routing matrix, compiled per
+user.
 
-### Visual mode (default)
+### The matrix
 
-Groups and rules are edited as data, not YAML.
-
-- **Nodes → Groups** creates a node group: a name, an emoji, the region and line
-  it stands for, its proxy-group type (`select`, `url-test`, `fallback`,
-  `load-balance`) with its own probe URL, interval and tolerance, and the nodes
-  it contains. Membership is ticked by hand across every panel, so a group is a
-  deliberate product decision rather than a side effect of how someone typed a
-  region.
-- **Routing** composes *policy groups* (`🚀 节点选择`, `🤖 AI 服务`, …) out of
-  node groups, other policy groups, `DIRECT`/`REJECT`, and two dynamic entries:
-  every node group, or every node the user may use. The rule list underneath is
-  an ordered set of `matcher, value, target` rows, with `no-resolve` offered
-  only on the IP matchers that read it, and a final MATCH target.
-
-Everything references a group by its **bare name**, never by the name clients
-see, so changing an emoji cannot orphan a rule. Renaming or deleting a node
-group rewrites the stored routing in the same request, and the UI reports how
-many references moved.
-
-With **no node groups defined at all**, groups are derived from the nodes'
-region text instead — one url-test group per region, exactly as before. The
-Groups page offers to materialise that same split as real rows to start from.
-
-Saving validates before it stores: unknown references, a policy group with no
-members, a comma in a name (rules are comma-separated), a name that collides
-with a node group, an unknown matcher, and loops between policy groups are all
-rejected with the reason. The Routing page's preview renders the whole profile
-against the real node groups so an admin can read what a client would receive.
-
-### YAML mode
-
-The template keeps `proxy-groups` and `rules`, and FireX expands these tokens
-inside `proxy-groups`:
-
-| Token              | As a group entry                    | Inside a group's `proxies` list      |
-| ------------------ | ----------------------------------- | ------------------------------------ |
-| `<ALL>`            | —                                   | every node the user may use          |
-| `<REGION_GROUPS>`  | one url-test group per region       | those groups' names                  |
-| `<REGION:name>`    | —                                   | nodes whose region is exactly `name` |
-| `<TAG:name>`       | —                                   | nodes carrying that tag              |
-| `<FILTER:regexp>`  | —                                   | nodes whose name matches the regexp  |
-
-A region group is named after the region text you typed on the node, so use
-something display-ready like `🇭🇰 香港`. An optional top-level `firex:` block
-tunes the generated region groups (`region-group-type`, `test-url`, `interval`,
-`tolerance`) and is stripped from the output. Node groups are ignored in this
-mode.
-
-### Both modes
-
-`proxies` is always replaced with the user's own nodes. Groups that end up empty
-— a user whose plan holds no node in that group — are dropped, and any rule
-pointing at a dropped group is repointed, because mihomo refuses to load a
-config with an empty `proxy-group`. Saving a template renders it against a probe
-node first, so a broken template is rejected in the UI instead of at the client.
+Rows are **policies**, columns are **profiles**, and each cell is an **egress**.
 
 ```
-GET  /api/node-groups            # groups with their member node ids
-POST /api/node-groups/generate   # materialise the region split as groups
-GET  /api/settings/routing       # mode, model, built-in default, editor options
-PUT  /api/settings/routing       # validate and store
-POST /api/settings/routing/reset # back to the built-in default
-POST /api/settings/routing/preview
+                 default        VIP           VVIP
+🛑 广告拦截       REJECT         —             —
+🤖 AI 服务        all groups     CN2GIA        —
+📺 国外媒体       all groups     —             IEPL only
 ```
+
+A policy owns its rule list, and that list is the same for everybody: `AI 服务`
+matches `GEOSITE,openai` whichever tier you are on. What differs per tier is the
+egress — which node groups the traffic actually leaves through.
+
+Row order is both the rule precedence and the order the groups appear in a
+client, so ad blocking leads and the broad CN rules sit at the end.
+
+A profile column stores only what differs from the default; a cell is one of
+three states — follow the default, override, or hidden (the policy is not
+emitted at all for that tier, and its traffic falls through). The
+`all-node-groups` member expands to **the profile's own whitelist**, which is why
+one default column serves every tier and most cells stay empty.
+
+### Invariants
+
+Everything references a node group or policy by its **bare name**, never by the
+name clients see, so changing an emoji cannot orphan a reference. Renaming a
+node group rewrites every egress member in the same request; deleting one drops
+those members and un-whitelists it from every profile.
+
+Saving the matrix runs in one transaction and validates before it commits:
+unknown references, a comma in a name (rules are comma-separated), a name that
+collides with a node group, an unknown matcher, more or fewer than one final
+policy, and loops between policies are all rejected with the reason and roll the
+whole save back.
+
+Groups that end up empty — a profile that grants no inbound in that group — are
+dropped at render time, and any rule pointing at a dropped or unknown group is
+repointed, because mihomo refuses to load a config with an empty `proxy-group`
+or a missing target. An expired user still receives something loadable.
+
+```
+GET  /api/inbounds               # inbounds with their panel and group count
+GET  /api/node-groups            # groups with tags and member inbound ids
+GET  /api/profiles               # profiles with their node-group whitelist
+GET  /api/routing                # the whole matrix plus editor options
+PUT  /api/routing                # validate and store the whole matrix
+GET  /api/routing/preview?profileId=
+```
+
+### Migrating from the pre-matrix schema
+
+A database from before this model is migrated on first start, after a
+`VACUUM INTO` snapshot is written next to it as `firex.db.bak-<timestamp>`;
+FireX refuses to start rather than migrate without one. `nodes` becomes
+`inbounds`, the group's region/line columns become tags, inbounds in no group
+are grouped by their old region text, and the stored routing blob is split into
+policies and their default egresses.
+
+Each plan gets a profile granting **exactly** the inbounds it granted before: a
+node group is whitelisted only when every one of its members was already in the
+plan, and whatever that leaves uncovered gets a group of its own. Nothing is
+ever widened — a cheap plan silently gaining a premium line would be worse than
+some migration clutter. Two things cannot be restored faithfully and are worth
+reviewing afterwards: rules that interleaved between policies keep their
+relative order but move as a block, and the generated leftover groups usually
+want merging by hand.
 
 ## Quota enforcement
 
@@ -307,7 +330,7 @@ remains the authority across panels.
 ```
 cmd/firex/            # main package: config, background loops, HTTP server
 internal/
-  clash/              # mihomo rendering: routing model, groups, template tokens
+  clash/              # mihomo rendering: template plus resolved groups and rules
   config/             # the JSON config file: template, completion, validation
   model/              # GORM models and migrations
   panel/              # 3x-ui REST client
@@ -315,8 +338,9 @@ internal/
   provision/          # discovery, reconciliation, traffic and quota enforcement
   server/             # admin API, subscription endpoint, UI mount
   sharelink/          # share-link parsing and rewriting
-  store/              # database open/migrate
-  subscription/       # per-user subscription assembly, node group resolution
+  routing/            # the matrix: profile whitelists, egress resolution, seed
+  store/              # database open, schema migration
+  subscription/       # per-user subscription assembly from the panels' links
   updater/            # self-update: release discovery, checksum, restart
   version/            # build identity stamped in by the release workflow
   web/                # go:embed of the built UI (dist/ is generated)

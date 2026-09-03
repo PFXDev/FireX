@@ -129,7 +129,7 @@ export function PanelsPage() {
   const hasDraftErrors = Object.keys(draftErrors).length > 0
   const dialogPending = pendingAction === 'test' || pendingAction === 'save'
   const onlineCount = useMemo(() => panels.filter((panel) => panel.status === 'online').length, [panels])
-  const enabledNodeCount = useMemo(() => panels.reduce((sum, panel) => sum + panel.enabledNodes, 0), [panels])
+  const enabledNodeCount = useMemo(() => panels.reduce((sum, panel) => sum + panel.enabledInbounds, 0), [panels])
 
   const openCreate = () => {
     setValidationAttempted(false)
@@ -163,7 +163,7 @@ export function PanelsPage() {
       } else {
         const result = await api.post<{ discoverError: string }>('/panels', draft)
         if (result.discoverError) toast.error(`已添加，但拉取节点失败：${result.discoverError}`)
-        else toast.success('已添加并同步节点')
+        else toast.success('已添加并同步入站')
       }
       setDraft(null)
       await refreshAfterMutation()
@@ -195,8 +195,8 @@ export function PanelsPage() {
   const discover = async (panel: Panel) => {
     setDiscovering((current) => new Set(current).add(panel.id))
     try {
-      const result = await api.post<{ nodes: number }>(`/panels/${panel.id}/discover`)
-      toast.success(`已同步 ${result.nodes} 个入站`)
+      const result = await api.post<{ inbounds: number }>(`/panels/${panel.id}/discover`)
+      toast.success(`已同步 ${result.inbounds} 个入站`)
       await refreshAfterMutation()
     } catch (err) {
       toast.error(errorMessage(err, '同步失败'))
@@ -286,7 +286,7 @@ export function PanelsPage() {
                   <ServerOffIcon />
                 </EmptyMedia>
                 <EmptyTitle>还没有面板</EmptyTitle>
-                <EmptyDescription>添加一台 3x-ui，FireX 会自动拉取它的入站作为节点。</EmptyDescription>
+                <EmptyDescription>添加一台 3x-ui，FireX 会自动拉取它的入站。</EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
                 <Button type="button" onClick={openCreate}>
@@ -302,7 +302,7 @@ export function PanelsPage() {
                   <TableHead>名称</TableHead>
                   <TableHead className="hidden lg:table-cell">地址</TableHead>
                   <TableHead>状态</TableHead>
-                  <TableHead className="hidden md:table-cell">节点</TableHead>
+                  <TableHead className="hidden md:table-cell">入站</TableHead>
                   <TableHead className="hidden xl:table-cell">Xray</TableHead>
                   <TableHead className="hidden lg:table-cell">最近连通</TableHead>
                   <TableHead>
@@ -343,7 +343,7 @@ export function PanelsPage() {
                         </div>
                       </TableCell>
                       <TableCell className="hidden tabular-nums md:table-cell">
-                        {panel.enabledNodes} / {panel.nodeCount}
+                        {panel.enabledInbounds} / {panel.inboundCount}
                       </TableCell>
                       <TableCell className="hidden text-muted-foreground xl:table-cell">{panel.xrayVersion || '—'}</TableCell>
                       <TableCell className="hidden text-muted-foreground lg:table-cell">{formatTime(panel.lastSeenAt)}</TableCell>
@@ -353,7 +353,7 @@ export function PanelsPage() {
                             type="button"
                             variant="outline"
                             size="sm"
-                            aria-label={`拉取 ${panel.name} 的节点`}
+                            aria-label={`拉取 ${panel.name} 的入站`}
                             disabled={discoveringPanel || pendingAction !== null}
                             onClick={() => void discover(panel)}
                           >
@@ -362,7 +362,7 @@ export function PanelsPage() {
                             ) : (
                               <RefreshCwIcon data-icon="inline-start" />
                             )}
-                            <span className="hidden 2xl:inline">{discoveringPanel ? '同步中…' : '拉取节点'}</span>
+                            <span className="hidden 2xl:inline">{discoveringPanel ? '同步中…' : '拉取入站'}</span>
                           </Button>
                           <Button
                             type="button"
@@ -529,7 +529,7 @@ export function PanelsPage() {
         open={pendingDelete !== null}
         onOpenChange={(open) => !open && setPendingDelete(null)}
         title={`删除面板「${pendingDelete?.name ?? ''}」？`}
-        description="FireX 会尽量先从该面板删除它创建的客户端，然后移除本地的节点、套餐关联和下发记录。"
+        description="FireX 会尽量先从该面板删除它创建的客户端，然后移除本地的入站、节点组成员关系和下发记录。"
         confirmLabel="删除"
         onConfirm={async () => {
           if (pendingDelete) await remove(pendingDelete)
@@ -547,7 +547,7 @@ function PanelsTableSkeleton() {
           <TableHead>名称</TableHead>
           <TableHead className="hidden lg:table-cell">地址</TableHead>
           <TableHead>状态</TableHead>
-          <TableHead className="hidden md:table-cell">节点</TableHead>
+          <TableHead className="hidden md:table-cell">入站</TableHead>
           <TableHead className="hidden xl:table-cell">Xray</TableHead>
           <TableHead className="hidden lg:table-cell">最近连通</TableHead>
           <TableHead><span className="sr-only">操作</span></TableHead>

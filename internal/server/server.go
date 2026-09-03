@@ -69,16 +69,26 @@ func (s *Server) routes() {
 	authed.POST("/panels/:id/discover", s.discoverPanel)
 	authed.POST("/panels/test", s.testPanel)
 
-	authed.GET("/nodes", s.listNodes)
-	authed.PUT("/nodes/:id", s.updateNode)
-	authed.POST("/nodes/bulk", s.bulkUpdateNodes)
-	authed.DELETE("/nodes/:id", s.deleteNode)
+	authed.GET("/inbounds", s.listInbounds)
+	authed.PUT("/inbounds/:id", s.updateInbound)
+	authed.POST("/inbounds/bulk", s.bulkUpdateInbounds)
+	authed.DELETE("/inbounds/:id", s.deleteInbound)
 
 	authed.GET("/node-groups", s.listNodeGroups)
 	authed.POST("/node-groups", s.createNodeGroup)
-	authed.POST("/node-groups/generate", s.generateNodeGroups)
 	authed.PUT("/node-groups/:id", s.updateNodeGroup)
 	authed.DELETE("/node-groups/:id", s.deleteNodeGroup)
+
+	authed.GET("/profiles", s.listProfiles)
+	authed.POST("/profiles", s.createProfile)
+	authed.PUT("/profiles/:id", s.updateProfile)
+	authed.DELETE("/profiles/:id", s.deleteProfile)
+
+	// The matrix is read and written whole: partial saves would let a rule
+	// point at a policy the same edit removed.
+	authed.GET("/routing", s.getRouting)
+	authed.PUT("/routing", s.setRouting)
+	authed.GET("/routing/preview", s.previewRouting)
 
 	authed.GET("/plans", s.listPlans)
 	authed.POST("/plans", s.createPlan)
@@ -95,11 +105,6 @@ func (s *Server) routes() {
 
 	authed.GET("/settings/clashTemplate", s.getClashTemplate)
 	authed.PUT("/settings/clashTemplate", s.setClashTemplate)
-
-	authed.GET("/settings/routing", s.getRouting)
-	authed.PUT("/settings/routing", s.setRouting)
-	authed.POST("/settings/routing/reset", s.resetRouting)
-	authed.POST("/settings/routing/preview", s.previewRouting)
 
 	// Self-update sits behind the admin session like everything else. The
 	// session lives in the database, so it survives the restart an update
@@ -166,5 +171,9 @@ func fail(c *gin.Context, status int, err error) {
 func failMsg(c *gin.Context, status int, msg string) {
 	c.AbortWithStatusJSON(status, gin.H{"error": msg})
 }
+
+// errBadRequest carries a message written for the admin's screen rather than a
+// log line, so handlers can hand it straight to fail().
+func errBadRequest(msg string) error { return errors.New(msg) }
 
 func nowMs() int64 { return provision.NowMs() }

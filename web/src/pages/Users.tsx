@@ -395,7 +395,7 @@ export function UsersPage() {
                           </div>
                         </TableCell>
                         <TableCell className="hidden md:table-cell">{formatExpiry(user.expiresAt)}</TableCell>
-                        <TableCell className="hidden lg:table-cell">{user.nodeCount}</TableCell>
+                        <TableCell className="hidden lg:table-cell">{user.inboundCount}</TableCell>
                         <TableCell><UserStatuses user={user} /></TableCell>
                         <TableCell className="hidden xl:table-cell">{formatTime(user.lastSubAt)}</TableCell>
                         <TableCell>
@@ -576,7 +576,7 @@ export function UsersPage() {
                     <Empty>
                       <EmptyHeader>
                         <EmptyTitle>没有可用节点</EmptyTitle>
-                        <EmptyDescription>检查该用户的套餐是否包含已启用节点。</EmptyDescription>
+                        <EmptyDescription>检查该用户套餐绑定的分流方案里有没有选中节点组。</EmptyDescription>
                       </EmptyHeader>
                     </Empty>
                   ) : (
@@ -584,7 +584,7 @@ export function UsersPage() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>名称</TableHead>
-                          <TableHead>地区</TableHead>
+                          <TableHead>面板</TableHead>
                           <TableHead>协议</TableHead>
                           <TableHead>Clash</TableHead>
                         </TableRow>
@@ -593,7 +593,7 @@ export function UsersPage() {
                         {preview.data.entries.map((entry) => (
                           <TableRow key={`${entry.panelId}-${entry.name}-${entry.link}`}>
                             <TableCell><strong>{entry.name}</strong></TableCell>
-                            <TableCell>{entry.region || '—'}</TableCell>
+                            <TableCell className="tabular-nums text-muted-foreground">#{entry.panelId}</TableCell>
                             <TableCell>{entry.protocol}</TableCell>
                             <TableCell>{entry.clashSupported ? <StatusBadge tone="good">支持</StatusBadge> : <StatusBadge tone="bad">不支持</StatusBadge>}</TableCell>
                           </TableRow>

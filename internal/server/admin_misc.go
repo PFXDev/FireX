@@ -37,18 +37,22 @@ func (s *Server) handleOverview(c *gin.Context) {
 		LastSeenAt int64  `json:"lastSeenAt"`
 	}
 	var counts struct {
-		Panels       int64 `json:"panels"`
-		Nodes        int64 `json:"nodes"`
-		EnabledNodes int64 `json:"enabledNodes"`
-		MissingNodes int64 `json:"missingNodes"`
-		Plans        int64 `json:"plans"`
-		Users        int64 `json:"users"`
-		ActiveUsers  int64 `json:"activeUsers"`
+		Panels          int64 `json:"panels"`
+		Inbounds        int64 `json:"inbounds"`
+		EnabledInbounds int64 `json:"enabledInbounds"`
+		MissingInbounds int64 `json:"missingInbounds"`
+		NodeGroups      int64 `json:"nodeGroups"`
+		Profiles        int64 `json:"profiles"`
+		Plans           int64 `json:"plans"`
+		Users           int64 `json:"users"`
+		ActiveUsers     int64 `json:"activeUsers"`
 	}
 	s.db.Model(&model.Panel{}).Count(&counts.Panels)
-	s.db.Model(&model.Node{}).Count(&counts.Nodes)
-	s.db.Model(&model.Node{}).Where("enabled = ? AND missing = ?", true, false).Count(&counts.EnabledNodes)
-	s.db.Model(&model.Node{}).Where("missing = ?", true).Count(&counts.MissingNodes)
+	s.db.Model(&model.Inbound{}).Count(&counts.Inbounds)
+	s.db.Model(&model.Inbound{}).Where("enabled = ? AND missing = ?", true, false).Count(&counts.EnabledInbounds)
+	s.db.Model(&model.Inbound{}).Where("missing = ?", true).Count(&counts.MissingInbounds)
+	s.db.Model(&model.NodeGroup{}).Count(&counts.NodeGroups)
+	s.db.Model(&model.Profile{}).Count(&counts.Profiles)
 	s.db.Model(&model.Plan{}).Count(&counts.Plans)
 	s.db.Model(&model.User{}).Count(&counts.Users)
 
@@ -119,10 +123,14 @@ func (s *Server) setClashTemplate(c *gin.Context) {
 	}
 	template := strings.TrimSpace(req.Template)
 	if template != "" {
-		// Render against a stand-in node so a broken template is rejected here
-		// rather than when a client next fetches its subscription.
-		probe := clash.Node{Name: "probe", Region: "probe-region", Entry: clash.NewOrdered().Set("name", "probe")}
-		if _, err := clash.Render(template, clash.Input{Nodes: []clash.Node{probe}}); err != nil {
+		// Render against a stand-in so a broken template is rejected here rather
+		// than when a client next fetches its subscription.
+		probe := clash.Input{
+			Proxies: []clash.Proxy{{Name: "probe", Entry: clash.NewOrdered().Set("name", "probe")}},
+			Groups:  []clash.Group{{Name: "probe-group", Type: "select", Members: []string{"probe"}}},
+			Rules:   []string{"MATCH,probe-group"},
+		}
+		if _, err := clash.Render(template, probe); err != nil {
 			fail(c, http.StatusBadRequest, err)
 			return
 		}

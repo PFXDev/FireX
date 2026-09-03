@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { LayersIcon, PlusIcon, RefreshCwIcon, TicketIcon, TriangleAlertIcon } from 'lucide-react'
+import { PlusIcon, RefreshCwIcon, TicketIcon, TriangleAlertIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api } from '@/api'
-import type { Node, Plan } from '@/api'
+import type { Plan, Profile } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
@@ -19,7 +19,6 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -29,17 +28,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-  FieldLegend,
-  FieldSet,
-} from '@/components/ui/field'
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
@@ -56,7 +47,7 @@ type Draft = {
   enabled: boolean
   sortOrder: number
   remark: string
-  nodeIds: number[]
+  profileId: number
 }
 
 const emptyDraft: Draft = {
@@ -68,12 +59,12 @@ const emptyDraft: Draft = {
   enabled: true,
   sortOrder: 100,
   remark: '',
-  nodeIds: [],
+  profileId: 0,
 }
 
 export function PlansPage() {
   const [plans, setPlans] = useState<Plan[]>([])
-  const [nodes, setNodes] = useState<Node[]>([])
+  const [profiles, setProfiles] = useState<Profile[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -84,9 +75,12 @@ export function PlansPage() {
 
   const load = useCallback(async () => {
     try {
-      const [nextPlans, nextNodes] = await Promise.all([api.get<Plan[]>('/plans'), api.get<Node[]>('/nodes')])
+      const [nextPlans, nextProfiles] = await Promise.all([
+        api.get<Plan[]>('/plans'),
+        api.get<Profile[]>('/profiles'),
+      ])
       setPlans(nextPlans)
-      setNodes(nextNodes)
+      setProfiles(nextProfiles)
       setLoadError(null)
       return true
     } catch (err) {
@@ -109,17 +103,6 @@ export function PlansPage() {
     if (!(await load())) toast.error('操作已完成，但列表刷新失败，请手动重试')
   }
 
-  const nodesByRegion = useMemo(() => {
-    const groups = new Map<string, Node[]>()
-    nodes
-      .filter((node) => !node.missing)
-      .forEach((node) => {
-        const key = node.region || '未分组'
-        groups.set(key, [...(groups.get(key) ?? []), node])
-      })
-    return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-  }, [nodes])
-
   const openCreate = () => {
     setShowErrors(false)
     setDraft({ ...emptyDraft })
@@ -137,7 +120,7 @@ export function PlansPage() {
       enabled: plan.enabled,
       sortOrder: plan.sortOrder,
       remark: plan.remark,
-      nodeIds: plan.nodeIds,
+      profileId: plan.profileId,
     })
   }
 
@@ -157,7 +140,7 @@ export function PlansPage() {
       enabled: draft.enabled,
       sortOrder: draft.sortOrder,
       remark: draft.remark,
-      nodeIds: draft.nodeIds,
+      profileId: draft.profileId,
     }
 
     try {
@@ -189,26 +172,13 @@ export function PlansPage() {
     }
   }
 
-  const toggleNode = (id: number) => {
-    if (!draft) return
-    const hasNode = draft.nodeIds.includes(id)
-    setDraft({
-      ...draft,
-      nodeIds: hasNode ? draft.nodeIds.filter((nodeId) => nodeId !== id) : [...draft.nodeIds, id],
-    })
-  }
-
-  const toggleRegion = (group: Node[]) => {
-    if (!draft) return
-    const ids = group.map((node) => node.id)
-    const allSelected = ids.every((id) => draft.nodeIds.includes(id))
-    setDraft({
-      ...draft,
-      nodeIds: allSelected
-        ? draft.nodeIds.filter((id) => !ids.includes(id))
-        : [...new Set([...draft.nodeIds, ...ids])],
-    })
-  }
+  const profileItems = useMemo(
+    () => [
+      { value: '0', label: '不绑定（用户拿不到任何节点）' },
+      ...profiles.map((profile) => ({ value: String(profile.id), label: profile.name })),
+    ],
+    [profiles],
+  )
 
   const enabledPlans = plans.filter((plan) => plan.enabled).length
   const assignedUsers = plans.reduce((total, plan) => total + plan.userCount, 0)
@@ -262,7 +232,7 @@ export function PlansPage() {
                   <TicketIcon />
                 </EmptyMedia>
                 <EmptyTitle>还没有套餐</EmptyTitle>
-                <EmptyDescription>创建第一个套餐，把可用节点分配给用户。</EmptyDescription>
+                <EmptyDescription>创建第一个套餐，给它绑一个分流方案，再把用户放进来。</EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
                 <Button onClick={openCreate}>
@@ -289,7 +259,7 @@ export function PlansPage() {
                     <TableHead>流量</TableHead>
                     <TableHead className="hidden md:table-cell">时长</TableHead>
                     <TableHead className="hidden lg:table-cell">设备数</TableHead>
-                    <TableHead className="hidden sm:table-cell">节点</TableHead>
+                    <TableHead className="hidden sm:table-cell">分流方案</TableHead>
                     <TableHead>用户</TableHead>
                     <TableHead>状态</TableHead>
                     <TableHead><span className="sr-only">操作</span></TableHead>
@@ -312,7 +282,16 @@ export function PlansPage() {
                       <TableCell className="hidden lg:table-cell">
                         {plan.deviceLimit > 0 ? plan.deviceLimit : '不限'}
                       </TableCell>
-                      <TableCell className="hidden sm:table-cell">{plan.nodeIds.length}</TableCell>
+                      <TableCell className="hidden sm:table-cell">
+                        {plan.profileId === 0 ? (
+                          <StatusBadge tone="warn">未绑定</StatusBadge>
+                        ) : (
+                          <span>
+                            {plan.profileName}
+                            <span className="ml-1 text-muted-foreground tabular-nums">({plan.usableInbounds})</span>
+                          </span>
+                        )}
+                      </TableCell>
                       <TableCell>{plan.userCount}</TableCell>
                       <TableCell>
                         {plan.enabled ? <StatusBadge tone="good">启用</StatusBadge> : <StatusBadge tone="idle">停用</StatusBadge>}
@@ -360,7 +339,7 @@ export function PlansPage() {
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{draft?.id ? '编辑套餐' : '新建套餐'}</DialogTitle>
-            <DialogDescription>套餐保存后会立即影响关联用户的节点与限制。</DialogDescription>
+            <DialogDescription>套餐只管配额与时长，用户能用哪些节点由绑定的分流方案决定。保存后会立即同步到面板。</DialogDescription>
           </DialogHeader>
           {draft && (
             <form className="flex min-h-0 flex-col gap-4" noValidate onSubmit={save}>
@@ -408,53 +387,34 @@ export function PlansPage() {
                   <FieldDescription>仅用于记录与辨识套餐，不参与限速。</FieldDescription>
                 </Field>
 
-                <FieldSet>
-                  <FieldLegend variant="label">包含节点（已选 {draft.nodeIds.length} 个）</FieldLegend>
-                  <FieldDescription>用户可见节点来自这里勾选且当前已启用的节点。</FieldDescription>
-                  <ScrollArea className="h-64 rounded-lg border">
-                    {nodesByRegion.length === 0 ? (
-                      <Empty>
-                        <EmptyHeader>
-                          <EmptyMedia variant="icon"><LayersIcon /></EmptyMedia>
-                          <EmptyTitle>还没有可用节点</EmptyTitle>
-                          <EmptyDescription>先连接面板并启用节点，再回到这里选择。</EmptyDescription>
-                        </EmptyHeader>
-                      </Empty>
-                    ) : (
-                      <FieldGroup className="gap-4 p-3">
-                        {nodesByRegion.map(([region, group]) => {
-                          const selectedCount = group.filter((node) => draft.nodeIds.includes(node.id)).length
-                          const allSelected = selectedCount === group.length
-                          const partiallySelected = selectedCount > 0 && !allSelected
-                          return (
-                            <FieldSet key={region}>
-                              <FieldLegend className="sr-only">{region} 地区节点</FieldLegend>
-                              <Field orientation="horizontal">
-                                <Checkbox id={`plan-region-${region}`} checked={allSelected} indeterminate={partiallySelected} onCheckedChange={() => toggleRegion(group)} />
-                                <FieldLabel htmlFor={`plan-region-${region}`}>
-                                  {region}
-                                  <Badge variant="outline">{selectedCount}/{group.length}</Badge>
-                                </FieldLabel>
-                              </Field>
-                              <FieldGroup className="gap-2 pl-6">
-                                {group.map((node) => (
-                                  <Field key={node.id} orientation="horizontal">
-                                    <Checkbox id={`plan-node-${node.id}`} checked={draft.nodeIds.includes(node.id)} onCheckedChange={() => toggleNode(node.id)} />
-                                    <FieldLabel htmlFor={`plan-node-${node.id}`}>
-                                      <span>{node.emoji && `${node.emoji} `}{node.name || node.remoteRemark || node.inboundTag}</span>
-                                      <span className="text-muted-foreground">{node.panelName} · {node.protocol}:{node.port}</span>
-                                      {!node.enabled && <StatusBadge tone="idle">未启用</StatusBadge>}
-                                    </FieldLabel>
-                                  </Field>
-                                ))}
-                              </FieldGroup>
-                            </FieldSet>
-                          )
-                        })}
-                      </FieldGroup>
-                    )}
-                  </ScrollArea>
-                </FieldSet>
+                <Field>
+                  <FieldLabel htmlFor="plan-profile">分流方案</FieldLabel>
+                  <Select
+                    items={profileItems}
+                    value={String(draft.profileId)}
+                    onValueChange={(value) => setDraft({ ...draft, profileId: Number(value) })}
+                  >
+                    <SelectTrigger id="plan-profile" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="0">不绑定（用户拿不到任何节点）</SelectItem>
+                        {profiles.map((profile) => (
+                          <SelectItem key={profile.id} value={String(profile.id)}>
+                            {profile.name}
+                            <span className="text-muted-foreground">{profile.usableInbounds} 个入站</span>
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription>
+                    {profiles.length === 0
+                      ? '还没有分流方案，先到「分流」页建一个。'
+                      : '方案的可用节点组决定这个套餐的用户能连上哪些入站。'}
+                  </FieldDescription>
+                </Field>
 
                 <Field orientation="horizontal">
                   <FieldLabel htmlFor="plan-enabled">启用套餐</FieldLabel>

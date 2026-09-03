@@ -14,11 +14,13 @@ import (
 	"github.com/PFXDev/FireX/internal/clash"
 	"github.com/PFXDev/FireX/internal/model"
 	"github.com/PFXDev/FireX/internal/provision"
+	"github.com/PFXDev/FireX/internal/routing"
 	"github.com/PFXDev/FireX/internal/sharelink"
 	"github.com/PFXDev/FireX/internal/store"
 )
 
-// SettingKeyClashTemplate holds the admin-editable mihomo template.
+// SettingKeyClashTemplate holds the admin-editable mihomo template. It carries
+// base config only — proxy-groups and rules always come from the routing matrix.
 const SettingKeyClashTemplate = "clash.template"
 
 // linkTTL bounds how stale a cached link set may be. Share links only change
@@ -52,13 +54,13 @@ func NewService(db *store.DB, mgr *provision.Manager) *Service {
 	return &Service{db: db, mgr: mgr, cache: map[cacheKey]cacheEntry{}}
 }
 
-// Entry is one client-visible proxy: the node it came from, the share link the
-// panel produced, and the mihomo rendering of it.
+// Entry is one client-visible proxy: the inbound it came from, the share link
+// the panel produced, and the mihomo rendering of it.
 type Entry struct {
-	Node  model.Node
-	Name  string
-	Link  string
-	Clash *clash.Ordered
+	Inbound model.Inbound
+	Name    string
+	Link    string
+	Clash   *clash.Ordered
 }
 
 type Result struct {
@@ -70,20 +72,20 @@ type Result struct {
 }
 
 // Build fetches the user's share links from every panel they are provisioned
-// on and matches them back to FireX nodes.
+// on and matches them back to FireX inbounds.
 func (s *Service) Build(ctx context.Context, u *model.User) (*Result, error) {
-	nodes, err := s.mgr.NodesForUser(u)
+	inbounds, err := s.mgr.InboundsForUser(u)
 	if err != nil {
 		return nil, err
 	}
 	result := &Result{User: u}
-	if len(nodes) == 0 {
+	if len(inbounds) == 0 {
 		return result, nil
 	}
 
-	byPanel := map[uint][]model.Node{}
-	panelOrder := make([]uint, 0, len(nodes))
-	for _, n := range nodes {
+	byPanel := map[uint][]model.Inbound{}
+	panelOrder := make([]uint, 0, len(inbounds))
+	for _, n := range inbounds {
 		if _, seen := byPanel[n.PanelID]; !seen {
 			panelOrder = append(panelOrder, n.PanelID)
 		}
@@ -110,7 +112,7 @@ func (s *Service) Build(ctx context.Context, u *model.User) (*Result, error) {
 	}
 
 	sort.SliceStable(result.Entries, func(i, j int) bool {
-		a, b := result.Entries[i].Node, result.Entries[j].Node
+		a, b := result.Entries[i].Inbound, result.Entries[j].Inbound
 		if a.SortOrder != b.SortOrder {
 			return a.SortOrder < b.SortOrder
 		}
@@ -157,39 +159,39 @@ func (s *Service) InvalidateAll() {
 	s.mu.Unlock()
 }
 
-// matchPanel attributes each share link to the node it came from. The panel's
-// link list carries no inbound id, so links are matched on the port they
-// advertise — unique per inbound in practice — and anything unmatched is kept
-// under the remark the panel gave it rather than dropped.
-func matchPanel(nodes []model.Node, links []string, usedNames map[string]bool) ([]Entry, []string) {
+// matchPanel attributes each share link to the inbound it came from. The
+// panel's link list carries no inbound id, so links are matched on the port
+// they advertise — unique per inbound in practice — and anything unmatched is
+// kept under the remark the panel gave it rather than dropped.
+func matchPanel(inbounds []model.Inbound, links []string, usedNames map[string]bool) ([]Entry, []string) {
 	proxies, parseErrs := sharelink.ParseMany(links)
 	warnings := make([]string, 0, len(parseErrs))
 	for _, err := range parseErrs {
 		warnings = append(warnings, err.Error())
 	}
 
-	byPort := map[int][]model.Node{}
-	for _, n := range nodes {
+	byPort := map[int][]model.Inbound{}
+	for _, n := range inbounds {
 		byPort[n.Port] = append(byPort[n.Port], n)
 	}
 
 	entries := make([]Entry, 0, len(proxies))
 	for _, parsed := range proxies {
 		proxy := parsed.Proxy
-		node, matched := pickNode(byPort, proxy)
+		inbound, matched := pickInbound(byPort, proxy)
 		name := proxy.Name
 		if matched {
-			name = node.DisplayName()
-			proxy.UDP = node.UDP
+			name = inbound.DisplayName()
+			proxy.UDP = inbound.UDP
 		} else {
 			// Sort an unattributed link last instead of ahead of every
-			// deliberately ordered node.
-			node.SortOrder = unmatchedSortOrder
+			// deliberately ordered inbound.
+			inbound.SortOrder = unmatchedSortOrder
 		}
 		name = uniqueName(name, usedNames)
 		proxy.Name = name
 
-		entry := Entry{Node: node, Name: name, Link: sharelink.Rename(parsed.Raw, name)}
+		entry := Entry{Inbound: inbound, Name: name, Link: sharelink.Rename(parsed.Raw, name)}
 		if rendered, ok := clash.ProxyEntry(proxy); ok {
 			entry.Clash = rendered
 		} else {
@@ -200,7 +202,7 @@ func matchPanel(nodes []model.Node, links []string, usedNames map[string]bool) (
 	return entries, warnings
 }
 
-func pickNode(byPort map[int][]model.Node, proxy *sharelink.Proxy) (model.Node, bool) {
+func pickInbound(byPort map[int][]model.Inbound, proxy *sharelink.Proxy) (model.Inbound, bool) {
 	candidates := byPort[proxy.Port]
 	for _, n := range candidates {
 		if strings.EqualFold(n.Protocol, proxy.Type) {
@@ -210,7 +212,7 @@ func pickNode(byPort map[int][]model.Node, proxy *sharelink.Proxy) (model.Node, 
 	if len(candidates) > 0 {
 		return candidates[0], true
 	}
-	return model.Node{}, false
+	return model.Inbound{}, false
 }
 
 // uniqueName keeps proxy names distinct; mihomo silently drops duplicates.
@@ -226,26 +228,33 @@ func uniqueName(name string, used map[string]bool) string {
 	return candidate
 }
 
-// Clash renders the result as a mihomo profile using the stored template. In
-// visual mode the template only supplies the base config; node groups and the
-// routing model own proxy-groups and rules.
+// Clash renders the result as a mihomo profile. The stored template supplies
+// the base config only; proxies, proxy-groups and rules come from the routing
+// matrix compiled for this user's profile.
 func (s *Service) Clash(result *Result) (string, error) {
 	template := s.db.GetSetting(SettingKeyClashTemplate, clash.DefaultTemplate)
-	nodes := make([]clash.Node, 0, len(result.Entries))
+	proxies := make([]routing.Proxy, 0, len(result.Entries))
 	for _, e := range result.Entries {
-		nodes = append(nodes, clash.Node{
-			Name:   e.Name,
-			Region: e.Node.Region,
-			Tags:   splitTags(e.Node.Tags),
-			Entry:  e.Clash,
-		})
+		proxies = append(proxies, routing.Proxy{InboundID: e.Inbound.ID, Name: e.Name, Entry: e.Clash})
 	}
-	in := clash.Input{Nodes: nodes}
-	if Mode(s.db) == ModeVisual {
-		in.Groups = GroupsFor(s.db, result.Entries)
-		in.Routing, _ = Routing(s.db)
+	in, err := routing.Compile(s.db, s.profileFor(result.User), proxies)
+	if err != nil {
+		return "", err
 	}
 	return clash.Render(template, in)
+}
+
+// profileFor is the routing profile the user's plan binds, or zero when they
+// have no plan — in which case they get an empty but loadable config.
+func (s *Service) profileFor(u *model.User) uint {
+	if u == nil || u.PlanID == 0 {
+		return 0
+	}
+	var plan model.Plan
+	if err := s.db.First(&plan, u.PlanID).Error; err != nil {
+		return 0
+	}
+	return plan.ProfileID
 }
 
 // Base64 renders the result as the newline-joined, base64-encoded share link
@@ -270,18 +279,4 @@ func UserInfo(u *model.User) string {
 		parts = append(parts, fmt.Sprintf("expire=%d", u.ExpiresAt/1000))
 	}
 	return strings.Join(parts, "; ")
-}
-
-func splitTags(raw string) []string {
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }

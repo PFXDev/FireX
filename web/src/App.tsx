@@ -68,7 +68,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { errorMessage } from '@/lib/format'
 import { OverviewPage } from '@/pages/Overview'
 import { PanelsPage } from '@/pages/Panels'
-import { NodesPage } from '@/pages/Nodes'
+import { InboundsPage } from '@/pages/Inbounds'
 import { NodeGroupsPage } from '@/pages/NodeGroups'
 import { PlansPage } from '@/pages/Plans'
 import { RoutingPage } from '@/pages/Routing'
@@ -79,8 +79,8 @@ import { SystemPage } from '@/pages/System'
 const ROUTES = [
   { key: 'overview', label: '总览', group: '工作台', icon: GaugeIcon },
   { key: 'panels', label: '面板', group: '资源管理', icon: ServerIcon },
-  { key: 'nodes', label: '节点', group: '资源管理', icon: LayersIcon },
-  { key: 'node-groups', label: '分组', group: '资源管理', icon: BoxesIcon },
+  { key: 'inbounds', label: '入站', group: '资源管理', icon: LayersIcon },
+  { key: 'node-groups', label: '节点组', group: '资源管理', icon: BoxesIcon },
   { key: 'plans', label: '套餐', group: '资源管理', icon: TicketIcon },
   { key: 'users', label: '用户', group: '资源管理', icon: UsersIcon },
   { key: 'routing', label: '分流', group: '运维配置', icon: SplitIcon },
@@ -344,8 +344,8 @@ function Page({ route }: { route: RouteKey }) {
   switch (route) {
     case 'panels':
       return <PanelsPage />
-    case 'nodes':
-      return <NodesPage />
+    case 'inbounds':
+      return <InboundsPage />
     case 'node-groups':
       return <NodeGroupsPage />
     case 'plans':

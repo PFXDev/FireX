@@ -15,6 +15,7 @@ import (
 
 	"github.com/PFXDev/FireX/internal/config"
 	"github.com/PFXDev/FireX/internal/provision"
+	"github.com/PFXDev/FireX/internal/routing"
 	"github.com/PFXDev/FireX/internal/server"
 	"github.com/PFXDev/FireX/internal/store"
 	"github.com/PFXDev/FireX/internal/subscription"
@@ -40,6 +41,13 @@ func main() {
 		log.Fatalf("firex: %v", err)
 	}
 	defer db.Close()
+
+	// A database with no policies has no way to route anything, so a fresh
+	// install gets the stock matrix. Deleting a policy later does not bring it
+	// back on the next restart.
+	if err := routing.Seed(db); err != nil {
+		log.Fatalf("firex: seed routing: %v", err)
+	}
 
 	created, generated, err := server.EnsureAdmin(db, cfg.AdminUser, cfg.AdminPassword)
 	if err != nil {
@@ -99,7 +107,7 @@ func main() {
 	go runLoop(bgCtx, "discover", cfg.DiscoverInterval.Duration(), 0, func(ctx context.Context) error {
 		return mgr.DiscoverAll(ctx)
 	})
-	// Reconcile trails discovery so a freshly seen node can be provisioned in
+	// Reconcile trails discovery so a freshly seen inbound can be provisioned in
 	// the same cycle rather than the next one.
 	go runLoop(bgCtx, "reconcile", cfg.SyncInterval.Duration(), 15*time.Second, func(ctx context.Context) error {
 		return mgr.ReconcileAll(ctx)

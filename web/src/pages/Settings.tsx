@@ -200,27 +200,21 @@ export function SettingsPage() {
               <CardHeader>
                 <CardTitle>Clash 订阅模板</CardTitle>
                 <CardDescription>
-                  自定义订阅渲染结果；保存前会使用探针节点验证，避免无效配置进入客户端。
+                  订阅的基础配置：DNS、嗅探、端口这些。保存前会渲染一遍验证，避免无效配置进入客户端。
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-4">
                 <Alert>
                   <InfoIcon />
-                  <AlertTitle>模板占位符</AlertTitle>
+                  <AlertTitle>模板只管基础配置</AlertTitle>
                   <AlertDescription>
-                    <ul className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
-                      <li><code>&lt;ALL&gt;</code> 展开全部节点</li>
-                      <li><code>&lt;REGION_GROUPS&gt;</code> 按地区自动分组</li>
-                      <li><code>&lt;REGION:名称&gt;</code> 引用指定地区</li>
-                      <li><code>&lt;TAG:名称&gt;</code> 引用指定标签</li>
-                      <li><code>&lt;FILTER:正则&gt;</code> 按正则筛选节点</li>
-                    </ul>
-                    <p className="mt-2">
-                      渲染时会替换 <code>proxies</code>；空分组会被移除，关联规则也会同步改写。
+                    <p>
+                      <code>proxies</code>、<code>proxy-groups</code> 和 <code>rules</code> 永远由
+                      「分流」页的矩阵按用户的分流方案生成，写在模板里的同名内容会被覆盖。
                     </p>
                     <p className="mt-2">
-                      分流页处于可视化模式时，模板里的 <code>proxy-groups</code> 与 <code>rules</code>
-                      会被生成的内容覆盖，此处只保留 DNS、嗅探等基础配置；上述占位符仅在 YAML 模式下生效。
+                      成员为空的策略组会被自动移除，指向它的规则会改写到还存在的组上，所以配额用尽的用户拿到的
+                      仍然是一份能加载的配置。
                     </p>
                   </AlertDescription>
                 </Alert>

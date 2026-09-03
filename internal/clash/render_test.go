@@ -50,140 +50,188 @@ func groupNames(t *testing.T, cfg map[string]any) []string {
 	return names
 }
 
-func groupMembers(t *testing.T, cfg map[string]any, name string) []string {
+func group(t *testing.T, cfg map[string]any, name string) map[string]any {
 	t.Helper()
 	for _, item := range cfg["proxy-groups"].([]any) {
 		g, _ := item.(map[string]any)
-		if g["name"] != name {
-			continue
+		if g["name"] == name {
+			return g
 		}
-		var out []string
-		for _, m := range g["proxies"].([]any) {
-			out = append(out, m.(string))
-		}
-		return out
 	}
 	t.Fatalf("group %q not found in %v", name, groupNames(t, cfg))
 	return nil
 }
 
-func TestRenderExpandsRegionGroups(t *testing.T) {
-	in := Input{Nodes: []Node{
-		{Name: "🇭🇰 HK-01", Region: "🇭🇰 香港", Entry: mustEntry(t, "vless://u1@hk1.example:443?security=tls#hk1")},
-		{Name: "🇭🇰 HK-02", Region: "🇭🇰 香港", Entry: mustEntry(t, "vless://u1@hk2.example:443?security=tls#hk2")},
-		{Name: "🇯🇵 JP-01", Region: "🇯🇵 日本", Entry: mustEntry(t, "vless://u1@jp1.example:443?security=tls#jp1")},
-	}}
-	out, err := Render(DefaultTemplate, in)
+func groupMembers(t *testing.T, cfg map[string]any, name string) []string {
+	t.Helper()
+	var out []string
+	for _, m := range group(t, cfg, name)["proxies"].([]any) {
+		out = append(out, m.(string))
+	}
+	return out
+}
+
+func contains(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+func sampleInput(t *testing.T) Input {
+	t.Helper()
+	return Input{
+		Proxies: []Proxy{
+			{Name: "HK-01", Entry: mustEntry(t, "vless://u@hk1.example:443?security=tls#hk1")},
+			{Name: "HK-02", Entry: mustEntry(t, "vless://u@hk2.example:443?security=tls#hk2")},
+		},
+		Groups: []Group{
+			{Name: "🤖 AI 服务", Type: "select", Members: []string{"🇭🇰 香港", "DIRECT"}},
+			{Name: "🇭🇰 香港", Type: "url-test", Members: []string{"HK-01", "HK-02"}},
+		},
+		Rules: []string{"GEOSITE,openai,🤖 AI 服务", "MATCH,🤖 AI 服务"},
+	}
+}
+
+func TestRenderEmitsResolvedGroupsAndRules(t *testing.T) {
+	out, err := Render(DefaultTemplate, sampleInput(t))
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
 	cfg := decode(t, out)
 
-	names := groupNames(t, cfg)
-	if !contains(names, "🇭🇰 香港") || !contains(names, "🇯🇵 日本") {
-		t.Fatalf("region groups missing, got %v", names)
+	if got := groupNames(t, cfg); len(got) != 2 || got[0] != "🤖 AI 服务" {
+		t.Errorf("proxy-groups = %v, want policies before node groups", got)
 	}
-	if got := groupMembers(t, cfg, "🇭🇰 香港"); len(got) != 2 || got[0] != "🇭🇰 HK-01" {
-		t.Errorf("HK members = %v, want the two HK nodes", got)
+	if got := groupMembers(t, cfg, "🇭🇰 香港"); len(got) != 2 || got[0] != "HK-01" {
+		t.Errorf("node group members = %v", got)
 	}
-	if got := groupMembers(t, cfg, "♻️ 自动选择"); len(got) != 3 {
-		t.Errorf("auto-select members = %v, want all 3 nodes", got)
+	if len(cfg["proxies"].([]any)) != 2 {
+		t.Errorf("proxies = %d, want 2", len(cfg["proxies"].([]any)))
 	}
-	// The selector must offer the region groups, not just the raw nodes.
-	sel := groupMembers(t, cfg, "🚀 节点选择")
-	if !contains(sel, "🇭🇰 香港") || !contains(sel, "🇯🇵 日本") {
-		t.Errorf("selector members = %v, want region groups included", sel)
-	}
-	if len(cfg["proxies"].([]any)) != 3 {
-		t.Errorf("proxies = %d, want 3", len(cfg["proxies"].([]any)))
+	rules := cfg["rules"].([]any)
+	if len(rules) != 2 || rules[len(rules)-1] != "MATCH,🤖 AI 服务" {
+		t.Errorf("rules = %v, want the input lines verbatim", rules)
 	}
 }
 
-func TestRenderDedupesSelectorEntries(t *testing.T) {
-	// <REGION_GROUPS> then <ALL> would list an ungrouped node twice otherwise.
-	in := Input{Nodes: []Node{
-		{Name: "A", Region: "", Entry: mustEntry(t, "vless://u@a.example:443?security=tls#A")},
-	}}
-	out, err := Render(DefaultTemplate, in)
-	if err != nil {
-		t.Fatalf("Render() error = %v", err)
+func TestRenderProbeFieldsFollowGroupType(t *testing.T) {
+	in := Input{
+		Proxies: []Proxy{{Name: "A", Entry: mustEntry(t, "vless://u@a.example:443?security=tls#A")}},
+		Groups: []Group{
+			{Name: "manual", Type: "select", Members: []string{"A"}, TestURL: "https://ignored.example", Interval: 60},
+			{Name: "auto", Type: "url-test", Members: []string{"A"}},
+			{Name: "failover", Type: "fallback", Members: []string{"A"}},
+		},
+		Rules: []string{"MATCH,manual"},
 	}
-	members := groupMembers(t, decode(t, out), "🚀 节点选择")
-	seen := map[string]int{}
-	for _, m := range members {
-		seen[m]++
+	cfg := decode(t, mustRender(t, in))
+
+	// mihomo rejects `url` on a select group, so it must not leak through even
+	// when the operator left probe fields filled in.
+	if _, ok := group(t, cfg, "manual")["url"]; ok {
+		t.Error("select group carries a url")
 	}
-	for name, n := range seen {
-		if n > 1 {
-			t.Errorf("member %q appears %d times in %v", name, n, members)
-		}
+	auto := group(t, cfg, "auto")
+	if auto["url"] != DefaultTestURL || auto["interval"] != DefaultInterval || auto["tolerance"] != DefaultTolerance {
+		t.Errorf("url-test group = %v, want probe defaults filled in", auto)
+	}
+	if _, ok := group(t, cfg, "failover")["tolerance"]; ok {
+		t.Error("fallback group carries a tolerance, which only url-test reads")
 	}
 }
 
-func TestRenderWithNoNodesStaysValid(t *testing.T) {
-	// An expired user still fetches their subscription; mihomo rejects an empty
-	// proxy-group, so those groups must be dropped and the rules repointed.
-	out, err := Render(DefaultTemplate, Input{})
-	if err != nil {
-		t.Fatalf("Render() error = %v", err)
+func TestRenderPrunesEmptyGroupsAndRepointsRules(t *testing.T) {
+	// An expired user still fetches their subscription. mihomo rejects an empty
+	// proxy-group, so the node group goes, which empties the policy that only
+	// referenced it, and the rules have to land somewhere that still exists.
+	in := Input{
+		Proxies: []Proxy{{Name: "A", Entry: mustEntry(t, "vless://u@a.example:443?security=tls#A")}},
+		Groups: []Group{
+			{Name: "keep", Type: "select", Members: []string{"A"}},
+			{Name: "media", Type: "select", Members: []string{"empty"}},
+			{Name: "empty", Type: "url-test"},
+		},
+		Rules: []string{"GEOSITE,netflix,media", "MATCH,media"},
 	}
-	cfg := decode(t, out)
+	cfg := decode(t, mustRender(t, in))
 
-	if proxies, ok := cfg["proxies"].([]any); ok && len(proxies) != 0 {
-		t.Errorf("proxies = %v, want empty", proxies)
-	}
-	for _, name := range groupNames(t, cfg) {
-		if len(groupMembers(t, cfg, name)) == 0 {
-			t.Errorf("group %q rendered empty", name)
-		}
-	}
-	if contains(groupNames(t, cfg), "♻️ 自动选择") {
-		t.Error("auto-select group survived with no nodes to test")
+	if names := groupNames(t, cfg); len(names) != 1 || names[0] != "keep" {
+		t.Fatalf("proxy-groups = %v, want only the group that had members", names)
 	}
 	for _, rule := range cfg["rules"].([]any) {
 		parts := strings.Split(rule.(string), ",")
-		target := strings.TrimSpace(parts[targetIndex(parts)])
-		if target == "♻️ 自动选择" {
-			t.Errorf("rule %q still points at a dropped group", rule)
+		if target := strings.TrimSpace(parts[targetIndex(parts)]); target != "keep" {
+			t.Errorf("rule %q points at %q, want the surviving group", rule, target)
 		}
 	}
 }
 
-func TestRenderFilterAndTagTokens(t *testing.T) {
-	template := `proxy-groups:
-  - name: streaming
+func TestRenderWithNothingToServeStaysLoadable(t *testing.T) {
+	out, err := Render(DefaultTemplate, Input{Rules: []string{"MATCH,gone"}})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	cfg := decode(t, out)
+	if proxies, ok := cfg["proxies"].([]any); ok && len(proxies) != 0 {
+		t.Errorf("proxies = %v, want empty", proxies)
+	}
+	if groups, ok := cfg["proxy-groups"].([]any); ok && len(groups) != 0 {
+		t.Errorf("proxy-groups = %v, want empty", groups)
+	}
+	if rules := cfg["rules"].([]any); len(rules) != 1 || rules[0] != "MATCH,DIRECT" {
+		t.Errorf("rules = %v, want MATCH repointed to DIRECT", rules)
+	}
+}
+
+func TestRenderOverwritesWhateverTheTemplateCarries(t *testing.T) {
+	// Templates from the token era still hold groups, rules and a firex block.
+	// None of it may reach the client.
+	template := `mixed-port: 7890
+firex:
+  region-group-type: url-test
+proxy-groups:
+  - name: stale
     type: select
-    proxies:
-      - <TAG:media>
-  - name: hk-only
-    type: select
-    proxies:
-      - <FILTER:^HK>
+    proxies: ['<ALL>']
 rules:
-  - MATCH,streaming
+  - MATCH,stale
 `
-	in := Input{Nodes: []Node{
-		{Name: "HK-01", Tags: []string{"media", "premium"}, Entry: mustEntry(t, "vless://u@a.example:443?security=tls#a")},
-		{Name: "JP-01", Tags: []string{"basic"}, Entry: mustEntry(t, "vless://u@b.example:443?security=tls#b")},
-	}}
+	cfg := decode(t, mustRenderWith(t, template, sampleInput(t)))
+	if _, ok := cfg["firex"]; ok {
+		t.Error("firex block leaked into the rendered config")
+	}
+	if contains(groupNames(t, cfg), "stale") {
+		t.Errorf("template proxy-groups survived: %v", groupNames(t, cfg))
+	}
+	if cfg["mixed-port"] != 7890 {
+		t.Errorf("mixed-port = %v, want the template's base config kept", cfg["mixed-port"])
+	}
+}
+
+func TestRenderRejectsBrokenTemplate(t *testing.T) {
+	if _, err := Render("proxies: [\n", Input{}); err == nil {
+		t.Fatal("Render() error = nil, want a YAML parse error")
+	}
+	if _, err := Render("- not a mapping", Input{}); err == nil {
+		t.Fatal("Render() error = nil, want a root-must-be-a-mapping error")
+	}
+}
+
+func mustRender(t *testing.T, in Input) string {
+	t.Helper()
+	return mustRenderWith(t, DefaultTemplate, in)
+}
+
+func mustRenderWith(t *testing.T, template string, in Input) string {
+	t.Helper()
 	out, err := Render(template, in)
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
-	cfg := decode(t, out)
-	if got := groupMembers(t, cfg, "streaming"); len(got) != 1 || got[0] != "HK-01" {
-		t.Errorf("streaming = %v, want [HK-01]", got)
-	}
-	if got := groupMembers(t, cfg, "hk-only"); len(got) != 1 || got[0] != "HK-01" {
-		t.Errorf("hk-only = %v, want [HK-01]", got)
-	}
-}
-
-func TestRenderRejectsBadFilter(t *testing.T) {
-	template := "proxy-groups:\n  - name: g\n    type: select\n    proxies: ['<FILTER:[unclosed>']\n"
-	if _, err := Render(template, Input{}); err == nil {
-		t.Fatal("Render() error = nil, want a regexp compile error")
-	}
+	return out
 }
 
 func TestProxyEntryRealityFields(t *testing.T) {

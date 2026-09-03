@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BoxesIcon, PlusIcon, RefreshCwIcon, TriangleAlertIcon, WandSparklesIcon } from 'lucide-react'
+import { BoxesIcon, PlusIcon, RefreshCwIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api } from '@/api'
-import type { Node, NodeGroup } from '@/api'
+import type { Inbound, NodeGroup, NodeGroupTag } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
@@ -54,57 +54,60 @@ const GROUP_TYPES = [
   { value: 'load-balance', label: 'load-balance（负载均衡）' },
 ]
 
+/** Tag keys the editor offers first; an operator may type any other. */
+const SUGGESTED_TAG_KEYS = ['地区', '线路', '落地']
+
 type Draft = {
   id?: number
   name: string
   emoji: string
-  region: string
-  line: string
   type: string
   testUrl: string
   interval: number
   tolerance: number
+  multiplier: number
   sortOrder: number
   enabled: boolean
   remark: string
-  nodeIds: number[]
+  tags: NodeGroupTag[]
+  inboundIds: number[]
 }
 
 const emptyDraft: Draft = {
   name: '',
   emoji: '',
-  region: '',
-  line: '',
   type: 'url-test',
   testUrl: '',
   interval: 300,
   tolerance: 50,
+  multiplier: 1,
   sortOrder: 100,
   enabled: true,
   remark: '',
-  nodeIds: [],
+  tags: [],
+  inboundIds: [],
 }
 
 export function NodeGroupsPage() {
   const [groups, setGroups] = useState<NodeGroup[]>([])
-  const [nodes, setNodes] = useState<Node[]>([])
+  const [inbounds, setInbounds] = useState<Inbound[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [generating, setGenerating] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [showErrors, setShowErrors] = useState(false)
   const [saving, setSaving] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<NodeGroup | null>(null)
+  const [tagFilter, setTagFilter] = useState<{ key: string; value: string } | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const [nextGroups, nextNodes] = await Promise.all([
+      const [nextGroups, nextInbounds] = await Promise.all([
         api.get<NodeGroup[]>('/node-groups'),
-        api.get<Node[]>('/nodes'),
+        api.get<Inbound[]>('/inbounds'),
       ])
       setGroups(nextGroups)
-      setNodes(nextNodes)
+      setInbounds(nextInbounds)
       setLoadError(null)
       return true
     } catch (err) {
@@ -127,21 +130,43 @@ export function NodeGroupsPage() {
     if (!(await load())) toast.error('操作已完成，但列表刷新失败，请手动重试')
   }
 
-  // Members are picked per panel: an operator who creates dedicated FireX_*
-  // inbounds recognises them by which panel they live on, not by region text.
-  const nodesByPanel = useMemo(() => {
-    const byPanel = new Map<string, Node[]>()
-    nodes
-      .filter((node) => !node.missing)
-      .forEach((node) => {
-        const key = node.panelName || `面板 #${node.panelId}`
-        byPanel.set(key, [...(byPanel.get(key) ?? []), node])
+  // Members are picked per panel: an operator recognises an inbound by which
+  // machine it lives on, not by any text on the inbound itself.
+  const inboundsByPanel = useMemo(() => {
+    const byPanel = new Map<string, Inbound[]>()
+    inbounds
+      .filter((inbound) => !inbound.missing)
+      .forEach((inbound) => {
+        const key = inbound.panelName || `面板 #${inbound.panelId}`
+        byPanel.set(key, [...(byPanel.get(key) ?? []), inbound])
       })
     return [...byPanel.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-  }, [nodes])
+  }, [inbounds])
 
-  const nodeName = useCallback(
-    (node: Node) => `${node.emoji ? `${node.emoji} ` : ''}${node.name || node.remoteRemark || node.inboundTag}`,
+  /** Every key/value pair in use, so the filter bar can be built from the data. */
+  const tagIndex = useMemo(() => {
+    const byKey = new Map<string, Set<string>>()
+    groups.forEach((group) =>
+      group.tags.forEach((tag) => {
+        if (!byKey.has(tag.key)) byKey.set(tag.key, new Set())
+        byKey.get(tag.key)!.add(tag.value)
+      }),
+    )
+    return [...byKey.entries()]
+      .map(([key, values]) => [key, [...values].sort()] as const)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+  }, [groups])
+
+  const visibleGroups = useMemo(() => {
+    if (!tagFilter) return groups
+    return groups.filter((group) =>
+      group.tags.some((tag) => tag.key === tagFilter.key && tag.value === tagFilter.value),
+    )
+  }, [groups, tagFilter])
+
+  const inboundName = useCallback(
+    (inbound: Inbound) =>
+      `${inbound.emoji ? `${inbound.emoji} ` : ''}${inbound.name || inbound.remoteRemark || inbound.inboundTag}`,
     [],
   )
 
@@ -156,16 +181,16 @@ export function NodeGroupsPage() {
       id: group.id,
       name: group.name,
       emoji: group.emoji,
-      region: group.region,
-      line: group.line,
       type: group.type,
       testUrl: group.testUrl,
       interval: group.interval,
       tolerance: group.tolerance,
+      multiplier: group.multiplier,
       sortOrder: group.sortOrder,
       enabled: group.enabled,
       remark: group.remark,
-      nodeIds: group.nodeIds,
+      tags: group.tags.map((tag) => ({ ...tag })),
+      inboundIds: group.inboundIds,
     })
   }
 
@@ -177,28 +202,21 @@ export function NodeGroupsPage() {
 
     setSaving(true)
     const body = {
+      ...draft,
       name: draft.name.trim(),
       emoji: draft.emoji.trim(),
-      region: draft.region.trim(),
-      line: draft.line.trim(),
-      type: draft.type,
       testUrl: draft.testUrl.trim(),
-      interval: draft.interval,
-      tolerance: draft.tolerance,
-      sortOrder: draft.sortOrder,
-      enabled: draft.enabled,
-      remark: draft.remark,
-      nodeIds: draft.nodeIds,
+      tags: draft.tags.filter((tag) => tag.key.trim() && tag.value.trim()),
     }
 
     try {
       if (draft.id) {
-        const result = await api.put<{ rewrittenRules: number }>(`/node-groups/${draft.id}`, body)
-        if (result.rewrittenRules > 0) {
-          toast.success(`分组已保存，同步更新了 ${result.rewrittenRules} 处分流引用`)
-        } else {
-          toast.success('分组已保存')
-        }
+        const result = await api.put<{ rewrittenMembers: number }>(`/node-groups/${draft.id}`, body)
+        toast.success(
+          result.rewrittenMembers > 0
+            ? `分组已保存，同步更新了 ${result.rewrittenMembers} 处分流引用`
+            : '分组已保存',
+        )
       } else {
         await api.post('/node-groups', body)
         toast.success('分组已创建')
@@ -214,12 +232,12 @@ export function NodeGroupsPage() {
 
   const remove = async (group: NodeGroup) => {
     try {
-      const result = await api.del<{ droppedRules: number }>(`/node-groups/${group.id}`)
-      if (result.droppedRules > 0) {
-        toast.success(`分组已删除，同时移除了 ${result.droppedRules} 条引用它的分流规则`)
-      } else {
-        toast.success('分组已删除')
-      }
+      const result = await api.del<{ droppedMembers: number }>(`/node-groups/${group.id}`)
+      toast.success(
+        result.droppedMembers > 0
+          ? `分组已删除，同时移除了 ${result.droppedMembers} 处引用它的分流成员`
+          : '分组已删除',
+      )
       await revalidate()
     } catch (err) {
       toast.error(errorMessage(err, '删除失败'))
@@ -227,77 +245,69 @@ export function NodeGroupsPage() {
     }
   }
 
-  const generate = async () => {
-    setGenerating(true)
-    try {
-      const result = await api.post<{ created: number; regions: number }>('/node-groups/generate')
-      if (result.created === 0) {
-        toast.info(result.regions === 0 ? '没有可用的地区信息，请先给节点填写地区' : '所有地区都已经有同名分组了')
-      } else {
-        toast.success(`已按地区生成 ${result.created} 个分组`)
-      }
-      await revalidate()
-    } catch (err) {
-      toast.error(errorMessage(err, '生成失败'))
-    } finally {
-      setGenerating(false)
-    }
-  }
-
-  const toggleNode = (id: number) => {
+  const toggleInbound = (id: number) => {
     if (!draft) return
-    const has = draft.nodeIds.includes(id)
+    const has = draft.inboundIds.includes(id)
     setDraft({
       ...draft,
-      nodeIds: has ? draft.nodeIds.filter((nodeId) => nodeId !== id) : [...draft.nodeIds, id],
+      inboundIds: has ? draft.inboundIds.filter((inboundId) => inboundId !== id) : [...draft.inboundIds, id],
     })
   }
 
-  const togglePanel = (group: Node[]) => {
+  const togglePanel = (group: Inbound[]) => {
     if (!draft) return
-    const ids = group.map((node) => node.id)
-    const allSelected = ids.every((id) => draft.nodeIds.includes(id))
+    const ids = group.map((inbound) => inbound.id)
+    const allSelected = ids.every((id) => draft.inboundIds.includes(id))
     setDraft({
       ...draft,
-      nodeIds: allSelected
-        ? draft.nodeIds.filter((id) => !ids.includes(id))
-        : [...new Set([...draft.nodeIds, ...ids])],
+      inboundIds: allSelected
+        ? draft.inboundIds.filter((id) => !ids.includes(id))
+        : [...new Set([...draft.inboundIds, ...ids])],
     })
+  }
+
+  const patchTag = (index: number, patch: Partial<NodeGroupTag>) => {
+    if (!draft) return
+    setDraft({ ...draft, tags: draft.tags.map((tag, i) => (i === index ? { ...tag, ...patch } : tag)) })
   }
 
   const nameInvalid = Boolean(showErrors && draft && !draft.name.trim())
   const commaInvalid = Boolean(showErrors && draft && draft.name.includes(','))
   const probeGroup = draft?.type !== 'select'
   const enabledGroups = groups.filter((group) => group.enabled).length
+  const unreachable = groups.filter((group) => group.enabled && group.profileCount === 0).length
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="分组" description="把不同面板的入站聚合成客户端看到的策略组，通常按地区与线路划分。">
-        <Button variant="outline" disabled={generating || loading} onClick={() => void generate()}>
-          {generating ? <Spinner data-icon="inline-start" /> : <WandSparklesIcon data-icon="inline-start" />}
-          按地区生成
-        </Button>
+      <PageHeader title="节点组" description="把不同面板的入站聚合成客户端看到的一组线路，用标签按地区、线路管理。">
         <Button onClick={openCreate}>
           <PlusIcon data-icon="inline-start" />
-          新建分组
+          新建节点组
         </Button>
       </PageHeader>
+
+      {unreachable > 0 && (
+        <Alert>
+          <TriangleAlertIcon />
+          <AlertTitle>{unreachable} 个节点组没有被任何分流方案选中</AlertTitle>
+          <AlertDescription>方案的可用节点组决定用户能用到什么，没被选中的分组不会出现在任何订阅里。</AlertDescription>
+          <AlertAction>
+            <Button variant="outline" size="sm" onClick={() => (window.location.hash = '#/routing')}>
+              去分流
+            </Button>
+          </AlertAction>
+        </Alert>
+      )}
 
       <Card>
         <CardHeader>
           <CardTitle>分组列表</CardTitle>
           <CardDescription>
-            每个分组渲染成一个 mihomo 策略组；订阅只会包含用户套餐内的成员，成员为空的分组会被自动省略。
+            每个分组渲染成一个 mihomo 策略组；订阅只包含用户方案覆盖的成员，成员为空的分组会被自动省略。
           </CardDescription>
           <CardAction className="flex items-center gap-2">
             {!loading && <Badge variant="secondary">{enabledGroups} 个启用</Badge>}
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="刷新分组列表"
-              disabled={loading || refreshing}
-              onClick={refresh}
-            >
+            <Button variant="ghost" size="icon-sm" aria-label="刷新分组列表" disabled={loading || refreshing} onClick={refresh}>
               {refreshing ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
             </Button>
           </CardAction>
@@ -329,19 +339,15 @@ export function NodeGroupsPage() {
                 <EmptyMedia variant="icon">
                   <BoxesIcon />
                 </EmptyMedia>
-                <EmptyTitle>还没有分组</EmptyTitle>
+                <EmptyTitle>还没有节点组</EmptyTitle>
                 <EmptyDescription>
-                  在没有任何分组时，订阅会按节点的「地区」字段自动分组。建好分组后，这个兜底就不再生效。
+                  节点组是管理的最小单位：分流方案挑节点组，套餐绑分流方案，用户绑套餐。没有分组就没人能用到任何入站。
                 </EmptyDescription>
               </EmptyHeader>
-              <EmptyContent className="flex-row gap-2">
-                <Button variant="outline" disabled={generating} onClick={() => void generate()}>
-                  {generating ? <Spinner data-icon="inline-start" /> : <WandSparklesIcon data-icon="inline-start" />}
-                  按地区生成
-                </Button>
+              <EmptyContent>
                 <Button onClick={openCreate}>
                   <PlusIcon data-icon="inline-start" />
-                  新建分组
+                  新建节点组
                 </Button>
               </EmptyContent>
             </Empty>
@@ -356,14 +362,40 @@ export function NodeGroupsPage() {
                   </Alert>
                 </div>
               )}
+              {tagIndex.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 px-(--card-spacing)">
+                  <Button
+                    variant={tagFilter === null ? 'secondary' : 'ghost'}
+                    size="sm"
+                    onClick={() => setTagFilter(null)}
+                  >
+                    全部
+                  </Button>
+                  {tagIndex.map(([key, values]) =>
+                    values.map((value) => {
+                      const active = tagFilter?.key === key && tagFilter.value === value
+                      return (
+                        <Button
+                          key={`${key}:${value}`}
+                          variant={active ? 'secondary' : 'ghost'}
+                          size="sm"
+                          onClick={() => setTagFilter(active ? null : { key, value })}
+                        >
+                          {key}: {value}
+                        </Button>
+                      )
+                    }),
+                  )}
+                </div>
+              )}
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>分组</TableHead>
-                    <TableHead className="hidden md:table-cell">地区</TableHead>
-                    <TableHead className="hidden md:table-cell">线路</TableHead>
+                    <TableHead className="hidden md:table-cell">标签</TableHead>
                     <TableHead className="hidden lg:table-cell">类型</TableHead>
-                    <TableHead>节点</TableHead>
+                    <TableHead>入站</TableHead>
+                    <TableHead className="hidden lg:table-cell">方案</TableHead>
                     <TableHead>状态</TableHead>
                     <TableHead>
                       <span className="sr-only">操作</span>
@@ -371,7 +403,7 @@ export function NodeGroupsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {groups.map((group) => (
+                  {visibleGroups.map((group) => (
                     <TableRow key={group.id}>
                       <TableCell>
                         <div className="flex flex-col gap-1">
@@ -382,15 +414,33 @@ export function NodeGroupsPage() {
                           {group.remark && <span className="text-muted-foreground">{group.remark}</span>}
                         </div>
                       </TableCell>
-                      <TableCell className="hidden md:table-cell">{group.region || '—'}</TableCell>
-                      <TableCell className="hidden md:table-cell">{group.line || '—'}</TableCell>
+                      <TableCell className="hidden md:table-cell">
+                        {group.tags.length > 0 ? (
+                          <span className="flex flex-wrap gap-1">
+                            {group.tags.map((tag) => (
+                              <Badge key={tag.key} variant="secondary">
+                                {tag.key}: {tag.value}
+                              </Badge>
+                            ))}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell className="hidden lg:table-cell">
                         <Badge variant="outline">{group.type}</Badge>
                       </TableCell>
-                      <TableCell>
-                        {group.enabledNodes === group.nodeIds.length
-                          ? group.nodeIds.length
-                          : `${group.enabledNodes}/${group.nodeIds.length}`}
+                      <TableCell className="tabular-nums">
+                        {group.usableInbounds === group.inboundIds.length
+                          ? group.inboundIds.length
+                          : `${group.usableInbounds}/${group.inboundIds.length}`}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell">
+                        {group.profileCount > 0 ? (
+                          <span className="tabular-nums text-muted-foreground">{group.profileCount}</span>
+                        ) : (
+                          <StatusBadge tone="warn">未被选中</StatusBadge>
+                        )}
                       </TableCell>
                       <TableCell>
                         {group.enabled ? (
@@ -422,11 +472,9 @@ export function NodeGroupsPage() {
           )}
         </CardContent>
         <CardFooter className="flex-wrap justify-between gap-2">
+          <span className="text-muted-foreground">{loading ? '正在读取分组' : `共 ${groups.length} 个分组`}</span>
           <span className="text-muted-foreground">
-            {loading ? '正在读取分组' : `共 ${groups.length} 个分组`}
-          </span>
-          <span className="text-muted-foreground">
-            {loading ? '—' : `覆盖 ${new Set(groups.flatMap((group) => group.nodeIds)).size} 个节点`}
+            {loading ? '—' : `覆盖 ${new Set(groups.flatMap((group) => group.inboundIds)).size} 个入站`}
           </span>
         </CardFooter>
       </Card>
@@ -442,7 +490,7 @@ export function NodeGroupsPage() {
       >
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{draft?.id ? '编辑分组' : '新建分组'}</DialogTitle>
+            <DialogTitle>{draft?.id ? '编辑节点组' : '新建节点组'}</DialogTitle>
             <DialogDescription>分组名会直接作为客户端里的策略组名称显示。</DialogDescription>
           </DialogHeader>
           {draft && (
@@ -473,31 +521,59 @@ export function NodeGroupsPage() {
                   </Field>
                 </FieldGroup>
 
-                <FieldGroup className="grid gap-4 sm:grid-cols-2">
-                  <Field>
-                    <FieldLabel htmlFor="group-region">地区</FieldLabel>
-                    <Input
-                      id="group-region"
-                      placeholder="香港"
-                      value={draft.region}
-                      onChange={(event) => setDraft({ ...draft, region: event.target.value })}
-                    />
-                    <FieldDescription>仅用于列表筛选与排序，不参与渲染。</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="group-line">线路</FieldLabel>
-                    <Input
-                      id="group-line"
-                      placeholder="IEPL / 中转 / 直连"
-                      value={draft.line}
-                      onChange={(event) => setDraft({ ...draft, line: event.target.value })}
-                    />
-                  </Field>
-                </FieldGroup>
+                <FieldSet>
+                  <FieldLegend variant="label">标签</FieldLegend>
+                  <FieldDescription>只用于筛选和排序，不参与渲染。常用键：{SUGGESTED_TAG_KEYS.join('、')}。</FieldDescription>
+                  <FieldGroup className="gap-2">
+                    {draft.tags.map((tag, index) => (
+                      <div key={index} className="flex items-center gap-2">
+                        <Input
+                          aria-label={`标签 ${index + 1} 的键`}
+                          className="w-32"
+                          list="firex-tag-keys"
+                          placeholder="地区"
+                          value={tag.key}
+                          onChange={(event) => patchTag(index, { key: event.target.value })}
+                        />
+                        <Input
+                          aria-label={`标签 ${index + 1} 的值`}
+                          placeholder="香港"
+                          value={tag.value}
+                          onChange={(event) => patchTag(index, { value: event.target.value })}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`删除标签 ${index + 1}`}
+                          onClick={() => setDraft({ ...draft, tags: draft.tags.filter((_, i) => i !== index) })}
+                        >
+                          <XIcon />
+                        </Button>
+                      </div>
+                    ))}
+                    <div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setDraft({ ...draft, tags: [...draft.tags, { key: '', value: '' }] })}
+                      >
+                        <PlusIcon data-icon="inline-start" />
+                        添加标签
+                      </Button>
+                    </div>
+                  </FieldGroup>
+                  <datalist id="firex-tag-keys">
+                    {SUGGESTED_TAG_KEYS.map((key) => (
+                      <option key={key} value={key} />
+                    ))}
+                  </datalist>
+                </FieldSet>
 
-                <FieldGroup className="grid gap-4 sm:grid-cols-2">
+                <FieldGroup className="grid gap-4 sm:grid-cols-3">
                   <Field>
-                    <FieldLabel htmlFor="group-type">策略组类型</FieldLabel>
+                    <FieldLabel htmlFor="group-type">选择方式</FieldLabel>
                     <Select
                       items={GROUP_TYPES}
                       value={draft.type}
@@ -516,6 +592,18 @@ export function NodeGroupsPage() {
                         </SelectGroup>
                       </SelectContent>
                     </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="group-multiplier">倍率</FieldLabel>
+                    <Input
+                      id="group-multiplier"
+                      type="number"
+                      min={0}
+                      step="0.1"
+                      value={draft.multiplier}
+                      onChange={(event) => setDraft({ ...draft, multiplier: Number(event.target.value) })}
+                    />
+                    <FieldDescription>仅作展示记录，不参与计费。</FieldDescription>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="group-sort">排序</FieldLabel>
@@ -567,27 +655,27 @@ export function NodeGroupsPage() {
                 )}
 
                 <FieldSet>
-                  <FieldLegend variant="label">包含节点（已选 {draft.nodeIds.length} 个）</FieldLegend>
-                  <FieldDescription>一个节点可以同时属于多个分组。</FieldDescription>
+                  <FieldLegend variant="label">包含入站（已选 {draft.inboundIds.length} 个）</FieldLegend>
+                  <FieldDescription>一个入站可以同时属于多个分组。</FieldDescription>
                   <ScrollArea className="h-64 rounded-lg border">
-                    {nodesByPanel.length === 0 ? (
+                    {inboundsByPanel.length === 0 ? (
                       <Empty>
                         <EmptyHeader>
                           <EmptyMedia variant="icon">
                             <BoxesIcon />
                           </EmptyMedia>
-                          <EmptyTitle>还没有可用节点</EmptyTitle>
+                          <EmptyTitle>还没有可用入站</EmptyTitle>
                           <EmptyDescription>先连接面板并完成入站发现。</EmptyDescription>
                         </EmptyHeader>
                       </Empty>
                     ) : (
                       <FieldGroup className="gap-4 p-3">
-                        {nodesByPanel.map(([panel, group]) => {
-                          const selectedCount = group.filter((node) => draft.nodeIds.includes(node.id)).length
+                        {inboundsByPanel.map(([panel, group]) => {
+                          const selectedCount = group.filter((inbound) => draft.inboundIds.includes(inbound.id)).length
                           const allSelected = selectedCount === group.length
                           return (
                             <FieldSet key={panel}>
-                              <FieldLegend className="sr-only">{panel} 的节点</FieldLegend>
+                              <FieldLegend className="sr-only">{panel} 的入站</FieldLegend>
                               <Field orientation="horizontal">
                                 <Checkbox
                                   id={`group-panel-${panel}`}
@@ -603,19 +691,19 @@ export function NodeGroupsPage() {
                                 </FieldLabel>
                               </Field>
                               <FieldGroup className="gap-2 pl-6">
-                                {group.map((node) => (
-                                  <Field key={node.id} orientation="horizontal">
+                                {group.map((inbound) => (
+                                  <Field key={inbound.id} orientation="horizontal">
                                     <Checkbox
-                                      id={`group-node-${node.id}`}
-                                      checked={draft.nodeIds.includes(node.id)}
-                                      onCheckedChange={() => toggleNode(node.id)}
+                                      id={`group-inbound-${inbound.id}`}
+                                      checked={draft.inboundIds.includes(inbound.id)}
+                                      onCheckedChange={() => toggleInbound(inbound.id)}
                                     />
-                                    <FieldLabel htmlFor={`group-node-${node.id}`}>
-                                      <span>{nodeName(node)}</span>
+                                    <FieldLabel htmlFor={`group-inbound-${inbound.id}`}>
+                                      <span>{inboundName(inbound)}</span>
                                       <span className="text-muted-foreground">
-                                        {node.inboundTag || node.protocol}:{node.port}
+                                        {inbound.inboundTag || inbound.protocol}:{inbound.port}
                                       </span>
-                                      {!node.enabled && <StatusBadge tone="idle">未启用</StatusBadge>}
+                                      {!inbound.enabled && <StatusBadge tone="idle">未启用</StatusBadge>}
                                     </FieldLabel>
                                   </Field>
                                 ))}
@@ -664,8 +752,8 @@ export function NodeGroupsPage() {
       <ConfirmDialog
         open={pendingDelete !== null}
         onOpenChange={(open) => !open && setPendingDelete(null)}
-        title={`删除分组「${pendingDelete?.name ?? ''}」？`}
-        description="节点本身不受影响。分流配置里引用了这个分组的策略成员和规则会一并移除。"
+        title={`删除节点组「${pendingDelete?.name ?? ''}」？`}
+        description="入站本身不受影响。分流方案里对它的选中，以及出口里引用它的成员，都会一并移除。"
         confirmLabel="删除分组"
         onConfirm={async () => {
           if (pendingDelete) await remove(pendingDelete)

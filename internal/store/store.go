@@ -34,10 +34,11 @@ func Open(path string, debug bool) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	if err := gdb.AutoMigrate(model.AllModels()...); err != nil {
-		return nil, fmt.Errorf("migrate: %w", err)
+	db := &DB{gdb}
+	if err := db.migrate(path); err != nil {
+		return nil, err
 	}
-	return &DB{gdb}, nil
+	return db, nil
 }
 
 func (d *DB) Close() error {

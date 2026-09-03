@@ -12,19 +12,22 @@ import (
 	"github.com/PFXDev/FireX/internal/model"
 	"github.com/PFXDev/FireX/internal/paneltest"
 	"github.com/PFXDev/FireX/internal/provision"
+	"github.com/PFXDev/FireX/internal/routing"
 	"github.com/PFXDev/FireX/internal/store"
 )
 
 type fixture struct {
-	db   *store.DB
-	mgr  *provision.Manager
-	svc  *Service
-	fake *paneltest.Panel
-	user *model.User
+	db      *store.DB
+	mgr     *provision.Manager
+	svc     *Service
+	fake    *paneltest.Panel
+	user    *model.User
+	profile *model.Profile
+	groups  []model.NodeGroup
 }
 
-// newFixture provisions one user across a two-inbound panel and returns
-// everything a subscription test needs.
+// newFixture provisions one user across a two-inbound panel, one node group per
+// inbound, and returns everything a subscription test needs.
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	fake := paneltest.New("tok",
@@ -38,6 +41,9 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("store.Open() error = %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	if err := routing.Seed(db); err != nil {
+		t.Fatalf("routing.Seed() error = %v", err)
+	}
 
 	p := model.Panel{Name: "p1", BaseURL: fake.URL(), APIToken: "tok", Enabled: true}
 	db.Create(&p)
@@ -48,24 +54,35 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("DiscoverPanel() error = %v", err)
 	}
 
-	var nodes []model.Node
-	db.Order("inbound_id ASC").Find(&nodes)
-	labels := []struct{ name, region, emoji, tags string }{
-		{"HK 01", "🇭🇰 香港", "🇭🇰", "media,premium"},
-		{"JP 01", "🇯🇵 日本", "🇯🇵", "basic"},
+	var inbounds []model.Inbound
+	db.Order("remote_id ASC").Find(&inbounds)
+	labels := []struct{ name, emoji, group string }{
+		{"HK 01", "🇭🇰", "香港 IEPL"},
+		{"JP 01", "🇯🇵", "日本 直连"},
 	}
-	plan := model.Plan{Name: "all", Enabled: true}
+	profile := model.Profile{Name: "all", Enabled: true}
+	db.Create(&profile)
+
+	var groups []model.NodeGroup
+	for i := range inbounds {
+		inbounds[i].Enabled = true
+		inbounds[i].Name = labels[i].name
+		inbounds[i].Emoji = labels[i].emoji
+		inbounds[i].SortOrder = i + 1
+		db.Save(&inbounds[i])
+
+		g := model.NodeGroup{
+			Name: labels[i].group, Type: model.GroupTypeURLTest,
+			Multiplier: 1, SortOrder: i + 1, Enabled: true,
+		}
+		db.Create(&g)
+		db.Create(&model.NodeGroupInbound{GroupID: g.ID, InboundID: inbounds[i].ID})
+		db.Create(&model.ProfileNodeGroup{ProfileID: profile.ID, GroupID: g.ID})
+		groups = append(groups, g)
+	}
+
+	plan := model.Plan{Name: "all", ProfileID: profile.ID, Enabled: true}
 	db.Create(&plan)
-	for i := range nodes {
-		nodes[i].Enabled = true
-		nodes[i].Name = labels[i].name
-		nodes[i].Region = labels[i].region
-		nodes[i].Emoji = labels[i].emoji
-		nodes[i].Tags = labels[i].tags
-		nodes[i].SortOrder = i + 1
-		db.Save(&nodes[i])
-		db.Create(&model.PlanNode{PlanID: plan.ID, NodeID: nodes[i].ID})
-	}
 
 	u := model.User{
 		Username: "bob", UUID: "uuid-bob", SubToken: "tok-bob",
@@ -75,10 +92,10 @@ func newFixture(t *testing.T) *fixture {
 	if err := mgr.ReconcileUser(ctx, &u); err != nil {
 		t.Fatalf("ReconcileUser() error = %v", err)
 	}
-	return &fixture{db: db, mgr: mgr, svc: NewService(db, mgr), fake: fake, user: &u}
+	return &fixture{db: db, mgr: mgr, svc: NewService(db, mgr), fake: fake, user: &u, profile: &profile, groups: groups}
 }
 
-func TestBuildNamesEntriesFromNodes(t *testing.T) {
+func TestBuildNamesEntriesFromInbounds(t *testing.T) {
 	f := newFixture(t)
 	result, err := f.svc.Build(context.Background(), f.user)
 	if err != nil {
@@ -89,21 +106,36 @@ func TestBuildNamesEntriesFromNodes(t *testing.T) {
 	}
 	// The panel's own remark must not leak through; FireX owns the display name.
 	if result.Entries[0].Name != "🇭🇰 HK 01" {
-		t.Errorf("entry[0].Name = %q, want the node's emoji + name", result.Entries[0].Name)
-	}
-	if result.Entries[0].Node.Region != "🇭🇰 香港" {
-		t.Errorf("entry[0] region = %q", result.Entries[0].Node.Region)
+		t.Errorf("entry[0].Name = %q, want the inbound's emoji + name", result.Entries[0].Name)
 	}
 	// Port is the only handle linking a link back to its inbound.
-	if result.Entries[1].Node.Port != 8443 {
-		t.Errorf("entry[1] matched node port %d, want 8443", result.Entries[1].Node.Port)
+	if result.Entries[1].Inbound.Port != 8443 {
+		t.Errorf("entry[1] matched inbound port %d, want 8443", result.Entries[1].Inbound.Port)
 	}
 	if len(result.Warnings) != 0 {
 		t.Errorf("warnings = %v, want none", result.Warnings)
 	}
 }
 
-func TestClashOutputGroupsByRegion(t *testing.T) {
+func renderedGroups(t *testing.T, out string) map[string][]string {
+	t.Helper()
+	var cfg struct {
+		Groups []struct {
+			Name    string   `yaml:"name"`
+			Proxies []string `yaml:"proxies"`
+		} `yaml:"proxy-groups"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &cfg); err != nil {
+		t.Fatalf("rendered profile is not valid YAML: %v\n%s", err, out)
+	}
+	groups := map[string][]string{}
+	for _, g := range cfg.Groups {
+		groups[g.Name] = g.Proxies
+	}
+	return groups
+}
+
+func TestClashOutputRendersNodeGroupsAndPolicies(t *testing.T) {
 	f := newFixture(t)
 	result, err := f.svc.Build(context.Background(), f.user)
 	if err != nil {
@@ -113,17 +145,13 @@ func TestClashOutputGroupsByRegion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Clash() error = %v", err)
 	}
+
 	var cfg struct {
 		Proxies []struct {
-			Name   string `yaml:"name"`
-			Type   string `yaml:"type"`
-			Server string `yaml:"server"`
-			UUID   string `yaml:"uuid"`
+			Type string `yaml:"type"`
+			UUID string `yaml:"uuid"`
 		} `yaml:"proxies"`
-		Groups []struct {
-			Name    string   `yaml:"name"`
-			Proxies []string `yaml:"proxies"`
-		} `yaml:"proxy-groups"`
+		Rules []string `yaml:"rules"`
 	}
 	if err := yaml.Unmarshal([]byte(out), &cfg); err != nil {
 		t.Fatalf("rendered profile is not valid YAML: %v\n%s", err, out)
@@ -134,73 +162,65 @@ func TestClashOutputGroupsByRegion(t *testing.T) {
 	if cfg.Proxies[0].UUID != "uuid-bob" || cfg.Proxies[0].Type != "vless" {
 		t.Errorf("proxy[0] = %+v", cfg.Proxies[0])
 	}
-	var names []string
-	for _, g := range cfg.Groups {
-		names = append(names, g.Name)
+
+	groups := renderedGroups(t, out)
+	if got := groups["香港 IEPL"]; len(got) != 1 || got[0] != "🇭🇰 HK 01" {
+		t.Errorf("香港 IEPL members = %v, want just the HK proxy", got)
 	}
-	for _, want := range []string{"🇭🇰 香港", "🇯🇵 日本"} {
-		found := false
-		for _, n := range names {
-			if n == want {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("region group %q missing from %v", want, names)
-		}
+	// A policy's all-node-groups member expands to the profile's whitelist.
+	if got := groups["🚀 节点选择"]; !containsAll(got, "香港 IEPL", "日本 直连") {
+		t.Errorf("节点选择 members = %v, want both node groups", got)
+	}
+	if len(cfg.Rules) == 0 || cfg.Rules[len(cfg.Rules)-1] != "MATCH,🐟 漏网之鱼" {
+		t.Errorf("rules end with %v, want the final policy", cfg.Rules)
 	}
 }
 
-// TestClashOutputUsesExplicitNodeGroups covers the hand-picked grouping that
-// replaces the region fallback as soon as any group exists: a group narrows to
-// the members this user actually holds, and one holding none is pruned.
-func TestClashOutputUsesExplicitNodeGroups(t *testing.T) {
+// A group the profile does not whitelist must not reach the client at all — not
+// its proxies, not its group.
+func TestClashOutputHonoursProfileWhitelist(t *testing.T) {
 	f := newFixture(t)
+	ctx := context.Background()
+	f.db.Where("profile_id = ? AND group_id = ?", f.profile.ID, f.groups[1].ID).
+		Delete(&model.ProfileNodeGroup{})
+	// The API reconciles and drops the cache on a whitelist edit; without it the
+	// panel would still hand back a link for the inbound the user just lost.
+	if err := f.mgr.ReconcileUser(ctx, f.user); err != nil {
+		t.Fatalf("ReconcileUser() error = %v", err)
+	}
+	f.svc.InvalidateUser(f.user)
 
-	var nodes []model.Node
-	f.db.Order("sort_order ASC").Find(&nodes)
-
-	iepl := model.NodeGroup{Name: "香港 IEPL", Emoji: "🇭🇰", Type: model.GroupTypeURLTest, Enabled: true, SortOrder: 1}
-	f.db.Create(&iepl)
-	f.db.Create(&model.NodeGroupNode{GroupID: iepl.ID, NodeID: nodes[0].ID})
-
-	// A group whose only member sits outside the user's plan must not render.
-	orphan := model.NodeGroup{Name: "首尔", Type: model.GroupTypeURLTest, Enabled: true, SortOrder: 2}
-	f.db.Create(&orphan)
-	f.db.Create(&model.NodeGroupNode{GroupID: orphan.ID, NodeID: 9999})
-
-	result, err := f.svc.Build(context.Background(), f.user)
+	result, err := f.svc.Build(ctx, f.user)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
+	}
+	if len(result.Entries) != 1 {
+		t.Fatalf("entries = %d, want only the whitelisted group's inbound", len(result.Entries))
 	}
 	out, err := f.svc.Clash(result)
 	if err != nil {
 		t.Fatalf("Clash() error = %v", err)
 	}
-	var cfg struct {
-		Groups []struct {
-			Name    string   `yaml:"name"`
-			Proxies []string `yaml:"proxies"`
-		} `yaml:"proxy-groups"`
+	groups := renderedGroups(t, out)
+	if _, ok := groups["日本 直连"]; ok {
+		t.Errorf("a group outside the profile rendered: %v", groups)
 	}
-	if err := yaml.Unmarshal([]byte(out), &cfg); err != nil {
-		t.Fatalf("rendered profile is not valid YAML: %v\n%s", err, out)
+	if got := groups["香港 IEPL"]; len(got) != 1 {
+		t.Errorf("香港 IEPL members = %v", got)
 	}
+}
 
-	var found []string
-	for _, g := range cfg.Groups {
-		found = append(found, g.Name)
-		if g.Name == "🇭🇰 香港 IEPL" && (len(g.Proxies) != 1 || g.Proxies[0] != "🇭🇰 HK 01") {
-			t.Errorf("IEPL members = %v, want just the HK node", g.Proxies)
+func containsAll(list []string, want ...string) bool {
+	seen := map[string]bool{}
+	for _, v := range list {
+		seen[v] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			return false
 		}
 	}
-	for _, name := range []string{"🇭🇰 香港", "🇯🇵 日本", "首尔"} {
-		for _, got := range found {
-			if got == name {
-				t.Errorf("group %q rendered; region fallback and empty groups must both be gone: %v", name, found)
-			}
-		}
-	}
+	return true
 }
 
 func TestBase64OutputCarriesRenamedLinks(t *testing.T) {
@@ -224,7 +244,7 @@ func TestBase64OutputCarriesRenamedLinks(t *testing.T) {
 	}
 	// The fragment is what v2rayN-style clients display.
 	if !strings.Contains(links[0], "%F0%9F%87%AD%F0%9F%87%B0%20HK%2001") {
-		t.Errorf("link[0] = %q, want the FireX node name in the fragment", links[0])
+		t.Errorf("link[0] = %q, want the FireX display name in the fragment", links[0])
 	}
 }
 
@@ -282,11 +302,11 @@ func TestLinksAreCachedPerPanel(t *testing.T) {
 	}
 }
 
-func TestClashHonoursPerNodeUdpToggle(t *testing.T) {
+func TestClashHonoursPerInboundUdpToggle(t *testing.T) {
 	f := newFixture(t)
-	// The node UDP switch is the admin's only lever here; the panel's share
+	// The inbound UDP switch is the admin's only lever here; the panel's share
 	// link says nothing about UDP.
-	f.db.Model(&model.Node{}).Where("port = ?", 8443).Update("udp", false)
+	f.db.Model(&model.Inbound{}).Where("port = ?", 8443).Update("udp", false)
 
 	result, err := f.svc.Build(context.Background(), f.user)
 	if err != nil {
@@ -312,7 +332,7 @@ func TestClashHonoursPerNodeUdpToggle(t *testing.T) {
 		t.Errorf("proxy[0] udp = false, want true")
 	}
 	if cfg.Proxies[1].UDP {
-		t.Errorf("proxy[1] udp = true, want the node's toggle respected")
+		t.Errorf("proxy[1] udp = true, want the inbound's toggle respected")
 	}
 }
 
