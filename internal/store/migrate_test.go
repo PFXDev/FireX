@@ -33,6 +33,9 @@ CREATE TABLE plans (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, traffic_byt
   duration_days INTEGER, device_limit INTEGER, speed_note TEXT, enabled NUMERIC,
   sort_order INTEGER, remark TEXT, created_at INTEGER, updated_at INTEGER);
 CREATE TABLE plan_nodes (plan_id INTEGER, node_id INTEGER);
+CREATE INDEX idx_nodes_region ON nodes(region);
+CREATE INDEX idx_node_groups_region ON node_groups(region);
+CREATE INDEX idx_node_groups_line ON node_groups(line);
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
 `
 
@@ -300,5 +303,40 @@ func TestFreshDatabaseNeedsNoMigration(t *testing.T) {
 	db.Model(&model.Inbound{}).Count(&inbounds)
 	if inbounds != 0 {
 		t.Errorf("inbounds = %d on a fresh database", inbounds)
+	}
+}
+
+// A migrated matrix may have reordered policies; the UI has to be told to ask
+// for a look, and a fresh database must not nag.
+func TestMigrationFlagsRoutingForReview(t *testing.T) {
+	db, _ := migrateLegacy(t)
+	if db.GetSetting(store.SettingRoutingReview, "") == "" {
+		t.Error("migration did not flag routing for review")
+	}
+
+	fresh, err := store.Open(filepath.Join(t.TempDir(), "fresh.db"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if fresh.GetSetting(store.SettingRoutingReview, "") != "" {
+		t.Error("fresh database flagged for review")
+	}
+}
+
+// The old classification columns are indexed, and SQLite refuses to drop an
+// indexed column; the migration has to drop the index first or the columns
+// linger forever.
+func TestMigrationDropsLegacyColumns(t *testing.T) {
+	db, _ := migrateLegacy(t)
+	for _, tc := range []struct{ table, column string }{
+		{"inbounds", "region"}, {"inbounds", "tags"}, {"inbounds", "multiplier"},
+		{"node_groups", "region"}, {"node_groups", "line"},
+	} {
+		var count int64
+		db.Raw(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, tc.table, tc.column).Scan(&count)
+		if count != 0 {
+			t.Errorf("%s.%s survived the migration", tc.table, tc.column)
+		}
 	}
 }

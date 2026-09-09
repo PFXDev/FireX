@@ -331,10 +331,11 @@ func (s *Server) updateInbound(c *gin.Context) {
 		return
 	}
 	s.subs.InvalidateAll()
+	var syncErr error
 	if wasEnabled != inbound.Enabled {
-		s.reconcileInbound(inbound.ID)
+		syncErr = s.reconcileInbound(inbound.ID)
 	}
-	c.JSON(http.StatusOK, inbound)
+	c.JSON(http.StatusOK, gin.H{"inbound": inbound, "syncError": errString(syncErr)})
 }
 
 type inboundBulkRequest struct {
@@ -365,13 +366,14 @@ func (s *Server) bulkUpdateInbounds(c *gin.Context) {
 		return
 	}
 	s.subs.InvalidateAll()
+	var syncErr error
 	if req.Enabled != nil {
 		// One pass for the whole selection: several inbounds usually reach the
 		// same plans, and reconciling each separately would re-push every user
 		// once per inbound.
-		s.reconcileInbounds(req.IDs)
+		syncErr = s.reconcileInbounds(req.IDs)
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "updated": len(req.IDs)})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "updated": len(req.IDs), "syncError": errString(syncErr)})
 }
 
 // deleteInbound drops an inbound that no longer exists upstream. A live one must
@@ -397,30 +399,33 @@ func (s *Server) deleteInbound(c *gin.Context) {
 		return
 	}
 	s.subs.InvalidateAll()
-	s.reconcilePlans(plans)
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	syncErr := s.reconcilePlans(plans)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "syncError": errString(syncErr)})
 }
 
 // reconcileInbound re-pushes everyone whose profile reaches this inbound.
-func (s *Server) reconcileInbound(inboundID uint) {
-	s.reconcilePlans(routing.PlansUsingInbound(s.db, inboundID))
+func (s *Server) reconcileInbound(inboundID uint) error {
+	return s.reconcilePlans(routing.PlansUsingInbound(s.db, inboundID))
 }
 
-func (s *Server) reconcileInbounds(inboundIDs []uint) {
+func (s *Server) reconcileInbounds(inboundIDs []uint) error {
 	var plans []uint
 	for _, id := range inboundIDs {
 		plans = append(plans, routing.PlansUsingInbound(s.db, id)...)
 	}
-	s.reconcilePlans(plans)
+	return s.reconcilePlans(plans)
 }
 
-func (s *Server) reconcilePlans(planIDs []uint) {
+// reconcilePlans pushes every user on these plans and returns the first panel
+// failure. Callers put it in the response: the row is saved either way, but
+// the operator has to know a panel disagrees with what they just saved.
+func (s *Server) reconcilePlans(planIDs []uint) error {
 	if len(planIDs) == 0 {
-		return
+		return nil
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
-	_ = s.mgr.ReconcileUsersOfPlans(ctx, planIDs)
+	return s.mgr.ReconcileUsersOfPlans(ctx, planIDs)
 }
 
 func errString(err error) string {

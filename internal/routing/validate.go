@@ -31,6 +31,16 @@ var MemberKinds = []string{
 	model.MemberBuiltin, model.MemberAllNodeGroups, model.MemberAllInbounds,
 }
 
+// ReservedNames are the targets mihomo resolves itself. A proxy-group rendered
+// under one of these names would shadow the builtin, so neither a policy nor a
+// node group may display as one.
+var ReservedNames = []string{"DIRECT", "REJECT", "REJECT-DROP", "PASS", "GLOBAL", "COMPATIBLE"}
+
+// IsReserved reports whether a rendered group name collides with a builtin.
+func IsReserved(display string) bool {
+	return known(ReservedNames, strings.ToUpper(strings.TrimSpace(display)))
+}
+
 func known(list []string, want string) bool {
 	for _, v := range list {
 		if v == want {
@@ -62,11 +72,15 @@ func Validate(db *store.DB) error {
 		if strings.Contains(g.Name, ",") || strings.Contains(g.Emoji, ",") {
 			return fmt.Errorf("节点组「%s」的名称或图标不能包含英文逗号", g.Name)
 		}
+		if IsReserved(g.DisplayName()) {
+			return fmt.Errorf("节点组「%s」与内置策略重名", g.Name)
+		}
 		displays[g.DisplayName()] = "节点组 " + g.Name
 	}
 
 	finals := 0
-	byName := make(map[string]model.Policy, len(policies))
+	finalName := ""
+	defined := make(map[string]bool, len(policies))
 	for i := range policies {
 		p := &policies[i]
 		name := strings.TrimSpace(p.Name)
@@ -76,14 +90,17 @@ func Validate(db *store.DB) error {
 		case strings.Contains(name, ","), strings.Contains(p.Icon, ","):
 			// Rules are comma-separated; a comma in a name splits the line.
 			return fmt.Errorf("分流策略「%s」的名称或图标不能包含英文逗号", name)
+		case IsReserved(p.DisplayName()):
+			return fmt.Errorf("分流策略「%s」与内置策略重名", name)
 		}
 		if owner, dup := displays[p.DisplayName()]; dup {
 			return fmt.Errorf("分流策略「%s」与%s渲染出同一个名称「%s」", name, owner, p.DisplayName())
 		}
 		displays[p.DisplayName()] = "分流策略 " + name
-		byName[name] = *p
+		defined[name] = true
 		if p.IsFinal && p.Enabled {
 			finals++
+			finalName = name
 		}
 	}
 	if len(policies) > 0 && finals != 1 {
@@ -115,30 +132,47 @@ func Validate(db *store.DB) error {
 	if err := db.Find(&profiles).Error; err != nil {
 		return err
 	}
-	columns := []uint{model.DefaultProfileID}
+	columns := []column{{id: model.DefaultProfileID, where: "默认出口"}}
 	for _, p := range profiles {
-		columns = append(columns, p.ID)
+		columns = append(columns, column{id: p.ID, where: fmt.Sprintf("方案「%s」的出口", p.Name)})
 	}
-	for _, profileID := range columns {
-		cells, err := loadCells(db, profileID)
+	refs := references{groups: groupNames, policies: defined, final: finalName}
+	for _, col := range columns {
+		cells, err := loadCells(db, col.id)
 		if err != nil {
 			return err
 		}
-		if err := validateColumn(cells, groupNames, profileID); err != nil {
+		if err := validateColumn(cells, refs, col.where); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateColumn(cells []cell, groupNames map[string]bool, profileID uint) error {
-	where := "默认出口"
-	if profileID != model.DefaultProfileID {
-		where = fmt.Sprintf("方案 #%d 的出口", profileID)
-	}
+type column struct {
+	id    uint
+	where string
+}
+
+// references is everything a member may legitimately point at, plus the one
+// policy no column is allowed to drop.
+type references struct {
+	groups   map[string]bool
+	policies map[string]bool
+	final    string
+}
+
+func validateColumn(cells []cell, refs references, where string) error {
 	visible := make(map[string]cell, len(cells))
 	for _, c := range cells {
 		visible[c.policy.Name] = c
+	}
+	// Hiding the final policy would leave the column with no MATCH target of
+	// its own, and every unmatched connection would quietly go DIRECT.
+	if refs.final != "" {
+		if _, ok := visible[refs.final]; !ok {
+			return fmt.Errorf("%s:兜底策略「%s」不能设为不可见，也必须有出口", where, refs.final)
+		}
 	}
 	for _, c := range cells {
 		if !known([]string{model.GroupTypeSelect, model.GroupTypeURLTest, model.GroupTypeFallback, model.GroupTypeLoadBalance}, c.egress.Type) {
@@ -147,15 +181,15 @@ func validateColumn(cells []cell, groupNames map[string]bool, profileID uint) er
 		for _, m := range c.members {
 			switch m.Kind {
 			case model.MemberNodeGroup:
-				if !groupNames[m.Ref] {
+				if !refs.groups[m.Ref] {
 					return fmt.Errorf("%s:「%s」引用了不存在的节点组「%s」", where, c.policy.Name, m.Ref)
 				}
 			case model.MemberPolicy:
-				if _, ok := visible[m.Ref]; !ok {
-					// A reference to a policy this column hides is dropped at
-					// render time, not an error — hiding one is how a tier opts
-					// out. Only a name nobody defines is worth refusing.
-					continue
+				// A reference to a policy this column hides or disables is
+				// dropped at render time, not an error — hiding one is how a
+				// tier opts out. Only a name nobody defines is refused.
+				if _, ok := visible[m.Ref]; !ok && !refs.policies[m.Ref] {
+					return fmt.Errorf("%s:「%s」引用了不存在的分流策略「%s」", where, c.policy.Name, m.Ref)
 				}
 			case model.MemberBuiltin:
 				if !known(model.BuiltinPolicies, m.Ref) {

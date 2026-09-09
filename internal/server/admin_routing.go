@@ -2,6 +2,8 @@ package server
 
 import (
 	"net/http"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -120,6 +122,11 @@ func (req *nodeGroupRequest) apply(g *model.NodeGroup) error {
 	if strings.Contains(name, ",") || strings.Contains(req.Emoji, ",") {
 		return errBadRequest("名称和图标不能包含英文逗号")
 	}
+	// The rendered name is what a rule targets; one that reads DIRECT would
+	// shadow mihomo's own.
+	if probe := (model.NodeGroup{Name: name, Emoji: strings.TrimSpace(req.Emoji)}); routing.IsReserved(probe.DisplayName()) {
+		return errBadRequest("「" + probe.DisplayName() + "」是 mihomo 的内置策略名，换一个")
+	}
 	groupType := strings.TrimSpace(req.Type)
 	if groupType == "" {
 		groupType = model.GroupTypeURLTest
@@ -181,15 +188,15 @@ func (s *Server) createNodeGroup(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	if err := s.setGroupMembers(g.ID, req.InboundIDs); err != nil {
+	if _, err := s.setGroupMembers(g.ID, req.InboundIDs); err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
 	// A brand-new group is reachable straight away by every profile that takes
 	// all groups, so its inbounds have to be pushed.
 	s.subs.InvalidateAll()
-	s.reconcilePlans(routing.PlansUsingNodeGroup(s.db, g.ID))
-	c.JSON(http.StatusOK, g)
+	syncErr := s.reconcilePlans(routing.PlansUsingNodeGroup(s.db, g.ID))
+	c.JSON(http.StatusOK, gin.H{"group": g, "syncError": errString(syncErr)})
 }
 
 func (s *Server) updateNodeGroup(c *gin.Context) {
@@ -208,6 +215,7 @@ func (s *Server) updateNodeGroup(c *gin.Context) {
 		return
 	}
 	previousName := g.Name
+	wasEnabled := g.Enabled
 	if err := req.apply(&g); err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
@@ -220,7 +228,8 @@ func (s *Server) updateNodeGroup(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	if err := s.setGroupMembers(g.ID, req.InboundIDs); err != nil {
+	membersChanged, err := s.setGroupMembers(g.ID, req.InboundIDs)
+	if err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -234,8 +243,13 @@ func (s *Server) updateNodeGroup(c *gin.Context) {
 		rewritten = res.RowsAffected
 	}
 	s.subs.InvalidateAll()
-	s.reconcilePlans(routing.PlansUsingNodeGroup(s.db, g.ID))
-	c.JSON(http.StatusOK, gin.H{"group": g, "rewrittenMembers": rewritten})
+	// Only membership and the enabled flag change which inbounds a user holds;
+	// a relabel must not re-push the whole fleet.
+	var syncErr error
+	if membersChanged || wasEnabled != g.Enabled {
+		syncErr = s.reconcilePlans(routing.PlansUsingNodeGroup(s.db, g.ID))
+	}
+	c.JSON(http.StatusOK, gin.H{"group": g, "rewrittenMembers": rewritten, "syncError": errString(syncErr)})
 }
 
 func (s *Server) deleteNodeGroup(c *gin.Context) {
@@ -261,38 +275,45 @@ func (s *Server) deleteNodeGroup(c *gin.Context) {
 		return
 	}
 	s.subs.InvalidateAll()
-	s.reconcilePlans(plans)
-	c.JSON(http.StatusOK, gin.H{"ok": true, "droppedMembers": dropped})
+	syncErr := s.reconcilePlans(plans)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "droppedMembers": dropped, "syncError": errString(syncErr)})
 }
 
 // setGroupMembers replaces a group's membership wholesale; the editor always
-// sends the complete list.
-func (s *Server) setGroupMembers(groupID uint, inboundIDs []uint) error {
+// sends the complete list. It reports whether the set actually changed, so the
+// caller can skip a fleet-wide reconcile for a relabel.
+func (s *Server) setGroupMembers(groupID uint, inboundIDs []uint) (bool, error) {
+	var before []uint
+	s.db.Model(&model.NodeGroupInbound{}).Where("group_id = ?", groupID).Order("inbound_id ASC").Pluck("inbound_id", &before)
+
 	if err := s.db.Where("group_id = ?", groupID).Delete(&model.NodeGroupInbound{}).Error; err != nil {
-		return err
-	}
-	if len(inboundIDs) == 0 {
-		return nil
+		return false, err
 	}
 	var existing []uint
-	s.db.Model(&model.Inbound{}).Where("id IN ?", inboundIDs).Pluck("id", &existing)
+	if len(inboundIDs) > 0 {
+		s.db.Model(&model.Inbound{}).Where("id IN ?", inboundIDs).Pluck("id", &existing)
+	}
 	valid := map[uint]bool{}
 	for _, id := range existing {
 		valid[id] = true
 	}
 	links := make([]model.NodeGroupInbound, 0, len(inboundIDs))
 	seen := map[uint]bool{}
+	after := make([]uint, 0, len(inboundIDs))
 	for _, id := range inboundIDs {
 		if !valid[id] || seen[id] {
 			continue
 		}
 		seen[id] = true
 		links = append(links, model.NodeGroupInbound{GroupID: groupID, InboundID: id})
+		after = append(after, id)
 	}
+	sort.Slice(after, func(i, j int) bool { return after[i] < after[j] })
+	changed := !slices.Equal(before, after)
 	if len(links) == 0 {
-		return nil
+		return changed, nil
 	}
-	return s.db.Create(&links).Error
+	return changed, s.db.Create(&links).Error
 }
 
 func (s *Server) setGroupTags(groupID uint, tags []nodeGroupTag) error {
@@ -578,6 +599,10 @@ func (s *Server) getRouting(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"policies": rows,
 		"egresses": cells,
+		// NeedsReview is set by the schema migration: the old flat rule list
+		// was regrouped into policies and the order may not be what the
+		// operator wants. Saving once clears it.
+		"needsReview": s.db.GetSetting(store.SettingRoutingReview, "") != "",
 		"options": gin.H{
 			"ruleTypes":      routing.RuleTypes,
 			"noResolveTypes": routing.NoResolveTypes,
@@ -607,6 +632,7 @@ func (s *Server) setRouting(c *gin.Context) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
+	_ = s.db.SetSetting(store.SettingRoutingReview, "")
 	// Nothing here changes which inbounds a user reaches, so the panels are
 	// left alone; only the rendered subscription changes.
 	s.subs.InvalidateAll()
@@ -623,6 +649,32 @@ func writeMatrix(handle *gorm.DB, doc *matrixDoc) error {
 	var existing []model.Policy
 	if err := handle.Find(&existing).Error; err != nil {
 		return err
+	}
+	// Members name a policy by its bare name, so a rename in this same save
+	// has to travel to every member that pointed at the old name — whether
+	// the editor rewrote them or not.
+	renamed := map[string]string{}
+	storedName := make(map[uint]string, len(existing))
+	for _, p := range existing {
+		storedName[p.ID] = p.Name
+	}
+	for _, p := range doc.Policies {
+		if old, ok := storedName[p.ID]; ok && p.ID != 0 {
+			if next := strings.TrimSpace(p.Name); next != old {
+				renamed[old] = next
+			}
+		}
+	}
+	for i := range doc.Egresses {
+		for j := range doc.Egresses[i].Members {
+			m := &doc.Egresses[i].Members[j]
+			if m.Kind != model.MemberPolicy {
+				continue
+			}
+			if next, ok := renamed[strings.TrimSpace(m.Ref)]; ok {
+				m.Ref = next
+			}
+		}
 	}
 	for _, p := range existing {
 		if keep[p.ID] {
@@ -737,7 +789,18 @@ func (s *Server) previewRouting(c *gin.Context) {
 			profileID = uint(parsed)
 		}
 	}
-	inbounds, err := routing.InboundsForProfile(s.db, profileID)
+	// The default column has no whitelist of its own; previewing it over every
+	// enabled group shows what a profile inherits before it narrows.
+	var inbounds []model.Inbound
+	var err error
+	if profileID == model.DefaultProfileID {
+		var groups []model.NodeGroup
+		if groups, err = routing.AllGroups(s.db); err == nil {
+			inbounds, err = routing.InboundsIn(s.db, groups)
+		}
+	} else {
+		inbounds, err = routing.InboundsForProfile(s.db, profileID)
+	}
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
@@ -755,7 +818,12 @@ func (s *Server) previewRouting(c *gin.Context) {
 		proxies = append(proxies, routing.Proxy{InboundID: n.ID, Name: name, Entry: entry})
 	}
 
-	in, err := routing.Compile(s.db, profileID, proxies)
+	var in clash.Input
+	if profileID == model.DefaultProfileID {
+		in, err = routing.CompileDefault(s.db, proxies)
+	} else {
+		in, err = routing.Compile(s.db, profileID, proxies)
+	}
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"error": err.Error()})
 		return

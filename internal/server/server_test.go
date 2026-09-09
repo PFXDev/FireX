@@ -140,15 +140,17 @@ func (h *harness) seed() *model.User {
 		h.mustDo(http.MethodPut, "/api/inbounds/"+itoa(n.ID), map[string]any{
 			"name": labels[n.Port], "enabled": true,
 		})
-		var group struct {
-			ID uint `json:"id"`
+		var created struct {
+			Group struct {
+				ID uint `json:"id"`
+			} `json:"group"`
 		}
 		raw := h.mustDo(http.MethodPost, "/api/node-groups", map[string]any{
 			"name": labels[n.Port], "type": "url-test", "inboundIds": []uint{n.ID},
 			"tags": []map[string]string{{"key": "地区", "value": labels[n.Port]}},
 		})
-		json.Unmarshal(raw, &group)
-		groupIDs = append(groupIDs, group.ID)
+		json.Unmarshal(raw, &created)
+		groupIDs = append(groupIDs, created.Group.ID)
 	}
 
 	var profile struct {
@@ -541,4 +543,218 @@ func containsStr(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// routingDoc fetches the matrix in the shape the editor sends back.
+func (h *harness) routingDoc() map[string]any {
+	h.t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(h.mustDo(http.MethodGet, "/api/routing", nil), &doc); err != nil {
+		h.t.Fatalf("decode routing: %v", err)
+	}
+	return doc
+}
+
+func renamePolicy(doc map[string]any, from, to string) {
+	for _, p := range doc["policies"].([]any) {
+		row := p.(map[string]any)
+		if row["name"] == from {
+			row["name"] = to
+		}
+	}
+}
+
+// Members name a policy by its bare name. The old editor rewrote them on
+// rename; the matrix editor must not leave that to the client, or every
+// egress that listed the renamed policy silently loses an option.
+func TestRenamingPolicyRewritesMembers(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+
+	var before int64
+	h.db.Model(&model.EgressMember{}).Where("kind = ? AND ref = ?", model.MemberPolicy, "节点选择").Count(&before)
+	if before == 0 {
+		t.Fatal("stock matrix has no members pointing at 节点选择; the test is vacuous")
+	}
+
+	doc := h.routingDoc()
+	renamePolicy(doc, "节点选择", "手动选择")
+	h.mustDo(http.MethodPut, "/api/routing", doc)
+
+	var stale, moved int64
+	h.db.Model(&model.EgressMember{}).Where("kind = ? AND ref = ?", model.MemberPolicy, "节点选择").Count(&stale)
+	h.db.Model(&model.EgressMember{}).Where("kind = ? AND ref = ?", model.MemberPolicy, "手动选择").Count(&moved)
+	if stale != 0 || moved != before {
+		t.Errorf("after rename: %d members still point at the old name, %d at the new (want 0 / %d)", stale, moved, before)
+	}
+}
+
+// A member naming a policy nobody defines is a typo, not a tier opting out,
+// and has to be refused rather than dropped at render time.
+func TestUnknownPolicyMemberIsRejected(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+
+	doc := h.routingDoc()
+	cells := doc["egresses"].([]any)
+	first := cells[0].(map[string]any)
+	first["members"] = append(first["members"].([]any), map[string]any{"kind": "policy", "ref": "不存在的策略"})
+	resp, body := h.do(http.MethodPut, "/api/routing", doc)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("save with a dangling policy member = %d: %s", resp.StatusCode, body)
+	}
+}
+
+// Hiding the final policy in one column would send every unmatched connection
+// on that tier straight to DIRECT with nothing in the UI to show for it.
+func TestFinalPolicyCannotBeHiddenPerProfile(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+
+	var profile model.Profile
+	if err := h.db.First(&profile, "name = ?", "标准分流").Error; err != nil {
+		t.Fatal(err)
+	}
+	doc := h.routingDoc()
+	policies := doc["policies"].([]any)
+	finalIndex := -1
+	for i, p := range policies {
+		if p.(map[string]any)["isFinal"] == true {
+			finalIndex = i
+		}
+	}
+	if finalIndex < 0 {
+		t.Fatal("stock matrix has no final policy")
+	}
+	doc["egresses"] = append(doc["egresses"].([]any), map[string]any{
+		"policyIndex": finalIndex, "profileId": profile.ID, "type": "select", "hidden": true,
+		"members": []any{},
+	})
+	resp, body := h.do(http.MethodPut, "/api/routing", doc)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("hiding the final policy for a profile = %d, want 400: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "兜底") {
+		t.Errorf("error should name the final policy: %s", body)
+	}
+}
+
+// A proxy-group literally named DIRECT would shadow mihomo's builtin.
+func TestReservedNamesAreRejected(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+
+	doc := h.routingDoc()
+	renamePolicy(doc, "全球直连", "direct")
+	for _, p := range doc["policies"].([]any) {
+		if row := p.(map[string]any); row["name"] == "direct" {
+			row["icon"] = ""
+		}
+	}
+	if resp, body := h.do(http.MethodPut, "/api/routing", doc); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("policy named DIRECT = %d, want 400: %s", resp.StatusCode, body)
+	}
+
+	if resp, body := h.do(http.MethodPost, "/api/node-groups", map[string]any{"name": "REJECT"}); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("node group named REJECT = %d, want 400: %s", resp.StatusCode, body)
+	}
+}
+
+// A node group edit is saved locally first and pushed to panels after; when
+// the push fails the row must still be there and the response must say so,
+// or the operator sees a green toast over a panel that disagrees.
+func TestNodeGroupSaveReportsPanelFailure(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+
+	var group model.NodeGroup
+	if err := h.db.First(&group, "name = ?", "🇭🇰 香港").Error; err != nil {
+		t.Fatal(err)
+	}
+	var otherInbound model.Inbound
+	if err := h.db.First(&otherInbound, "port = ?", 8443).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	h.fake.FailNext["/inbounds/list"] = true
+	raw := h.mustDo(http.MethodPut, "/api/node-groups/"+itoa(group.ID), map[string]any{
+		"name": group.Name, "type": group.Type, "inboundIds": []uint{otherInbound.ID},
+	})
+	var out struct {
+		SyncError string `json:"syncError"`
+	}
+	json.Unmarshal(raw, &out)
+	if out.SyncError == "" {
+		t.Errorf("panel failure was swallowed: %s", raw)
+	}
+	var members int64
+	h.db.Model(&model.NodeGroupInbound{}).Where("group_id = ?", group.ID).Count(&members)
+	if members != 1 {
+		t.Errorf("membership was not saved despite the panel failure: %d rows", members)
+	}
+}
+
+// Relabelling a group changes nothing a panel holds, so it must not re-push
+// every user on every panel.
+func TestNodeGroupRelabelDoesNotTouchPanels(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+
+	var group model.NodeGroup
+	if err := h.db.First(&group, "name = ?", "🇭🇰 香港").Error; err != nil {
+		t.Fatal(err)
+	}
+	var inboundIDs []uint
+	h.db.Model(&model.NodeGroupInbound{}).Where("group_id = ?", group.ID).Pluck("inbound_id", &inboundIDs)
+
+	h.fake.ResetCalls()
+	h.mustDo(http.MethodPut, "/api/node-groups/"+itoa(group.ID), map[string]any{
+		"name": group.Name, "emoji": "🏝️", "type": group.Type, "inboundIds": inboundIDs,
+		"tags": []map[string]string{{"key": "线路", "value": "IEPL"}},
+	})
+	if calls := h.fake.Calls(); len(calls) != 0 {
+		t.Errorf("relabel reached the panel: %v", calls)
+	}
+}
+
+// The default column has no whitelist; previewing it over every enabled group
+// is the only way to see what profiles inherit.
+func TestDefaultColumnPreviewShowsEveryGroup(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+
+	var out struct {
+		YAML     string `json:"yaml"`
+		Inbounds int    `json:"inbounds"`
+	}
+	json.Unmarshal(h.mustDo(http.MethodGet, "/api/routing/preview?profileId=0", nil), &out)
+	if out.Inbounds != 2 {
+		t.Errorf("default preview covers %d inbounds, want 2", out.Inbounds)
+	}
+	// Flag emoji come out YAML-escaped, so match on the text part of the name.
+	for _, want := range []string{"香港", "日本"} {
+		if !strings.Contains(out.YAML, want) {
+			t.Errorf("default preview lacks group %q", want)
+		}
+	}
+}
+
+// Saving the matrix acknowledges the post-migration review flag.
+func TestSavingRoutingClearsReviewFlag(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+	h.db.SetSetting(store.SettingRoutingReview, "1")
+
+	var doc struct {
+		NeedsReview bool `json:"needsReview"`
+	}
+	json.Unmarshal(h.mustDo(http.MethodGet, "/api/routing", nil), &doc)
+	if !doc.NeedsReview {
+		t.Fatal("needsReview not surfaced")
+	}
+	h.mustDo(http.MethodPut, "/api/routing", h.routingDoc())
+	json.Unmarshal(h.mustDo(http.MethodGet, "/api/routing", nil), &doc)
+	if doc.NeedsReview {
+		t.Error("needsReview still set after a save")
+	}
 }

@@ -46,6 +46,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { errorMessage } from '@/lib/format'
+import { reportSyncError } from '@/lib/sync'
 
 const GROUP_TYPES = [
   { value: 'url-test', label: 'url-test（自动选延迟最低）' },
@@ -211,15 +212,20 @@ export function NodeGroupsPage() {
 
     try {
       if (draft.id) {
-        const result = await api.put<{ rewrittenMembers: number }>(`/node-groups/${draft.id}`, body)
+        const result = await api.put<{ rewrittenMembers: number; syncError: string }>(
+          `/node-groups/${draft.id}`,
+          body,
+        )
         toast.success(
           result.rewrittenMembers > 0
             ? `分组已保存，同步更新了 ${result.rewrittenMembers} 处分流引用`
             : '分组已保存',
         )
+        reportSyncError(result.syncError)
       } else {
-        await api.post('/node-groups', body)
+        const result = await api.post<{ syncError: string }>('/node-groups', body)
         toast.success('分组已创建')
+        reportSyncError(result.syncError)
       }
       setDraft(null)
       await revalidate()
@@ -232,12 +238,13 @@ export function NodeGroupsPage() {
 
   const remove = async (group: NodeGroup) => {
     try {
-      const result = await api.del<{ droppedMembers: number }>(`/node-groups/${group.id}`)
+      const result = await api.del<{ droppedMembers: number; syncError: string }>(`/node-groups/${group.id}`)
       toast.success(
         result.droppedMembers > 0
           ? `分组已删除，同时移除了 ${result.droppedMembers} 处引用它的分流成员`
           : '分组已删除',
       )
+      reportSyncError(result.syncError)
       await revalidate()
     } catch (err) {
       toast.error(errorMessage(err, '删除失败'))

@@ -36,6 +36,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { errorMessage } from '@/lib/format'
+import { reportSyncError } from '@/lib/sync'
 
 type Draft = {
   id: number
@@ -111,8 +112,9 @@ export function InboundsPage() {
     const count = selected.size
     setPendingAction(action)
     try {
-      await api.post('/inbounds/bulk', { ids: [...selected], enabled })
+      const result = await api.post<{ syncError: string }>('/inbounds/bulk', { ids: [...selected], enabled })
       toast.success(`已更新 ${count} 个入站`)
+      reportSyncError(result.syncError)
       setSelected(new Set())
       await refreshAfterMutation()
     } catch (err) {
@@ -127,8 +129,9 @@ export function InboundsPage() {
     if (!draft) return
     setPendingAction('save')
     try {
-      await api.put(`/inbounds/${draft.id}`, draft)
+      const result = await api.put<{ syncError: string }>(`/inbounds/${draft.id}`, draft)
       toast.success('已保存')
+      reportSyncError(result.syncError)
       setDraft(null)
       await refreshAfterMutation()
     } catch (err) {
@@ -141,8 +144,9 @@ export function InboundsPage() {
   const removeMissing = async (inbound: Inbound) => {
     setPendingAction('remove')
     try {
-      await api.del(`/inbounds/${inbound.id}`)
+      const result = await api.del<{ syncError: string }>(`/inbounds/${inbound.id}`)
       toast.success('已移除')
+      reportSyncError(result.syncError)
       await refreshAfterMutation()
     } catch (err) {
       toast.error(errorMessage(err, '移除失败'))

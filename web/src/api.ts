@@ -206,6 +206,8 @@ export interface Egress {
 export interface RoutingMatrix {
   policies: Policy[]
   egresses: Egress[]
+  /** Set by the schema migration until the matrix is saved once. */
+  needsReview: boolean
   options: {
     ruleTypes: string[]
     noResolveTypes: Record<string, boolean>

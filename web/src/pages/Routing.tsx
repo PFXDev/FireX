@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronDownIcon,
   EyeIcon,
@@ -7,20 +7,40 @@ import {
   SaveIcon,
   TrashIcon,
   TriangleAlertIcon,
-} from 'lucide-react'
-import { toast } from 'sonner'
+} from "lucide-react";
+import { toast } from "sonner";
 
-import { api } from '@/api'
-import type { Egress, EgressMember, MemberKind, NodeGroup, Policy, Profile, RoutingMatrix } from '@/api'
-import { CodeBlock } from '@/components/code-display'
-import { ConfirmDialog } from '@/components/confirm-dialog'
-import { PageHeader } from '@/components/page-header'
-import { StatusBadge } from '@/components/status-badge'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
+import { api } from "@/api";
+import type {
+  Egress,
+  EgressMember,
+  MemberKind,
+  NodeGroup,
+  Policy,
+  Profile,
+  RoutingMatrix,
+} from "@/api";
+import { CodeBlock } from "@/components/code-display";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { PageHeader } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -28,7 +48,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,199 +57,333 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Spinner } from '@/components/ui/spinner'
-import { Switch } from '@/components/ui/switch'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { errorMessage } from '@/lib/format'
+} from "@/components/ui/dropdown-menu";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { useUnsavedGuard } from "@/hooks/use-unsaved-guard";
+import { errorMessage } from "@/lib/format";
+import { reportSyncError } from "@/lib/sync";
 
 /** profileId 0 addresses the default column every profile falls back to. */
-const DEFAULT_COLUMN = 0
+const DEFAULT_COLUMN = 0;
 
 /** One matrix row: a policy plus the egress it takes in each column. */
 type Row = {
-  policy: Policy
-  cells: Map<number, Egress>
-}
+  policy: Policy;
+  cells: Map<number, Egress>;
+};
 
 type ProfileDraft = {
-  id?: number
-  name: string
-  allGroups: boolean
-  enabled: boolean
-  remark: string
-  groupIds: number[]
-}
+  id?: number;
+  name: string;
+  allGroups: boolean;
+  enabled: boolean;
+  remark: string;
+  groupIds: number[];
+};
 
 function blankEgress(profileId: number): Egress {
   return {
     policyIndex: 0,
     profileId,
-    type: 'select',
-    testUrl: '',
+    type: "select",
+    testUrl: "",
     interval: 300,
     tolerance: 50,
     hidden: false,
     members: [],
-  }
+  };
 }
 
 function move<T>(list: T[], index: number, delta: number): T[] {
-  const target = index + delta
-  if (target < 0 || target >= list.length) return list
-  const next = [...list]
-  const [item] = next.splice(index, 1)
-  next.splice(target, 0, item)
-  return next
+  const target = index + delta;
+  if (target < 0 || target >= list.length) return list;
+  const next = [...list];
+  const [item] = next.splice(index, 1);
+  next.splice(target, 0, item);
+  return next;
 }
 
 export function RoutingPage() {
-  const [rows, setRows] = useState<Row[]>([])
-  const [options, setOptions] = useState<RoutingMatrix['options'] | null>(null)
-  const [profiles, setProfiles] = useState<Profile[]>([])
-  const [groups, setGroups] = useState<NodeGroup[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [dirty, setDirty] = useState(false)
+  const [rows, setRows] = useState<Row[]>([]);
+  const [options, setOptions] = useState<RoutingMatrix["options"] | null>(null);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [groups, setGroups] = useState<NodeGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [needsReview, setNeedsReview] = useState(false);
 
-  const [policyEditor, setPolicyEditor] = useState<number | null>(null)
-  const [cellEditor, setCellEditor] = useState<{ row: number; profileId: number } | null>(null)
-  const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null)
-  const [pendingProfileDelete, setPendingProfileDelete] = useState<Profile | null>(null)
-  const [pendingPolicyDelete, setPendingPolicyDelete] = useState<number | null>(null)
+  const [policyEditor, setPolicyEditor] = useState<number | null>(null);
+  const [cellEditor, setCellEditor] = useState<{
+    row: number;
+    profileId: number;
+  } | null>(null);
+  const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
+  const [pendingProfileDelete, setPendingProfileDelete] =
+    useState<Profile | null>(null);
+  const [pendingPolicyDelete, setPendingPolicyDelete] = useState<number | null>(
+    null,
+  );
 
-  const [previewProfile, setPreviewProfile] = useState<number>(DEFAULT_COLUMN)
-  const [preview, setPreview] = useState<{ yaml?: string; error?: string } | null>(null)
-  const [previewing, setPreviewing] = useState(false)
+  const [previewProfile, setPreviewProfile] = useState<number>(DEFAULT_COLUMN);
+  const [preview, setPreview] = useState<{
+    yaml?: string;
+    error?: string;
+  } | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const [matrix, nextProfiles, nextGroups] = await Promise.all([
-        api.get<RoutingMatrix>('/routing'),
-        api.get<Profile[]>('/profiles'),
-        api.get<NodeGroup[]>('/node-groups'),
-      ])
-      const byIndex = new Map<number, Map<number, Egress>>()
+        api.get<RoutingMatrix>("/routing"),
+        api.get<Profile[]>("/profiles"),
+        api.get<NodeGroup[]>("/node-groups"),
+      ]);
+      const byIndex = new Map<number, Map<number, Egress>>();
       matrix.egresses.forEach((egress) => {
-        if (!byIndex.has(egress.policyIndex)) byIndex.set(egress.policyIndex, new Map())
-        byIndex.get(egress.policyIndex)!.set(egress.profileId, egress)
-      })
-      setRows(matrix.policies.map((policy, index) => ({ policy, cells: byIndex.get(index) ?? new Map() })))
-      setOptions(matrix.options)
-      setProfiles(nextProfiles)
-      setGroups(nextGroups)
-      setLoadError(null)
-      setDirty(false)
-      return true
+        if (!byIndex.has(egress.policyIndex))
+          byIndex.set(egress.policyIndex, new Map());
+        byIndex.get(egress.policyIndex)!.set(egress.profileId, egress);
+      });
+      setRows(
+        matrix.policies.map((policy, index) => ({
+          policy,
+          cells: byIndex.get(index) ?? new Map(),
+        })),
+      );
+      setOptions(matrix.options);
+      setNeedsReview(matrix.needsReview);
+      setProfiles(nextProfiles);
+      setGroups(nextGroups);
+      setLoadError(null);
+      setDirty(false);
+      return true;
     } catch (err) {
-      setLoadError(errorMessage(err, '分流配置加载失败'))
-      return false
+      setLoadError(errorMessage(err, "分流配置加载失败"));
+      return false;
     }
-  }, [])
+  }, []);
+
+  /**
+   * Profiles are saved on their own, outside the matrix draft. Reloading only
+   * them keeps whatever the operator has edited in the cells; a full reload
+   * here would throw those edits away without a word.
+   */
+  const reloadProfiles = useCallback(async () => {
+    try {
+      const [nextProfiles, nextGroups] = await Promise.all([
+        api.get<Profile[]>("/profiles"),
+        api.get<NodeGroup[]>("/node-groups"),
+      ]);
+      setProfiles(nextProfiles);
+      setGroups(nextGroups);
+    } catch (err) {
+      toast.error(errorMessage(err, "方案列表刷新失败"));
+    }
+  }, []);
+
+  useUnsavedGuard(dirty);
 
   useEffect(() => {
-    void load().finally(() => setLoading(false))
-  }, [load])
+    void load().finally(() => setLoading(false));
+  }, [load]);
 
   const patchRows = (next: Row[]) => {
-    setRows(next)
-    setDirty(true)
-  }
+    setRows(next);
+    setDirty(true);
+  };
 
   const save = async () => {
-    setSaving(true)
+    setSaving(true);
     try {
-      await api.put('/routing', {
+      await api.put("/routing", {
         policies: rows.map((row) => row.policy),
         egresses: rows.flatMap((row, index) =>
-          [...row.cells.values()].map((egress) => ({ ...egress, policyIndex: index })),
+          [...row.cells.values()].map((egress) => ({
+            ...egress,
+            policyIndex: index,
+          })),
         ),
-      })
-      toast.success('分流已保存')
-      await load()
+      });
+      toast.success("分流已保存");
+      await load();
     } catch (err) {
-      toast.error(errorMessage(err, '保存失败'))
+      toast.error(errorMessage(err, "保存失败"));
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
-  }
+  };
 
   const runPreview = async () => {
-    setPreviewing(true)
+    setPreviewing(true);
     try {
-      setPreview(await api.get<{ yaml?: string; error?: string }>(`/routing/preview?profileId=${previewProfile}`))
+      setPreview(
+        await api.get<{ yaml?: string; error?: string }>(
+          `/routing/preview?profileId=${previewProfile}`,
+        ),
+      );
     } catch (err) {
-      setPreview({ error: errorMessage(err, '预览失败') })
+      setPreview({ error: errorMessage(err, "预览失败") });
     } finally {
-      setPreviewing(false)
+      setPreviewing(false);
     }
-  }
+  };
 
-  const groupByName = useMemo(() => new Map(groups.map((group) => [group.name, group])), [groups])
+  const groupByName = useMemo(
+    () => new Map(groups.map((group) => [group.name, group])),
+    [groups],
+  );
 
   const memberLabel = useCallback(
     (member: EgressMember): string => {
       switch (member.kind) {
-        case 'node-group': {
-          const found = groupByName.get(member.ref)
-          return found ? (found.emoji ? `${found.emoji} ${found.name}` : found.name) : `⚠️ ${member.ref}`
+        case "node-group": {
+          const found = groupByName.get(member.ref);
+          return found
+            ? found.emoji
+              ? `${found.emoji} ${found.name}`
+              : found.name
+            : `⚠️ ${member.ref}`;
         }
-        case 'policy': {
-          const found = rows.find((row) => row.policy.name === member.ref)
-          return found ? (found.policy.icon ? `${found.policy.icon} ${found.policy.name}` : found.policy.name) : `⚠️ ${member.ref}`
+        case "policy": {
+          const found = rows.find((row) => row.policy.name === member.ref);
+          return found
+            ? found.policy.icon
+              ? `${found.policy.icon} ${found.policy.name}`
+              : found.policy.name
+            : `⚠️ ${member.ref}`;
         }
-        case 'all-node-groups':
-          return '全部节点组'
-        case 'all-inbounds':
-          return '全部入站'
+        case "all-node-groups":
+          return "全部节点组";
+        case "all-inbounds":
+          return "全部入站";
         default:
-          return member.ref
+          return member.ref;
       }
     },
     [groupByName, rows],
-  )
+  );
 
   /** The egress that actually applies to a column, default included. */
-  const effective = (row: Row, profileId: number): { egress: Egress; inherited: boolean } | null => {
-    const own = row.cells.get(profileId)
-    if (own) return { egress: own, inherited: false }
-    const fallback = row.cells.get(DEFAULT_COLUMN)
-    if (fallback) return { egress: fallback, inherited: true }
-    return null
-  }
+  const effective = (
+    row: Row,
+    profileId: number,
+  ): { egress: Egress; inherited: boolean } | null => {
+    const own = row.cells.get(profileId);
+    if (own) return { egress: own, inherited: false };
+    const fallback = row.cells.get(DEFAULT_COLUMN);
+    if (fallback) return { egress: fallback, inherited: true };
+    return null;
+  };
 
-  const setCell = (rowIndex: number, profileId: number, egress: Egress | null) => {
+  const setCell = (
+    rowIndex: number,
+    profileId: number,
+    egress: Egress | null,
+  ) => {
     const next = rows.map((row, i) => {
-      if (i !== rowIndex) return row
-      const cells = new Map(row.cells)
-      if (egress) cells.set(profileId, egress)
-      else cells.delete(profileId)
-      return { ...row, cells }
-    })
-    patchRows(next)
-  }
+      if (i !== rowIndex) return row;
+      const cells = new Map(row.cells);
+      if (egress) cells.set(profileId, egress);
+      else cells.delete(profileId);
+      return { ...row, cells };
+    });
+    patchRows(next);
+  };
 
   const addPolicy = () => {
-    let name = '新策略'
-    for (let i = 2; rows.some((row) => row.policy.name === name); i++) name = `新策略 ${i}`
-    const cells = new Map<number, Egress>()
-    cells.set(DEFAULT_COLUMN, { ...blankEgress(DEFAULT_COLUMN), members: [{ kind: 'all-node-groups', ref: '' }] })
+    let name = "新策略";
+    for (let i = 2; rows.some((row) => row.policy.name === name); i++)
+      name = `新策略 ${i}`;
+    const cells = new Map<number, Egress>();
+    cells.set(DEFAULT_COLUMN, {
+      ...blankEgress(DEFAULT_COLUMN),
+      members: [{ kind: "all-node-groups", ref: "" }],
+    });
     patchRows([
       ...rows,
-      { policy: { id: 0, name, icon: '', isFinal: false, enabled: true, remark: '', rules: [] }, cells },
-    ])
-    setPolicyEditor(rows.length)
-  }
+      {
+        policy: {
+          id: 0,
+          name,
+          icon: "",
+          isFinal: false,
+          enabled: true,
+          remark: "",
+          rules: [],
+        },
+        cells,
+      },
+    ]);
+    setPolicyEditor(rows.length);
+  };
+
+  /**
+   * Members reference a policy by bare name; the server rewrites them on save
+   * as well, but the draft has to follow too or the other cells would show a
+   * dangling ⚠️ until then.
+   */
+  const renamePolicy = (index: number, name: string) => {
+    const previous = rows[index].policy.name;
+    patchRows(
+      rows.map((row, i) => ({
+        ...row,
+        policy: i === index ? { ...row.policy, name } : row.policy,
+        cells: new Map(
+          [...row.cells.entries()].map(([profileId, egress]) => [
+            profileId,
+            {
+              ...egress,
+              members: egress.members.map((m) =>
+                m.kind === "policy" && m.ref === previous
+                  ? { ...m, ref: name }
+                  : m,
+              ),
+            },
+          ]),
+        ),
+      })),
+    );
+  };
 
   const removePolicy = (index: number) => {
-    const gone = rows[index].policy.name
+    const gone = rows[index].policy.name;
     const stripped = rows
       .filter((_, i) => i !== index)
       .map((row) => ({
@@ -237,45 +391,66 @@ export function RoutingPage() {
         cells: new Map(
           [...row.cells.entries()].map(([profileId, egress]) => [
             profileId,
-            { ...egress, members: egress.members.filter((m) => !(m.kind === 'policy' && m.ref === gone)) },
+            {
+              ...egress,
+              members: egress.members.filter(
+                (m) => !(m.kind === "policy" && m.ref === gone),
+              ),
+            },
           ]),
         ),
-      }))
-    patchRows(stripped)
-  }
+      }));
+    patchRows(stripped);
+  };
 
   const saveProfile = async () => {
-    if (!profileDraft) return
+    if (!profileDraft) return;
     try {
       if (profileDraft.id) {
-        await api.put(`/profiles/${profileDraft.id}`, profileDraft)
-        toast.success('方案已保存，相关用户已同步到面板')
+        const result = await api.put<{ syncError: string }>(
+          `/profiles/${profileDraft.id}`,
+          profileDraft,
+        );
+        if (result.syncError) reportSyncError(result.syncError);
+        else toast.success("方案已保存，相关用户已同步到面板");
       } else {
-        await api.post('/profiles', profileDraft)
-        toast.success('方案已创建')
+        await api.post("/profiles", profileDraft);
+        toast.success("方案已创建");
       }
-      setProfileDraft(null)
-      await load()
+      setProfileDraft(null);
+      await reloadProfiles();
     } catch (err) {
-      toast.error(errorMessage(err, '保存失败'))
+      toast.error(errorMessage(err, "保存失败"));
     }
-  }
+  };
 
   const removeProfile = async (profile: Profile) => {
     try {
-      await api.del(`/profiles/${profile.id}`)
-      toast.success('方案已删除')
-      await load()
+      await api.del(`/profiles/${profile.id}`);
+      toast.success("方案已删除");
+      // The column's overrides are gone server-side; drop them from the draft
+      // too so a later save does not resurrect them.
+      setRows(
+        rows.map((row) => {
+          const cells = new Map(row.cells);
+          cells.delete(profile.id);
+          return { ...row, cells };
+        }),
+      );
+      await reloadProfiles();
     } catch (err) {
-      toast.error(errorMessage(err, '删除失败'))
-      throw err
+      toast.error(errorMessage(err, "删除失败"));
+      throw err;
     }
-  }
+  };
 
   if (loading || !options) {
     return (
       <div className="flex w-full flex-col gap-6">
-        <PageHeader title="分流" description="行是分流策略，列是分流方案，格子里是出口。" />
+        <PageHeader
+          title="分流"
+          description="行是分流策略，列是分流方案，格子里是出口。"
+        />
         {loadError ? (
           <Alert variant="destructive">
             <TriangleAlertIcon />
@@ -291,11 +466,13 @@ export function RoutingPage() {
           <Skeleton className="h-96 w-full" />
         )}
       </div>
-    )
+    );
   }
 
-  const editingRow = policyEditor !== null ? rows[policyEditor] : null
-  const editingCell = cellEditor ? effective(rows[cellEditor.row], cellEditor.profileId) : null
+  const editingRow = policyEditor !== null ? rows[policyEditor] : null;
+  const editingCell = cellEditor
+    ? effective(rows[cellEditor.row], cellEditor.profileId)
+    : null;
 
   return (
     <div className="flex w-full flex-col gap-6">
@@ -308,10 +485,35 @@ export function RoutingPage() {
           新建策略
         </Button>
         <Button disabled={saving || !dirty} onClick={() => void save()}>
-          {saving ? <Spinner data-icon="inline-start" /> : <SaveIcon data-icon="inline-start" />}
-          {saving ? '保存中…' : dirty ? '保存分流' : '已保存'}
+          {saving ? (
+            <Spinner data-icon="inline-start" />
+          ) : (
+            <SaveIcon data-icon="inline-start" />
+          )}
+          {saving ? "保存中…" : dirty ? "保存分流" : "已保存"}
         </Button>
       </PageHeader>
+
+      {needsReview && (
+        <Alert>
+          <TriangleAlertIcon />
+          <AlertTitle>这份分流是从旧版本迁移过来的，请复核一遍</AlertTitle>
+          <AlertDescription>
+            旧的规则清单已按目标拆成了分流策略，顺序按每条策略首条规则的位置排列，可能和你原来的客户端排列不同；
+            每个套餐也各自生成了一个分流方案。确认无误后保存一次，这条提示就会消失。
+          </AlertDescription>
+          <AlertAction>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={saving}
+              onClick={() => void save()}
+            >
+              确认并保存
+            </Button>
+          </AlertAction>
+        </Alert>
+      )}
 
       <Card>
         <CardHeader>
@@ -324,7 +526,13 @@ export function RoutingPage() {
               variant="outline"
               size="sm"
               onClick={() =>
-                setProfileDraft({ name: '', allGroups: false, enabled: true, remark: '', groupIds: [] })
+                setProfileDraft({
+                  name: "",
+                  allGroups: false,
+                  enabled: true,
+                  remark: "",
+                  groupIds: [],
+                })
               }
             >
               <PlusIcon data-icon="inline-start" />
@@ -340,7 +548,9 @@ export function RoutingPage() {
                   <ListTreeIcon />
                 </EmptyMedia>
                 <EmptyTitle>还没有分流方案</EmptyTitle>
-                <EmptyDescription>没有方案，套餐就无处可绑，用户也拿不到任何节点。</EmptyDescription>
+                <EmptyDescription>
+                  没有方案，套餐就无处可绑，用户也拿不到任何节点。
+                </EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : (
@@ -349,7 +559,9 @@ export function RoutingPage() {
                 <TableRow>
                   <TableHead>方案</TableHead>
                   <TableHead>可用节点组</TableHead>
-                  <TableHead className="hidden md:table-cell">可用入站</TableHead>
+                  <TableHead className="hidden md:table-cell">
+                    可用入站
+                  </TableHead>
                   <TableHead className="hidden md:table-cell">套餐</TableHead>
                   <TableHead>
                     <span className="sr-only">操作</span>
@@ -362,9 +574,15 @@ export function RoutingPage() {
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <strong>{profile.name}</strong>
-                        {!profile.enabled && <StatusBadge tone="idle">停用</StatusBadge>}
+                        {!profile.enabled && (
+                          <StatusBadge tone="idle">停用</StatusBadge>
+                        )}
                       </div>
-                      {profile.remark && <span className="text-muted-foreground">{profile.remark}</span>}
+                      {profile.remark && (
+                        <span className="text-muted-foreground">
+                          {profile.remark}
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell>
                       {profile.allGroups ? (
@@ -372,11 +590,17 @@ export function RoutingPage() {
                       ) : profile.groupIds.length === 0 ? (
                         <StatusBadge tone="warn">未选任何分组</StatusBadge>
                       ) : (
-                        <span className="tabular-nums">{profile.groupIds.length}</span>
+                        <span className="tabular-nums">
+                          {profile.groupIds.length}
+                        </span>
                       )}
                     </TableCell>
-                    <TableCell className="hidden tabular-nums md:table-cell">{profile.usableInbounds}</TableCell>
-                    <TableCell className="hidden tabular-nums md:table-cell">{profile.planCount}</TableCell>
+                    <TableCell className="hidden tabular-nums md:table-cell">
+                      {profile.usableInbounds}
+                    </TableCell>
+                    <TableCell className="hidden tabular-nums md:table-cell">
+                      {profile.planCount}
+                    </TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-2">
                         <Button
@@ -444,7 +668,10 @@ export function RoutingPage() {
               </TableHeader>
               <TableBody>
                 {rows.map((row, index) => (
-                  <TableRow key={index} data-disabled={!row.policy.enabled || undefined}>
+                  <TableRow
+                    key={index}
+                    data-disabled={!row.policy.enabled || undefined}
+                  >
                     <TableCell>
                       <button
                         type="button"
@@ -454,25 +681,41 @@ export function RoutingPage() {
                         <span className="flex items-center gap-2 font-medium">
                           {row.policy.icon && <span>{row.policy.icon}</span>}
                           {row.policy.name}
-                          {row.policy.isFinal && <Badge variant="outline">兜底</Badge>}
-                          {!row.policy.enabled && <StatusBadge tone="idle">停用</StatusBadge>}
+                          {row.policy.isFinal && (
+                            <Badge variant="outline">兜底</Badge>
+                          )}
+                          {!row.policy.enabled && (
+                            <StatusBadge tone="idle">停用</StatusBadge>
+                          )}
                         </span>
                         <span className="text-xs text-muted-foreground">
-                          {row.policy.rules.length === 0 ? '无规则（纯选择器）' : `${row.policy.rules.length} 条规则`}
+                          {ruleCountLabel(row.policy.rules)}
                         </span>
                       </button>
                     </TableCell>
 
                     <CellButton
-                      summary={cellSummary(effective(row, DEFAULT_COLUMN), memberLabel, false)}
-                      onClick={() => setCellEditor({ row: index, profileId: DEFAULT_COLUMN })}
+                      summary={cellSummary(
+                        effective(row, DEFAULT_COLUMN),
+                        memberLabel,
+                        false,
+                      )}
+                      onClick={() =>
+                        setCellEditor({ row: index, profileId: DEFAULT_COLUMN })
+                      }
                     />
 
                     {profiles.map((profile) => (
                       <CellButton
                         key={profile.id}
-                        summary={cellSummary(effective(row, profile.id), memberLabel, !row.cells.has(profile.id))}
-                        onClick={() => setCellEditor({ row: index, profileId: profile.id })}
+                        summary={cellSummary(
+                          effective(row, profile.id),
+                          memberLabel,
+                          !row.cells.has(profile.id),
+                        )}
+                        onClick={() =>
+                          setCellEditor({ row: index, profileId: profile.id })
+                        }
                       />
                     ))}
 
@@ -523,8 +766,14 @@ export function RoutingPage() {
           <CardAction className="flex items-center gap-2">
             <Select
               items={[
-                { value: String(DEFAULT_COLUMN), label: '默认（不含任何节点组）' },
-                ...profiles.map((p) => ({ value: String(p.id), label: p.name })),
+                {
+                  value: String(DEFAULT_COLUMN),
+                  label: "默认出口（按全部节点组）",
+                },
+                ...profiles.map((p) => ({
+                  value: String(p.id),
+                  label: p.name,
+                })),
               ]}
               value={String(previewProfile)}
               onValueChange={(value) => setPreviewProfile(Number(value))}
@@ -534,7 +783,9 @@ export function RoutingPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
-                  <SelectItem value={String(DEFAULT_COLUMN)}>默认（不含任何节点组）</SelectItem>
+                  <SelectItem value={String(DEFAULT_COLUMN)}>
+                    默认出口（按全部节点组）
+                  </SelectItem>
                   {profiles.map((profile) => (
                     <SelectItem key={profile.id} value={String(profile.id)}>
                       {profile.name}
@@ -543,8 +794,17 @@ export function RoutingPage() {
                 </SelectGroup>
               </SelectContent>
             </Select>
-            <Button variant="outline" size="sm" disabled={previewing} onClick={() => void runPreview()}>
-              {previewing ? <Spinner data-icon="inline-start" /> : <EyeIcon data-icon="inline-start" />}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={previewing}
+              onClick={() => void runPreview()}
+            >
+              {previewing ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <EyeIcon data-icon="inline-start" />
+              )}
               生成预览
             </Button>
           </CardAction>
@@ -554,7 +814,9 @@ export function RoutingPage() {
             <Alert variant="warning" className="mb-3">
               <TriangleAlertIcon />
               <AlertTitle>预览用的是已保存的配置</AlertTitle>
-              <AlertDescription>当前还有未保存的改动，先保存再预览才能看到它们。</AlertDescription>
+              <AlertDescription>
+                当前还有未保存的改动，先保存再预览才能看到它们。
+              </AlertDescription>
             </Alert>
           )}
           {preview?.error && (
@@ -564,8 +826,12 @@ export function RoutingPage() {
               <AlertDescription>{preview.error}</AlertDescription>
             </Alert>
           )}
-          {preview?.yaml && <CodeBlock className="max-h-[60vh]">{preview.yaml}</CodeBlock>}
-          {!preview && <p className="text-sm text-muted-foreground">还没有生成预览。</p>}
+          {preview?.yaml && (
+            <CodeBlock className="max-h-[60vh]">{preview.yaml}</CodeBlock>
+          )}
+          {!preview && (
+            <p className="text-sm text-muted-foreground">还没有生成预览。</p>
+          )}
         </CardContent>
       </Card>
 
@@ -574,14 +840,24 @@ export function RoutingPage() {
         options={options}
         onClose={() => setPolicyEditor(null)}
         onChange={(policy) => {
-          if (policyEditor === null) return
-          patchRows(rows.map((row, i) => (i === policyEditor ? { ...row, policy } : row)))
+          if (policyEditor === null) return;
+          patchRows(
+            rows.map((row, i) =>
+              i === policyEditor ? { ...row, policy } : row,
+            ),
+          );
+        }}
+        onRename={(name) => {
+          if (policyEditor !== null) renamePolicy(policyEditor, name);
         }}
         onSetFinal={() => {
-          if (policyEditor === null) return
+          if (policyEditor === null) return;
           patchRows(
-            rows.map((row, i) => ({ ...row, policy: { ...row.policy, isFinal: i === policyEditor } })),
-          )
+            rows.map((row, i) => ({
+              ...row,
+              policy: { ...row.policy, isFinal: i === policyEditor },
+            })),
+          );
         }}
       />
 
@@ -589,12 +865,17 @@ export function RoutingPage() {
         open={cellEditor !== null}
         profileName={
           cellEditor?.profileId === DEFAULT_COLUMN
-            ? '默认'
-            : (profiles.find((p) => p.id === cellEditor?.profileId)?.name ?? '')
+            ? "默认"
+            : (profiles.find((p) => p.id === cellEditor?.profileId)?.name ?? "")
         }
-        policyName={cellEditor ? rows[cellEditor.row].policy.name : ''}
+        policyName={cellEditor ? rows[cellEditor.row].policy.name : ""}
+        isFinal={cellEditor ? rows[cellEditor.row].policy.isFinal : false}
         isDefaultColumn={cellEditor?.profileId === DEFAULT_COLUMN}
-        own={cellEditor ? (rows[cellEditor.row].cells.get(cellEditor.profileId) ?? null) : null}
+        own={
+          cellEditor
+            ? (rows[cellEditor.row].cells.get(cellEditor.profileId) ?? null)
+            : null
+        }
         inherited={editingCell?.inherited ? editingCell.egress : null}
         options={options}
         groups={groups}
@@ -602,8 +883,8 @@ export function RoutingPage() {
         memberLabel={memberLabel}
         onClose={() => setCellEditor(null)}
         onChange={(egress) => {
-          if (!cellEditor) return
-          setCell(cellEditor.row, cellEditor.profileId, egress)
+          if (!cellEditor) return;
+          setCell(cellEditor.row, cellEditor.profileId, egress);
         }}
       />
 
@@ -618,27 +899,35 @@ export function RoutingPage() {
       <ConfirmDialog
         open={pendingProfileDelete !== null}
         onOpenChange={(open) => !open && setPendingProfileDelete(null)}
-        title={`删除方案「${pendingProfileDelete?.name ?? ''}」？`}
+        title={`删除方案「${pendingProfileDelete?.name ?? ""}」？`}
         description="节点组和策略都不受影响，但这个方案那一列的出口覆盖会一并删除。绑定了它的套餐必须先改掉。"
         confirmLabel="删除方案"
         onConfirm={async () => {
-          if (pendingProfileDelete) await removeProfile(pendingProfileDelete)
+          if (pendingProfileDelete) await removeProfile(pendingProfileDelete);
         }}
       />
 
       <ConfirmDialog
         open={pendingPolicyDelete !== null}
         onOpenChange={(open) => !open && setPendingPolicyDelete(null)}
-        title={`删除策略「${pendingPolicyDelete !== null ? rows[pendingPolicyDelete]?.policy.name : ''}」？`}
+        title={`删除策略「${pendingPolicyDelete !== null ? rows[pendingPolicyDelete]?.policy.name : ""}」？`}
         description="它的规则清单、每一列的出口，以及其他策略里对它的引用都会一并移除。保存后才会真正生效。"
         confirmLabel="删除策略"
         onConfirm={async () => {
-          if (pendingPolicyDelete !== null) removePolicy(pendingPolicyDelete)
-          setPendingPolicyDelete(null)
+          if (pendingPolicyDelete !== null) removePolicy(pendingPolicyDelete);
+          setPendingPolicyDelete(null);
         }}
       />
     </div>
-  )
+  );
+}
+
+function ruleCountLabel(rules: Policy["rules"]): string {
+  if (rules.length === 0) return "无规则（纯选择器）";
+  const off = rules.filter((rule) => rule.disabled).length;
+  return off > 0
+    ? `${rules.length} 条规则，${off} 条已停用`
+    : `${rules.length} 条规则`;
 }
 
 /** cellSummary renders what a column actually does, inheritance included. */
@@ -646,20 +935,23 @@ function cellSummary(
   resolved: { egress: Egress; inherited: boolean } | null,
   memberLabel: (member: EgressMember) => string,
   inheriting: boolean,
-): { text: string; tone: 'normal' | 'muted' | 'hidden' } {
-  if (!resolved) return { text: '未配置', tone: 'hidden' }
-  if (resolved.egress.hidden) return { text: '不可见', tone: 'hidden' }
-  const names = resolved.egress.members.map(memberLabel)
-  const text = names.length === 0 ? '（空）' : names.join(' · ')
-  return { text: `${resolved.egress.type} · ${text}`, tone: inheriting ? 'muted' : 'normal' }
+): { text: string; tone: "normal" | "muted" | "hidden" } {
+  if (!resolved) return { text: "未配置", tone: "hidden" };
+  if (resolved.egress.hidden) return { text: "不可见", tone: "hidden" };
+  const names = resolved.egress.members.map(memberLabel);
+  const text = names.length === 0 ? "（空）" : names.join(" · ");
+  return {
+    text: `${resolved.egress.type} · ${text}`,
+    tone: inheriting ? "muted" : "normal",
+  };
 }
 
 function CellButton({
   summary,
   onClick,
 }: {
-  summary: { text: string; tone: 'normal' | 'muted' | 'hidden' }
-  onClick: () => void
+  summary: { text: string; tone: "normal" | "muted" | "hidden" };
+  onClick: () => void;
 }) {
   return (
     <TableCell>
@@ -670,10 +962,10 @@ function CellButton({
       >
         <span
           className={
-            summary.tone === 'muted'
-              ? 'text-muted-foreground'
-              : summary.tone === 'hidden'
-                ? 'text-muted-foreground italic'
+            summary.tone === "muted"
+              ? "text-muted-foreground"
+              : summary.tone === "hidden"
+                ? "text-muted-foreground italic"
                 : undefined
           }
         >
@@ -681,7 +973,7 @@ function CellButton({
         </span>
       </button>
     </TableCell>
-  )
+  );
 }
 
 function PolicyDialog({
@@ -689,17 +981,22 @@ function PolicyDialog({
   options,
   onClose,
   onChange,
+  onRename,
   onSetFinal,
 }: {
-  row: Row | null
-  options: RoutingMatrix['options']
-  onClose: () => void
-  onChange: (policy: Policy) => void
-  onSetFinal: () => void
+  row: Row | null;
+  options: RoutingMatrix["options"];
+  onClose: () => void;
+  onChange: (policy: Policy) => void;
+  onRename: (name: string) => void;
+  onSetFinal: () => void;
 }) {
-  const policy = row?.policy
+  const policy = row?.policy;
   return (
-    <Dialog open={policy !== undefined} onOpenChange={(open) => !open && onClose()}>
+    <Dialog
+      open={policy !== undefined}
+      onOpenChange={(open) => !open && onClose()}
+    >
       <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>编辑分流策略</DialogTitle>
@@ -716,7 +1013,9 @@ function PolicyDialog({
                   id="policy-icon"
                   placeholder="🤖"
                   value={policy.icon}
-                  onChange={(event) => onChange({ ...policy, icon: event.target.value })}
+                  onChange={(event) =>
+                    onChange({ ...policy, icon: event.target.value })
+                  }
                 />
               </Field>
               <Field>
@@ -724,9 +1023,16 @@ function PolicyDialog({
                 <Input
                   id="policy-name"
                   value={policy.name}
-                  onChange={(event) => onChange({ ...policy, name: event.target.value })}
+                  aria-invalid={
+                    !policy.name.trim() ||
+                    policy.name.includes(",") ||
+                    undefined
+                  }
+                  onChange={(event) => onRename(event.target.value)}
                 />
-                <FieldDescription>客户端里的策略组名称就是「图标 + 名称」。</FieldDescription>
+                <FieldDescription>
+                  客户端里的策略组名称就是「图标 + 名称」。
+                </FieldDescription>
               </Field>
             </FieldGroup>
 
@@ -736,33 +1042,69 @@ function PolicyDialog({
                 <Switch
                   id="policy-enabled"
                   checked={policy.enabled}
-                  onCheckedChange={(enabled) => onChange({ ...policy, enabled })}
+                  onCheckedChange={(enabled) =>
+                    onChange({ ...policy, enabled })
+                  }
                 />
               </Field>
               <Field orientation="horizontal">
-                <FieldLabel htmlFor="policy-final">作为兜底（MATCH）</FieldLabel>
-                <Switch id="policy-final" checked={policy.isFinal} onCheckedChange={() => onSetFinal()} />
+                <FieldLabel htmlFor="policy-final">
+                  作为兜底（MATCH）
+                </FieldLabel>
+                <Switch
+                  id="policy-final"
+                  checked={policy.isFinal}
+                  onCheckedChange={() => onSetFinal()}
+                />
               </Field>
             </FieldGroup>
 
             <FieldSet>
-              <FieldLegend variant="label">规则清单（{policy.rules.length} 条）</FieldLegend>
-              <FieldDescription>自上而下匹配。清单为空也没关系——那就是个纯粹给用户手切的选择器。</FieldDescription>
+              <FieldLegend variant="label">
+                规则清单（{policy.rules.length} 条）
+              </FieldLegend>
+              <FieldDescription>
+                自上而下匹配。关掉开关的规则会保留但不下发。清单为空也没关系——那就是个纯粹给用户手切的选择器。
+              </FieldDescription>
               <ScrollArea className="max-h-72 rounded-lg border">
                 <div className="flex flex-col gap-2 p-3">
                   {policy.rules.map((rule, index) => (
-                    <div key={index} className="flex flex-wrap items-center gap-2">
+                    <div
+                      key={index}
+                      className="flex flex-wrap items-center gap-2"
+                      data-disabled={rule.disabled || undefined}
+                    >
+                      <Switch
+                        aria-label={`规则 ${index + 1} ${rule.disabled ? "已停用" : "已启用"}`}
+                        checked={!rule.disabled}
+                        onCheckedChange={(enabled) =>
+                          onChange({
+                            ...policy,
+                            rules: policy.rules.map((r, i) =>
+                              i === index ? { ...r, disabled: !enabled } : r,
+                            ),
+                          })
+                        }
+                      />
                       <Select
-                        items={options.ruleTypes.map((value) => ({ value, label: value }))}
+                        items={options.ruleTypes.map((value) => ({
+                          value,
+                          label: value,
+                        }))}
                         value={rule.type}
                         onValueChange={(value) =>
                           onChange({
                             ...policy,
-                            rules: policy.rules.map((r, i) => (i === index ? { ...r, type: String(value) } : r)),
+                            rules: policy.rules.map((r, i) =>
+                              i === index ? { ...r, type: String(value) } : r,
+                            ),
                           })
                         }
                       >
-                        <SelectTrigger className="w-44" aria-label={`规则 ${index + 1} 的匹配类型`}>
+                        <SelectTrigger
+                          className="w-44"
+                          aria-label={`规则 ${index + 1} 的匹配类型`}
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -776,7 +1118,11 @@ function PolicyDialog({
                         </SelectContent>
                       </Select>
                       <Input
-                        className="flex-1"
+                        className={
+                          rule.disabled
+                            ? "flex-1 line-through opacity-60"
+                            : "flex-1"
+                        }
                         aria-label={`规则 ${index + 1} 的内容`}
                         placeholder="例如 openai"
                         aria-invalid={!rule.value.trim() || undefined}
@@ -785,7 +1131,9 @@ function PolicyDialog({
                           onChange({
                             ...policy,
                             rules: policy.rules.map((r, i) =>
-                              i === index ? { ...r, value: event.target.value } : r,
+                              i === index
+                                ? { ...r, value: event.target.value }
+                                : r,
                             ),
                           })
                         }
@@ -794,12 +1142,17 @@ function PolicyDialog({
                         <Checkbox
                           aria-label={`规则 ${index + 1} 不解析域名`}
                           disabled={!options.noResolveTypes[rule.type]}
-                          checked={rule.noResolve && Boolean(options.noResolveTypes[rule.type])}
+                          checked={
+                            rule.noResolve &&
+                            Boolean(options.noResolveTypes[rule.type])
+                          }
                           onCheckedChange={(checked) =>
                             onChange({
                               ...policy,
                               rules: policy.rules.map((r, i) =>
-                                i === index ? { ...r, noResolve: Boolean(checked) } : r,
+                                i === index
+                                  ? { ...r, noResolve: Boolean(checked) }
+                                  : r,
                               ),
                             })
                           }
@@ -811,7 +1164,12 @@ function PolicyDialog({
                         size="icon-sm"
                         aria-label={`上移规则 ${index + 1}`}
                         disabled={index === 0}
-                        onClick={() => onChange({ ...policy, rules: move(policy.rules, index, -1) })}
+                        onClick={() =>
+                          onChange({
+                            ...policy,
+                            rules: move(policy.rules, index, -1),
+                          })
+                        }
                       >
                         ↑
                       </Button>
@@ -820,7 +1178,12 @@ function PolicyDialog({
                         size="icon-sm"
                         aria-label={`下移规则 ${index + 1}`}
                         disabled={index === policy.rules.length - 1}
-                        onClick={() => onChange({ ...policy, rules: move(policy.rules, index, 1) })}
+                        onClick={() =>
+                          onChange({
+                            ...policy,
+                            rules: move(policy.rules, index, 1),
+                          })
+                        }
                       >
                         ↓
                       </Button>
@@ -829,7 +1192,10 @@ function PolicyDialog({
                         size="icon-sm"
                         aria-label={`删除规则 ${index + 1}`}
                         onClick={() =>
-                          onChange({ ...policy, rules: policy.rules.filter((_, i) => i !== index) })
+                          onChange({
+                            ...policy,
+                            rules: policy.rules.filter((_, i) => i !== index),
+                          })
                         }
                       >
                         <TrashIcon />
@@ -845,7 +1211,12 @@ function PolicyDialog({
                           ...policy,
                           rules: [
                             ...policy.rules,
-                            { type: 'GEOSITE', value: '', noResolve: false, disabled: false },
+                            {
+                              type: "GEOSITE",
+                              value: "",
+                              noResolve: false,
+                              disabled: false,
+                            },
                           ],
                         })
                       }
@@ -863,7 +1234,9 @@ function PolicyDialog({
               <Input
                 id="policy-remark"
                 value={policy.remark}
-                onChange={(event) => onChange({ ...policy, remark: event.target.value })}
+                onChange={(event) =>
+                  onChange({ ...policy, remark: event.target.value })
+                }
               />
             </Field>
           </FieldGroup>
@@ -873,13 +1246,14 @@ function PolicyDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+  );
 }
 
 function EgressDialog({
   open,
   policyName,
   profileName,
+  isFinal,
   isDefaultColumn,
   own,
   inherited,
@@ -890,32 +1264,36 @@ function EgressDialog({
   onClose,
   onChange,
 }: {
-  open: boolean
-  policyName: string
-  profileName: string
-  isDefaultColumn: boolean
-  own: Egress | null
-  inherited: Egress | null
-  options: RoutingMatrix['options']
-  groups: NodeGroup[]
-  policies: Policy[]
-  memberLabel: (member: EgressMember) => string
-  onClose: () => void
-  onChange: (egress: Egress | null) => void
+  open: boolean;
+  policyName: string;
+  profileName: string;
+  /** The MATCH policy: every column needs it, so it cannot be hidden. */
+  isFinal: boolean;
+  isDefaultColumn: boolean;
+  own: Egress | null;
+  inherited: Egress | null;
+  options: RoutingMatrix["options"];
+  groups: NodeGroup[];
+  policies: Policy[];
+  memberLabel: (member: EgressMember) => string;
+  onClose: () => void;
+  onChange: (egress: Egress | null) => void;
 }) {
-  const mode: 'inherit' | 'custom' | 'hidden' = own === null ? 'inherit' : own.hidden ? 'hidden' : 'custom'
-  const current = own ?? inherited
+  const mode: "inherit" | "custom" | "hidden" =
+    own === null ? "inherit" : own.hidden ? "hidden" : "custom";
+  const current = own ?? inherited;
 
-  const setMode = (next: 'inherit' | 'custom' | 'hidden') => {
-    if (next === 'inherit') return onChange(null)
-    if (next === 'hidden') return onChange({ ...(current ?? blankEgress(0)), hidden: true })
-    onChange({ ...(current ?? blankEgress(0)), hidden: false })
-  }
+  const setMode = (next: "inherit" | "custom" | "hidden") => {
+    if (next === "inherit") return onChange(null);
+    if (next === "hidden")
+      return onChange({ ...(current ?? blankEgress(0)), hidden: true });
+    onChange({ ...(current ?? blankEgress(0)), hidden: false });
+  };
 
   const patch = (values: Partial<Egress>) => {
-    if (!current) return
-    onChange({ ...current, ...values, hidden: false })
-  }
+    if (!current) return;
+    onChange({ ...current, ...values, hidden: false });
+  };
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
@@ -926,8 +1304,8 @@ function EgressDialog({
           </DialogTitle>
           <DialogDescription>
             {isDefaultColumn
-              ? '默认出口是每个方案的兜底；写「全部节点组」就能让每个方案自动收窄到它自己的白名单。'
-              : '只在和默认不同的时候才需要覆盖。'}
+              ? "默认出口是每个方案的兜底；写「全部节点组」就能让每个方案自动收窄到它自己的白名单。"
+              : "只在和默认不同的时候才需要覆盖。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -937,12 +1315,24 @@ function EgressDialog({
               <FieldLabel htmlFor="egress-mode">这一格</FieldLabel>
               <Select
                 items={[
-                  { value: 'inherit', label: '跟随默认' },
-                  { value: 'custom', label: '自定义出口' },
-                  { value: 'hidden', label: '不可见（这个方案没有这条分流）' },
+                  { value: "inherit", label: "跟随默认" },
+                  { value: "custom", label: "自定义出口" },
+                  // A final cell already stored as hidden (from before the
+                  // server refused it) still has to display, so it can be
+                  // switched back.
+                  ...(isFinal && mode !== "hidden"
+                    ? []
+                    : [
+                        {
+                          value: "hidden",
+                          label: "不可见（这个方案没有这条分流）",
+                        },
+                      ]),
                 ]}
                 value={mode}
-                onValueChange={(value) => setMode(value as 'inherit' | 'custom' | 'hidden')}
+                onValueChange={(value) =>
+                  setMode(value as "inherit" | "custom" | "hidden")
+                }
               >
                 <SelectTrigger id="egress-mode" className="w-full">
                   <SelectValue />
@@ -951,23 +1341,37 @@ function EgressDialog({
                   <SelectGroup>
                     <SelectItem value="inherit">跟随默认</SelectItem>
                     <SelectItem value="custom">自定义出口</SelectItem>
-                    <SelectItem value="hidden">不可见（这个方案没有这条分流）</SelectItem>
+                    {(!isFinal || mode === "hidden") && (
+                      <SelectItem value="hidden">
+                        不可见（这个方案没有这条分流）
+                      </SelectItem>
+                    )}
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              {mode === 'hidden' && (
-                <FieldDescription>它的策略组和规则都不会下发，这类流量会落到后面的规则或兜底。</FieldDescription>
+              {mode === "hidden" && (
+                <FieldDescription>
+                  它的策略组和规则都不会下发，这类流量会落到后面的规则或兜底。
+                </FieldDescription>
+              )}
+              {isFinal && (
+                <FieldDescription>
+                  兜底策略每个方案都必须有，所以不能设为不可见。
+                </FieldDescription>
               )}
             </Field>
           )}
 
-          {mode !== 'hidden' && current && (
+          {mode !== "hidden" && current && (
             <>
               <FieldGroup className="grid gap-4 sm:grid-cols-2">
                 <Field>
                   <FieldLabel htmlFor="egress-type">选择方式</FieldLabel>
                   <Select
-                    items={options.groupTypes.map((value) => ({ value, label: value }))}
+                    items={options.groupTypes.map((value) => ({
+                      value,
+                      label: value,
+                    }))}
                     value={current.type}
                     onValueChange={(value) => patch({ type: String(value) })}
                   >
@@ -985,26 +1389,70 @@ function EgressDialog({
                     </SelectContent>
                   </Select>
                 </Field>
-                {current.type !== 'select' && (
+                {current.type !== "select" && (
                   <Field>
-                    <FieldLabel htmlFor="egress-interval">测速间隔 (秒)</FieldLabel>
+                    <FieldLabel htmlFor="egress-interval">
+                      测速间隔 (秒)
+                    </FieldLabel>
                     <Input
                       id="egress-interval"
                       type="number"
                       min={0}
                       value={current.interval}
-                      onChange={(event) => patch({ interval: Number(event.target.value) })}
+                      onChange={(event) =>
+                        patch({ interval: Number(event.target.value) })
+                      }
                     />
                   </Field>
                 )}
               </FieldGroup>
+              {current.type !== "select" && (
+                <FieldGroup className="grid gap-4 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor="egress-test-url">测速地址</FieldLabel>
+                    <Input
+                      id="egress-test-url"
+                      placeholder="留空用 gstatic generate_204"
+                      value={current.testUrl}
+                      onChange={(event) =>
+                        patch({ testUrl: event.target.value })
+                      }
+                    />
+                  </Field>
+                  {current.type === "url-test" && (
+                    <Field>
+                      <FieldLabel htmlFor="egress-tolerance">
+                        切换容差 (毫秒)
+                      </FieldLabel>
+                      <Input
+                        id="egress-tolerance"
+                        type="number"
+                        min={0}
+                        value={current.tolerance}
+                        onChange={(event) =>
+                          patch({ tolerance: Number(event.target.value) })
+                        }
+                      />
+                      <FieldDescription>
+                        新节点要比当前快这么多才切换。
+                      </FieldDescription>
+                    </Field>
+                  )}
+                </FieldGroup>
+              )}
 
               <FieldSet>
                 <FieldLegend variant="label">成员</FieldLegend>
-                <FieldDescription>顺序就是客户端里的排列顺序，解析不到的成员会被自动跳过。</FieldDescription>
+                <FieldDescription>
+                  顺序就是客户端里的排列顺序，解析不到的成员会被自动跳过。
+                </FieldDescription>
                 <div className="flex flex-wrap items-center gap-2">
                   {current.members.map((member, index) => (
-                    <Badge key={index} variant="secondary" className="gap-1 pr-1">
+                    <Badge
+                      key={index}
+                      variant="secondary"
+                      className="gap-1 pr-1"
+                    >
                       {memberLabel(member)}
                       <Button
                         variant="ghost"
@@ -1012,7 +1460,9 @@ function EgressDialog({
                         className="size-5"
                         aria-label={`把成员 ${index + 1} 前移`}
                         disabled={index === 0}
-                        onClick={() => patch({ members: move(current.members, index, -1) })}
+                        onClick={() =>
+                          patch({ members: move(current.members, index, -1) })
+                        }
                       >
                         ←
                       </Button>
@@ -1021,7 +1471,13 @@ function EgressDialog({
                         size="icon-sm"
                         className="size-5"
                         aria-label={`移除成员 ${index + 1}`}
-                        onClick={() => patch({ members: current.members.filter((_, i) => i !== index) })}
+                        onClick={() =>
+                          patch({
+                            members: current.members.filter(
+                              (_, i) => i !== index,
+                            ),
+                          })
+                        }
                       >
                         ×
                       </Button>
@@ -1031,19 +1487,24 @@ function EgressDialog({
                     groups={groups}
                     policies={policies.filter((p) => p.name !== policyName)}
                     builtins={options.builtins}
-                    onPick={(member) => patch({ members: [...current.members, member] })}
+                    onPick={(member) =>
+                      patch({ members: [...current.members, member] })
+                    }
                   />
                 </div>
                 {current.members.length === 0 && (
-                  <FieldDescription>成员为空的策略组会被渲染时丢弃，指向它的规则会落到兜底。</FieldDescription>
+                  <FieldDescription>
+                    成员为空的策略组会被渲染时丢弃，指向它的规则会落到兜底。
+                  </FieldDescription>
                 )}
               </FieldSet>
             </>
           )}
 
-          {mode === 'inherit' && inherited && (
+          {mode === "inherit" && inherited && (
             <FieldDescription>
-              当前跟随默认：{inherited.type} · {inherited.members.map(memberLabel).join(' · ') || '（空）'}
+              当前跟随默认：{inherited.type} ·{" "}
+              {inherited.members.map(memberLabel).join(" · ") || "（空）"}
             </FieldDescription>
           )}
         </FieldGroup>
@@ -1053,7 +1514,7 @@ function EgressDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+  );
 }
 
 function MemberPicker({
@@ -1062,12 +1523,12 @@ function MemberPicker({
   builtins,
   onPick,
 }: {
-  groups: NodeGroup[]
-  policies: Policy[]
-  builtins: string[]
-  onPick: (member: EgressMember) => void
+  groups: NodeGroup[];
+  policies: Policy[];
+  builtins: string[];
+  onPick: (member: EgressMember) => void;
 }) {
-  const pick = (kind: MemberKind, ref: string) => onPick({ kind, ref })
+  const pick = (kind: MemberKind, ref: string) => onPick({ kind, ref });
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="outline" size="sm" />}>
@@ -1075,13 +1536,18 @@ function MemberPicker({
         添加成员
         <ChevronDownIcon data-icon="inline-end" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-80 min-w-56 overflow-y-auto">
+      <DropdownMenuContent
+        align="start"
+        className="max-h-80 min-w-56 overflow-y-auto"
+      >
         <DropdownMenuGroup>
           <DropdownMenuLabel>动态展开</DropdownMenuLabel>
-          <DropdownMenuItem onClick={() => pick('all-node-groups', '')}>
+          <DropdownMenuItem onClick={() => pick("all-node-groups", "")}>
             全部节点组（按方案收窄）
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => pick('all-inbounds', '')}>全部入站</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => pick("all-inbounds", "")}>
+            全部入站
+          </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         {groups.length > 0 && (
@@ -1089,7 +1555,10 @@ function MemberPicker({
             <DropdownMenuGroup>
               <DropdownMenuLabel>节点组</DropdownMenuLabel>
               {groups.map((group) => (
-                <DropdownMenuItem key={group.id} onClick={() => pick('node-group', group.name)}>
+                <DropdownMenuItem
+                  key={group.id}
+                  onClick={() => pick("node-group", group.name)}
+                >
                   {group.emoji ? `${group.emoji} ${group.name}` : group.name}
                 </DropdownMenuItem>
               ))}
@@ -1102,7 +1571,10 @@ function MemberPicker({
             <DropdownMenuGroup>
               <DropdownMenuLabel>分流策略</DropdownMenuLabel>
               {policies.map((policy) => (
-                <DropdownMenuItem key={policy.name} onClick={() => pick('policy', policy.name)}>
+                <DropdownMenuItem
+                  key={policy.name}
+                  onClick={() => pick("policy", policy.name)}
+                >
                   {policy.icon ? `${policy.icon} ${policy.name}` : policy.name}
                 </DropdownMenuItem>
               ))}
@@ -1113,14 +1585,17 @@ function MemberPicker({
         <DropdownMenuGroup>
           <DropdownMenuLabel>内置策略</DropdownMenuLabel>
           {builtins.map((builtin) => (
-            <DropdownMenuItem key={builtin} onClick={() => pick('builtin', builtin)}>
+            <DropdownMenuItem
+              key={builtin}
+              onClick={() => pick("builtin", builtin)}
+            >
               {builtin}
             </DropdownMenuItem>
           ))}
         </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
-  )
+  );
 }
 
 function ProfileDialog({
@@ -1130,17 +1605,19 @@ function ProfileDialog({
   onClose,
   onSave,
 }: {
-  draft: ProfileDraft | null
-  groups: NodeGroup[]
-  onChange: (draft: ProfileDraft) => void
-  onClose: () => void
-  onSave: () => void
+  draft: ProfileDraft | null;
+  groups: NodeGroup[];
+  onChange: (draft: ProfileDraft) => void;
+  onClose: () => void;
+  onSave: () => void;
 }) {
   return (
     <Dialog open={draft !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{draft?.id ? '编辑分流方案' : '新建分流方案'}</DialogTitle>
+          <DialogTitle>
+            {draft?.id ? "编辑分流方案" : "新建分流方案"}
+          </DialogTitle>
           <DialogDescription>
             可用节点组决定这个方案的用户能连上哪些入站。保存后会立刻同步到相关面板。
           </DialogDescription>
@@ -1153,7 +1630,9 @@ function ProfileDialog({
                 id="profile-name"
                 placeholder="VIP"
                 value={draft.name}
-                onChange={(event) => onChange({ ...draft, name: event.target.value })}
+                onChange={(event) =>
+                  onChange({ ...draft, name: event.target.value })
+                }
               />
             </Field>
 
@@ -1162,17 +1641,23 @@ function ProfileDialog({
               <Switch
                 id="profile-all"
                 checked={draft.allGroups}
-                onCheckedChange={(allGroups) => onChange({ ...draft, allGroups })}
+                onCheckedChange={(allGroups) =>
+                  onChange({ ...draft, allGroups })
+                }
               />
             </Field>
 
             {!draft.allGroups && (
               <FieldSet>
-                <FieldLegend variant="label">可用节点组（已选 {draft.groupIds.length} 个）</FieldLegend>
+                <FieldLegend variant="label">
+                  可用节点组（已选 {draft.groupIds.length} 个）
+                </FieldLegend>
                 <ScrollArea className="h-56 rounded-lg border">
                   <FieldGroup className="gap-2 p-3">
                     {groups.length === 0 ? (
-                      <FieldDescription>还没有节点组，先去「节点组」页建一个。</FieldDescription>
+                      <FieldDescription>
+                        还没有节点组，先去「节点组」页建一个。
+                      </FieldDescription>
                     ) : (
                       groups.map((group) => (
                         <Field key={group.id} orientation="horizontal">
@@ -1183,15 +1668,25 @@ function ProfileDialog({
                               onChange({
                                 ...draft,
                                 groupIds: draft.groupIds.includes(group.id)
-                                  ? draft.groupIds.filter((id) => id !== group.id)
+                                  ? draft.groupIds.filter(
+                                      (id) => id !== group.id,
+                                    )
                                   : [...draft.groupIds, group.id],
                               })
                             }
                           />
                           <FieldLabel htmlFor={`profile-group-${group.id}`}>
-                            <span>{group.emoji ? `${group.emoji} ${group.name}` : group.name}</span>
-                            <span className="text-muted-foreground">{group.usableInbounds} 个入站</span>
-                            {!group.enabled && <StatusBadge tone="idle">停用</StatusBadge>}
+                            <span>
+                              {group.emoji
+                                ? `${group.emoji} ${group.name}`
+                                : group.name}
+                            </span>
+                            <span className="text-muted-foreground">
+                              {group.usableInbounds} 个入站
+                            </span>
+                            {!group.enabled && (
+                              <StatusBadge tone="idle">停用</StatusBadge>
+                            )}
                           </FieldLabel>
                         </Field>
                       ))
@@ -1215,7 +1710,9 @@ function ProfileDialog({
               <Input
                 id="profile-remark"
                 value={draft.remark}
-                onChange={(event) => onChange({ ...draft, remark: event.target.value })}
+                onChange={(event) =>
+                  onChange({ ...draft, remark: event.target.value })
+                }
               />
             </Field>
           </FieldGroup>
@@ -1230,5 +1727,5 @@ function ProfileDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+  );
 }

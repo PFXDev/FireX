@@ -20,6 +20,11 @@ const settingSchemaVersion = "schema.version"
 // profile whose node-group whitelist decides what a user may reach.
 const schemaVersion = 2
 
+// SettingRoutingReview is set when a migration regrouped routing data in a way
+// the operator should look over — policy order, synthesised profiles — and is
+// cleared the first time the matrix is saved.
+const SettingRoutingReview = "routing.review"
+
 // Legacy setting keys, read once during migration and then dropped.
 const (
 	legacyKeyRouting = "clash.routing"
@@ -51,6 +56,9 @@ func (d *DB) migrate(path string) error {
 	if legacy {
 		if err := d.fillFromLegacy(); err != nil {
 			return fmt.Errorf("migrate legacy data: %w", err)
+		}
+		if err := d.SetSetting(SettingRoutingReview, "1"); err != nil {
+			return err
 		}
 	}
 	return d.SetSetting(settingSchemaVersion, strconv.Itoa(schemaVersion))
@@ -549,6 +557,11 @@ func subsetOf(members []uint, granted map[uint]bool) bool {
 // bug, and older SQLite builds cannot drop columns at all.
 func (d *DB) dropLegacyColumns() {
 	for _, stmt := range []string{
+		// SQLite will not drop an indexed column; the old schema indexed
+		// these three.
+		`DROP INDEX IF EXISTS idx_nodes_region`,
+		`DROP INDEX IF EXISTS idx_node_groups_region`,
+		`DROP INDEX IF EXISTS idx_node_groups_line`,
 		`ALTER TABLE inbounds DROP COLUMN region`,
 		`ALTER TABLE inbounds DROP COLUMN tags`,
 		`ALTER TABLE inbounds DROP COLUMN multiplier`,

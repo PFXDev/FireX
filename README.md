@@ -271,14 +271,23 @@ one default column serves every tier and most cells stay empty.
 
 Everything references a node group or policy by its **bare name**, never by the
 name clients see, so changing an emoji cannot orphan a reference. Renaming a
-node group rewrites every egress member in the same request; deleting one drops
-those members and un-whitelists it from every profile.
+node group or a policy rewrites every egress member that pointed at it in the
+same request; deleting one drops those members (and, for a node group,
+un-whitelists it from every profile).
 
 Saving the matrix runs in one transaction and validates before it commits:
 unknown references, a comma in a name (rules are comma-separated), a name that
-collides with a node group, an unknown matcher, more or fewer than one final
-policy, and loops between policies are all rejected with the reason and roll the
-whole save back.
+collides with a node group or with a mihomo builtin such as `DIRECT`, an unknown
+matcher, more or fewer than one final policy, a profile column that hides the
+final policy, and loops between policies are all rejected with the reason and
+roll the whole save back.
+
+Edits that change which inbounds a user holds — node group membership, a group
+or inbound being disabled, a profile's whitelist, a plan's profile — are pushed
+to the panels before the request returns. The row is saved either way; if a
+panel refused the push, the response carries `syncError` and the UI shows it
+next to the success toast, so a panel that disagrees with FireX is never
+silent.
 
 Groups that end up empty — a profile that grants no inbound in that group — are
 dropped at render time, and any rule pointing at a dropped or unknown group is
@@ -310,7 +319,8 @@ ever widened — a cheap plan silently gaining a premium line would be worse tha
 some migration clutter. Two things cannot be restored faithfully and are worth
 reviewing afterwards: rules that interleaved between policies keep their
 relative order but move as a block, and the generated leftover groups usually
-want merging by hand.
+want merging by hand. The routing page shows a review banner after a migration
+until the matrix is saved once.
 
 ## Quota enforcement
 

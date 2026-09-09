@@ -50,19 +50,38 @@ func Groups(db *store.DB, profileID uint) ([]model.NodeGroup, error) {
 	return groups, err
 }
 
+// AllGroups is every enabled node group in render order: what the default
+// column serves a profile that takes everything. Only the preview reads it —
+// a user's own set always goes through Groups, so a plan bound to no profile
+// grants nothing.
+func AllGroups(db *store.DB) ([]model.NodeGroup, error) {
+	var groups []model.NodeGroup
+	err := db.Where("enabled = ?", true).Order("sort_order ASC, id ASC").Find(&groups).Error
+	return groups, err
+}
+
 // InboundsForProfile is the profile's whitelist flattened to the inbounds that
 // can actually carry traffic right now, in display order and without repeats.
 func InboundsForProfile(db *store.DB, profileID uint) ([]model.Inbound, error) {
 	groups, err := Groups(db, profileID)
-	if err != nil || len(groups) == 0 {
+	if err != nil {
 		return nil, err
+	}
+	return InboundsIn(db, groups)
+}
+
+// InboundsIn flattens node groups to the inbounds that can carry traffic right
+// now: enabled, still present upstream, on an enabled panel.
+func InboundsIn(db *store.DB, groups []model.NodeGroup) ([]model.Inbound, error) {
+	if len(groups) == 0 {
+		return nil, nil
 	}
 	ids := make([]uint, 0, len(groups))
 	for _, g := range groups {
 		ids = append(ids, g.ID)
 	}
 	var inbounds []model.Inbound
-	err = db.
+	err := db.
 		Distinct("inbounds.*").
 		Joins("JOIN node_group_inbounds m ON m.inbound_id = inbounds.id").
 		Joins("JOIN panels ON panels.id = inbounds.panel_id").
@@ -105,6 +124,25 @@ type cell struct {
 // grant, a policy that is hidden here — are dropped rather than emitted, and
 // any group left empty is pruned by clash.Render.
 func Compile(db *store.DB, profileID uint, proxies []Proxy) (clash.Input, error) {
+	groups, err := Groups(db, profileID)
+	if err != nil {
+		return clash.Input{}, err
+	}
+	return compile(db, profileID, groups, proxies)
+}
+
+// CompileDefault renders the default column over every enabled node group, so
+// the preview can show what the defaults look like before a profile narrows
+// them. No user is ever served this.
+func CompileDefault(db *store.DB, proxies []Proxy) (clash.Input, error) {
+	groups, err := AllGroups(db)
+	if err != nil {
+		return clash.Input{}, err
+	}
+	return compile(db, model.DefaultProfileID, groups, proxies)
+}
+
+func compile(db *store.DB, profileID uint, groups []model.NodeGroup, proxies []Proxy) (clash.Input, error) {
 	in := clash.Input{Proxies: make([]clash.Proxy, 0, len(proxies))}
 	proxyNames := make([]string, 0, len(proxies))
 	nameByInbound := make(map[uint]string, len(proxies))
@@ -123,10 +161,6 @@ func Compile(db *store.DB, profileID uint, proxies []Proxy) (clash.Input, error)
 		}
 	}
 
-	groups, err := Groups(db, profileID)
-	if err != nil {
-		return in, err
-	}
 	groupIDs := make([]uint, 0, len(groups))
 	for _, g := range groups {
 		groupIDs = append(groupIDs, g.ID)
