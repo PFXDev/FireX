@@ -63,7 +63,7 @@ created by hand.
 - A 3x-ui panel exposing `/panel/api` with an **admin**-scope API token
   (Settings → API tokens). Monitor and node-sync scopes are not enough — FireX
   creates and edits clients.
-- Go 1.24+ and Node 20+ to build.
+- Go 1.26+ and Node 22+ to build.
 
 ## Quick start
 
