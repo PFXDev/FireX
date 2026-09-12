@@ -51,8 +51,8 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("routing.Seed() error = %v", err)
 	}
 
-	if _, _, err := EnsureAdmin(db, "admin", "password123"); err != nil {
-		t.Fatalf("EnsureAdmin() error = %v", err)
+	if _, _, err := ensureAdmin(db, "admin", "password123"); err != nil {
+		t.Fatalf("ensureAdmin() error = %v", err)
 	}
 
 	cfg := &config.Config{}

@@ -236,6 +236,49 @@ func TestLoadRejectsBrokenFile(t *testing.T) {
 	}
 }
 
+// TestSaveWritesBack covers the bootstrap blanking a consumed adminPassword:
+// the rest of the file has to come through untouched, and the next Load has to
+// see the file as complete rather than rewrite it.
+func TestSaveWritesBack(t *testing.T) {
+	cfg, _, path := load(t, `{"listen": ":9000", "adminPassword": "hunter2"}`)
+	cfg.AdminPassword = ""
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Errorf("config mode after Save = %o, want 600", mode)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back config: %v", err)
+	}
+	if strings.Contains(string(saved), "hunter2") {
+		t.Errorf("Save() left the consumed password in the file:\n%s", saved)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() after Save: %v", err)
+	}
+	if again.AdminPassword != "" {
+		t.Errorf("AdminPassword after Save and Load = %q, want empty", again.AdminPassword)
+	}
+	if again.Listen != ":9000" {
+		t.Errorf("Listen after Save and Load = %q, want :9000", again.Listen)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back config: %v", err)
+	}
+	if string(after) != string(saved) {
+		t.Errorf("Load() rewrote what Save() wrote:\n%s\nwant:\n%s", after, saved)
+	}
+}
+
 func TestUpdaterConvertsInterval(t *testing.T) {
 	cfg := Template()
 	cfg.Update.CheckInterval = Duration(90 * time.Minute)

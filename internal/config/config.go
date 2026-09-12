@@ -37,9 +37,14 @@ type Config struct {
 	SubBaseURL string `json:"subBaseUrl"`
 	Debug      bool   `json:"debug"`
 
-	// Bootstrap admin, applied only when no admin row exists yet. An empty
-	// password means one is generated and printed once on first start.
-	AdminUser     string `json:"adminUser"`
+	// AdminUser names the admin: created on first start, and the account a
+	// later AdminPassword override applies to.
+	AdminUser string `json:"adminUser"`
+	// AdminPassword is consumed, not kept. On first start it is the new
+	// admin's password (empty means one is generated and printed once); on any
+	// later start it resets that admin's password. Either way it is then
+	// blanked out of the file, so the plaintext lives there only between the
+	// operator writing it and the next start.
 	AdminPassword string `json:"adminPassword"`
 
 	SyncInterval     Duration `json:"syncInterval"`
@@ -135,6 +140,17 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// Save writes the config as it stands to path, in the same shape Load reads.
+// Its one caller is the admin bootstrap blanking a consumed adminPassword; the
+// file is otherwise the operator's to write.
+func (c *Config) Save(path string) error {
+	out, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", path, err)
+	}
+	return write(path, append(out, '\n'))
+}
+
 // complete fills in every setting the file left empty or set to something FireX
 // cannot act on, so the file written back is the config this run actually uses
 // rather than a list of intentions.
@@ -206,9 +222,9 @@ func (u Update) Updater() updater.Config {
 	})
 }
 
-// write replaces the config atomically. The bootstrap password lives in here,
-// so the file is created fresh at 0600 rather than written through an existing
-// mode, and a crash mid-write leaves the previous config intact.
+// write replaces the config atomically. An admin password may be sitting in
+// here, so the file is created fresh at 0600 rather than written through an
+// existing mode, and a crash mid-write leaves the previous config intact.
 func write(path string, data []byte) error {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o750); err != nil {

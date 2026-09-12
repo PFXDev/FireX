@@ -143,8 +143,8 @@ written as anything but a string, aborts startup.
 | `dbPath`               | Explicit database path; empty follows `dataDir`                   |
 | `subBaseUrl`           | Public origin for subscription URLs; empty derives it per request |
 | `debug`                | Verbose logging and SQL tracing                                   |
-| `adminUser`            | Bootstrap admin username (first run only)                         |
-| `adminPassword`        | Bootstrap admin password (first run only); empty generates one    |
+| `adminUser`            | Admin username; created on first start, reset target after        |
+| `adminPassword`        | One-shot: sets the admin's password on the next start, then blanks |
 | `syncInterval`         | Full user reconcile interval                                      |
 | `trafficInterval`      | Traffic collection and quota enforcement interval                 |
 | `discoverInterval`     | Inbound discovery interval                                        |
@@ -157,10 +157,15 @@ written as anything but a string, aborts startup.
 
 Durations are anything `time.ParseDuration` accepts: `"90s"`, `"2m"`, `"1h30m"`.
 Relative paths resolve against the working directory, not against the config
-file. `adminUser` and `adminPassword` are read only while no admin exists — the
-file is written `0600` because of that one setting, and editing it later changes
-nothing. Set `subBaseUrl` when running behind a reverse proxy, otherwise the
-subscription URLs shown in the UI use whatever `Host` the browser sent.
+file. `adminPassword` is consumed rather than kept: whatever is there on start
+becomes the admin's password — the new admin's on first start, a reset of
+`adminUser`'s on any later one — and the setting is then blanked from the file,
+which is written `0600` for the moments it holds one. That is also the way back
+in from a lost password: write one, restart, sign in, and find the setting
+empty again. Every session open under the old password is signed out. Leave it
+empty on first start and FireX generates one and prints it to the log once. Set
+`subBaseUrl` when running behind a reverse proxy, otherwise the subscription
+URLs shown in the UI use whatever `Host` the browser sent.
 
 Changes take effect on restart; FireX never reloads the file underneath itself.
 Everything an admin can change while it runs — the mihomo template, the routing

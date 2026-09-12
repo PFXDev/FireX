@@ -49,17 +49,11 @@ func main() {
 		log.Fatalf("firex: seed routing: %v", err)
 	}
 
-	created, generated, err := server.EnsureAdmin(db, cfg.AdminUser, cfg.AdminPassword)
-	if err != nil {
+	// The config's adminPassword is a one-shot override — creating the admin
+	// on first start, resetting it after — and is blanked from the file once
+	// applied, so this is also the way back in from a lost password.
+	if err := server.BootstrapAdmin(db, cfg, *configPath); err != nil {
 		log.Fatalf("firex: bootstrap admin: %v", err)
-	}
-	if created {
-		if generated != "" {
-			log.Printf("firex: created admin %q with generated password: %s", cfg.AdminUser, generated)
-			log.Printf("firex: this password is shown once; change it after signing in")
-		} else {
-			log.Printf("firex: created admin %q from the password in %s", cfg.AdminUser, *configPath)
-		}
 	}
 
 	mgr := provision.NewManager(db)
