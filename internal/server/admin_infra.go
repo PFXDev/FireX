@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -296,6 +297,23 @@ type inboundRequest struct {
 	SortOrder *int   `json:"sortOrder"`
 	Enabled   *bool  `json:"enabled"`
 	UDP       *bool  `json:"udp"`
+	// PublicAddress and PublicPort override the endpoint the panel advertises.
+	// Absent leaves the stored value; an empty string or zero clears it.
+	PublicAddress *string `json:"publicAddress"`
+	PublicPort    *int    `json:"publicPort"`
+}
+
+// validPublicAddress accepts a bare hostname or IP literal. Anything that
+// looks like a URL or carries whitespace would end up verbatim in a share link
+// and produce an entry every client rejects.
+func validPublicAddress(addr string) bool {
+	if addr == "" {
+		return true
+	}
+	if strings.ContainsAny(addr, " \t\r\n/@:?#[]") {
+		return net.ParseIP(addr) != nil
+	}
+	return true
 }
 
 func (s *Server) updateInbound(c *gin.Context) {
@@ -324,6 +342,21 @@ func (s *Server) updateInbound(c *gin.Context) {
 	}
 	if req.UDP != nil {
 		inbound.UDP = *req.UDP
+	}
+	if req.PublicAddress != nil {
+		addr := strings.TrimSpace(*req.PublicAddress)
+		if !validPublicAddress(addr) {
+			failMsg(c, http.StatusBadRequest, "publicAddress must be a hostname or IP address")
+			return
+		}
+		inbound.PublicAddress = addr
+	}
+	if req.PublicPort != nil {
+		if *req.PublicPort < 0 || *req.PublicPort > 65535 {
+			failMsg(c, http.StatusBadRequest, "publicPort must be between 0 and 65535")
+			return
+		}
+		inbound.PublicPort = *req.PublicPort
 	}
 	inbound.UpdatedAt = provision.NowMs()
 	if err := s.db.Save(&inbound).Error; err != nil {

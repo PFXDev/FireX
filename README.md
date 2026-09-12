@@ -25,8 +25,9 @@ and no user-facing portal — just an admin UI and a subscription endpoint.
   admin-scoped API token. Panels stay ordinary independent installs; FireX
   never needs them clustered.
 - **Inbound** — one inbound on one panel, discovered automatically and shown to
-  clients as a single proxy. FireX owns the display name and emoji; rediscovery
-  never overwrites them.
+  clients as a single proxy. FireX owns the display name, emoji and, when the
+  panel's own address or port is not the one clients should dial, the public
+  endpoint; rediscovery never overwrites them.
 - **Node group** (节点组) — hand-picked inbounds from any number of panels
   presented as one proxy-group, normally one region on one line
   (`🇭🇰 香港 IEPL`). It carries key/value tags (地区, 线路, 落地) for filtering,
@@ -235,6 +236,14 @@ so clients can show remaining traffic.
 Share links come from each panel's own link generator, so Reality keys, host
 overrides and external addresses stay correct. FireX only rewrites the display
 name and converts them into mihomo proxy entries.
+
+The one exception is the endpoint. A panel can only advertise where xray
+listens, and that is not always where clients should knock: an inbound parked
+on `127.0.0.1:9443` behind an SNI router that owns 443, a relay, a CDN. Set
+**public address** and **public port** on the inbound and FireX substitutes
+them into the link and the mihomo entry after matching; everything else in the
+link, Reality keys included, is left as the panel wrote it. Leave a field empty
+to keep the panel's value for that half.
 
 ## Routing
 

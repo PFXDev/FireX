@@ -758,3 +758,66 @@ func TestSavingRoutingClearsReviewFlag(t *testing.T) {
 		t.Error("needsReview still set after a save")
 	}
 }
+
+func TestInboundPublicEndpointIsValidatedAndServed(t *testing.T) {
+	h := newHarness(t)
+	u := h.seed()
+
+	var inbound model.Inbound
+	if err := h.db.First(&inbound, "port = ?", 443).Error; err != nil {
+		t.Fatalf("load inbound: %v", err)
+	}
+	path := "/api/inbounds/" + itoa(inbound.ID)
+
+	for _, bad := range []map[string]any{
+		{"publicAddress": "https://edge.example.com"},
+		{"publicAddress": "edge.example.com:443"},
+		{"publicPort": 70000},
+		{"publicPort": -1},
+	} {
+		if resp, raw := h.do(http.MethodPut, path, bad); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("PUT %v = %d, want 400: %s", bad, resp.StatusCode, raw)
+		}
+	}
+
+	h.mustDo(http.MethodPut, path, map[string]any{"publicAddress": " edge.example.com ", "publicPort": 8443})
+	var saved model.Inbound
+	h.db.First(&saved, inbound.ID)
+	if saved.PublicAddress != "edge.example.com" || saved.PublicPort != 8443 {
+		t.Fatalf("saved endpoint = %s:%d", saved.PublicAddress, saved.PublicPort)
+	}
+	// A PUT that does not mention the endpoint must not clear it.
+	h.mustDo(http.MethodPut, path, map[string]any{"name": "renamed"})
+	h.db.First(&saved, inbound.ID)
+	if saved.PublicAddress != "edge.example.com" || saved.PublicPort != 8443 {
+		t.Fatalf("endpoint lost on unrelated edit: %s:%d", saved.PublicAddress, saved.PublicPort)
+	}
+
+	resp, raw := h.do(http.MethodGet, "/sub/"+u.SubToken+"?target=base64", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sub = %d: %s", resp.StatusCode, raw)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(string(raw))
+	if err != nil {
+		t.Fatalf("sub is not base64: %v", err)
+	}
+	if !strings.Contains(string(decoded), "@edge.example.com:8443?") {
+		t.Errorf("subscription does not carry the public endpoint:\n%s", decoded)
+	}
+
+	// An IPv6 literal is a valid address and must come out bracketed.
+	h.mustDo(http.MethodPut, path, map[string]any{"publicAddress": "2001:db8::1"})
+	_, raw = h.do(http.MethodGet, "/sub/"+u.SubToken+"?target=base64", nil)
+	decoded, _ = base64.StdEncoding.DecodeString(string(raw))
+	if !strings.Contains(string(decoded), "@[2001:db8::1]:8443?") {
+		t.Errorf("IPv6 endpoint not bracketed:\n%s", decoded)
+	}
+
+	// Clearing goes back to the panel's endpoint.
+	h.mustDo(http.MethodPut, path, map[string]any{"publicAddress": "", "publicPort": 0})
+	_, raw = h.do(http.MethodGet, "/sub/"+u.SubToken+"?target=base64", nil)
+	decoded, _ = base64.StdEncoding.DecodeString(string(raw))
+	if !strings.Contains(string(decoded), "@host1.example.com:443?") {
+		t.Errorf("cleared override still applied:\n%s", decoded)
+	}
+}

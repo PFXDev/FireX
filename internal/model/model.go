@@ -73,6 +73,14 @@ type Inbound struct {
 	Enabled   bool   `json:"enabled" gorm:"default:false"`
 	UDP       bool   `json:"udp" gorm:"default:true"`
 
+	// PublicAddress and PublicPort are the endpoint clients actually dial when
+	// it differs from what the panel advertises. A panel only knows where xray
+	// listens; an inbound parked on a loopback port behind an SNI router on
+	// 443, a relay or a CDN is reached somewhere else entirely. Empty and zero
+	// keep the panel's own values.
+	PublicAddress string `json:"publicAddress"`
+	PublicPort    int    `json:"publicPort"`
+
 	// Missing marks an inbound that vanished upstream; kept so group membership
 	// and the admin's labels survive a transient panel outage.
 	Missing    bool  `json:"missing"`

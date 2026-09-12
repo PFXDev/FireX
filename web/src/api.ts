@@ -118,6 +118,9 @@ export interface Inbound {
   sortOrder: number
   enabled: boolean
   udp: boolean
+  /** Endpoint clients dial when it differs from what the panel advertises. Empty / 0 keep the panel's. */
+  publicAddress: string
+  publicPort: number
   missing: boolean
   /** How many node groups hold it. Zero means it reaches nobody. */
   groupCount: number

@@ -45,6 +45,8 @@ type Draft = {
   sortOrder: number
   enabled: boolean
   udp: boolean
+  publicAddress: string
+  publicPort: number
 }
 
 type LoadState = 'loading' | 'ready' | 'error'
@@ -333,7 +335,7 @@ export function InboundsPage() {
                       <Badge variant="outline">{inbound.protocol}</Badge>
                     </TableCell>
                     <TableCell className="hidden tabular-nums text-muted-foreground xl:table-cell">
-                      {inbound.port}
+                      <EndpointCell inbound={inbound} />
                     </TableCell>
                     <TableCell className="hidden lg:table-cell">
                       {inbound.groupCount > 0 ? (
@@ -361,6 +363,8 @@ export function InboundsPage() {
                               sortOrder: inbound.sortOrder,
                               enabled: inbound.enabled,
                               udp: inbound.udp,
+                              publicAddress: inbound.publicAddress,
+                              publicPort: inbound.publicPort,
                             })
                           }
                         >
@@ -442,6 +446,33 @@ export function InboundsPage() {
                   />
                   <FieldDescription>数字小的排在前面，决定客户端里代理的先后顺序</FieldDescription>
                 </Field>
+                <FieldGroup className="sm:grid sm:grid-cols-[1fr_120px]">
+                  <Field>
+                    <FieldLabel htmlFor="inbound-public-address">公网地址</FieldLabel>
+                    <Input
+                      id="inbound-public-address"
+                      placeholder="沿用面板地址"
+                      value={draft.publicAddress}
+                      onChange={(event) => setDraft({ ...draft, publicAddress: event.target.value })}
+                    />
+                    <FieldDescription>
+                      客户端实际连接的地址和端口。入站藏在回环端口、由 443 上的 SNI 分流或中转接入时填这里；留空或 0 沿用面板给出的值。
+                    </FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="inbound-public-port">公网端口</FieldLabel>
+                    <Input
+                      id="inbound-public-port"
+                      type="number"
+                      min={0}
+                      max={65535}
+                      step={1}
+                      placeholder="沿用"
+                      value={draft.publicPort || ''}
+                      onChange={(event) => setDraft({ ...draft, publicPort: Number(event.target.value) || 0 })}
+                    />
+                  </Field>
+                </FieldGroup>
                 <Field orientation="horizontal">
                   <FieldLabel htmlFor="inbound-enabled">启用（停用后从所有订阅中移除）</FieldLabel>
                   <Switch
@@ -537,6 +568,20 @@ function InboundsTableSkeleton() {
         ))}
       </TableBody>
     </Table>
+  )
+}
+
+/** The port column: the panel's port, or the public endpoint when one overrides it. */
+function EndpointCell({ inbound }: { inbound: Inbound }) {
+  if (!inbound.publicAddress && !inbound.publicPort) return <>{inbound.port}</>
+  const port = inbound.publicPort || inbound.port
+  return (
+    <span className="flex flex-col leading-tight">
+      <span className="text-foreground">
+        {inbound.publicAddress ? `${inbound.publicAddress}:${port}` : port}
+      </span>
+      <span className="text-xs">面板 {inbound.port}</span>
+    </span>
   )
 }
 

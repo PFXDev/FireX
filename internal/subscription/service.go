@@ -178,11 +178,25 @@ func matchPanel(inbounds []model.Inbound, links []string, usedNames map[string]b
 	entries := make([]Entry, 0, len(proxies))
 	for _, parsed := range proxies {
 		proxy := parsed.Proxy
+		raw := parsed.Raw
 		inbound, matched := pickInbound(byPort, proxy)
 		name := proxy.Name
 		if matched {
 			name = inbound.DisplayName()
 			proxy.UDP = inbound.UDP
+			// The panel advertises where xray listens; the admin may know a
+			// different door (an SNI router on 443, a relay, a CDN). Matching
+			// above already happened on the panel's port, so the override is
+			// safe to apply now, to the mihomo entry and the raw link alike.
+			if inbound.PublicAddress != "" || inbound.PublicPort > 0 {
+				if inbound.PublicAddress != "" {
+					proxy.Server = inbound.PublicAddress
+				}
+				if inbound.PublicPort > 0 {
+					proxy.Port = inbound.PublicPort
+				}
+				raw = sharelink.WithEndpoint(raw, inbound.PublicAddress, inbound.PublicPort)
+			}
 		} else {
 			// Sort an unattributed link last instead of ahead of every
 			// deliberately ordered inbound.
@@ -191,7 +205,7 @@ func matchPanel(inbounds []model.Inbound, links []string, usedNames map[string]b
 		name = uniqueName(name, usedNames)
 		proxy.Name = name
 
-		entry := Entry{Inbound: inbound, Name: name, Link: sharelink.Rename(parsed.Raw, name)}
+		entry := Entry{Inbound: inbound, Name: name, Link: sharelink.Rename(raw, name)}
 		if rendered, ok := clash.ProxyEntry(proxy); ok {
 			entry.Clash = rendered
 		} else {

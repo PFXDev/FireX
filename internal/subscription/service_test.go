@@ -351,3 +351,81 @@ func TestUserInfoOmitsExpiryWhenUnset(t *testing.T) {
 		t.Errorf("UserInfo() = %q, want no expire field for a never-expiring user", got)
 	}
 }
+
+// An inbound behind an SNI router or relay is reached somewhere other than
+// where the panel says xray listens. The override must land in both outputs
+// and leave the rest of the link untouched.
+func TestPublicEndpointOverridesPanelEndpoint(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	var hk model.Inbound
+	if err := f.db.First(&hk, "port = ?", 443).Error; err != nil {
+		t.Fatalf("load inbound: %v", err)
+	}
+	hk.PublicAddress = "edge.example.com"
+	hk.PublicPort = 8443
+	f.db.Save(&hk)
+	f.svc.InvalidateAll()
+
+	result, err := f.svc.Build(ctx, f.user)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(result.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2 (warnings: %v)", len(result.Entries), result.Warnings)
+	}
+	// Matching still keys on the panel's port, so the overridden inbound must
+	// still be attributed to itself, not dropped or confused with the other.
+	if result.Entries[0].Inbound.ID != hk.ID {
+		t.Fatalf("entry[0] is inbound %d, want %d", result.Entries[0].Inbound.ID, hk.ID)
+	}
+	if !strings.Contains(result.Entries[0].Link, "@edge.example.com:8443?") {
+		t.Errorf("link = %q, want the public endpoint", result.Entries[0].Link)
+	}
+	if !strings.Contains(result.Entries[0].Link, "pbk=PBK1") {
+		t.Errorf("link = %q, reality params must survive the rewrite", result.Entries[0].Link)
+	}
+	if !strings.Contains(result.Entries[1].Link, "@host2.example.com:8443?") {
+		t.Errorf("link = %q, the other inbound must keep the panel's endpoint", result.Entries[1].Link)
+	}
+
+	out, err := f.svc.Clash(result)
+	if err != nil {
+		t.Fatalf("Clash() error = %v", err)
+	}
+	var cfg struct {
+		Proxies []struct {
+			Name   string `yaml:"name"`
+			Server string `yaml:"server"`
+			Port   int    `yaml:"port"`
+		} `yaml:"proxies"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &cfg); err != nil {
+		t.Fatalf("rendered profile is not valid YAML: %v\n%s", err, out)
+	}
+	if cfg.Proxies[0].Server != "edge.example.com" || cfg.Proxies[0].Port != 8443 {
+		t.Errorf("proxy[0] = %s:%d, want edge.example.com:8443", cfg.Proxies[0].Server, cfg.Proxies[0].Port)
+	}
+	if cfg.Proxies[1].Server != "host2.example.com" || cfg.Proxies[1].Port != 8443 {
+		t.Errorf("proxy[1] = %s:%d, want the panel's endpoint", cfg.Proxies[1].Server, cfg.Proxies[1].Port)
+	}
+}
+
+// Half an override keeps the panel's value for the other half.
+func TestPublicPortAloneKeepsPanelAddress(t *testing.T) {
+	f := newFixture(t)
+	var hk model.Inbound
+	f.db.First(&hk, "port = ?", 443)
+	hk.PublicPort = 2053
+	f.db.Save(&hk)
+	f.svc.InvalidateAll()
+
+	result, err := f.svc.Build(context.Background(), f.user)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(result.Entries[0].Link, "@host1.example.com:2053?") {
+		t.Errorf("link = %q, want the panel's host with the public port", result.Entries[0].Link)
+	}
+}
