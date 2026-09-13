@@ -5,9 +5,11 @@ export const FIREX_UNAUTHORIZED_EVENT = 'firex:unauthorized'
 
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  fields: Record<string, string>
+  constructor(status: number, message: string, fields: Record<string, string> = {}) {
     super(message)
     this.status = status
+    this.fields = fields
   }
 }
 
@@ -70,7 +72,7 @@ async function request<T>(
     if (res.ok) throw err
   }
   if (!res.ok) {
-    const error = new ApiError(res.status, data?.error ?? `请求失败 (${res.status})`)
+    const error = new ApiError(res.status, data?.error ?? `请求失败 (${res.status})`, data?.fields)
     if (res.status === 401) handleUnauthorized(path, options.unauthorized ?? 'verify-session')
     throw error
   }
@@ -300,6 +302,35 @@ export interface VersionInfo {
   updateChannel: string
   updateSource: string
   updateRepo: string
+}
+
+export interface ServerConfig {
+  listen: string
+  dataDir: string
+  dbPath: string
+  subBaseUrl: string
+  debug: boolean
+  adminUser: string
+  adminPassword: string
+  syncInterval: string
+  trafficInterval: string
+  discoverInterval: string
+  update: {
+    enabled: boolean
+    channel: string
+    checkInterval: string
+    source: string
+    proxyBaseUrl: string
+    repo: string
+  }
+}
+
+export interface ServerConfigResponse {
+  config: ServerConfig
+  path: string
+  revision: string
+  restartRequired: boolean
+  hasPendingAdminPassword: boolean
 }
 
 /** State machine: idle → checking → downloading → ready (dev) | applying → idle, or failed. */

@@ -167,9 +167,35 @@ empty on first start and FireX generates one and prints it to the log once. Set
 `subBaseUrl` when running behind a reverse proxy, otherwise the subscription
 URLs shown in the UI use whatever `Host` the browser sent.
 
-Changes take effect on restart; FireX never reloads the file underneath itself.
-Everything an admin can change while it runs — the mihomo template, the routing
-matrix, panels, plans, users — lives in the database instead, edited from the UI.
+The **System → Server configuration** section edits this same file from the web
+UI, including a custom `-config` path. It shows the saved values and whether a
+restart is needed. Saves validate addresses, intervals and update settings,
+replace the file atomically with mode `0600`, and reject stale edits if another
+browser or an operator has changed the settings since they were loaded.
+
+Changes take effect on restart; restart FireX through your deployment's service
+manager after saving. The listener, background jobs and updater keep their
+startup settings until then. Changing storage paths does not move the existing
+database. The version section continues to show the active update settings.
+
+The password field is write-only: leaving it blank preserves any pending reset;
+the cancellation switch clears a previously saved reset. A reset requires an
+existing admin username and takes effect on the next start, when the password
+is consumed and its old sessions are signed out. Use **Settings → Account
+security** for an immediate password change.
+
+```
+GET /api/settings/server   # saved config, path, revision and restart status
+PUT /api/settings/server   # { "revision": "...", "config": { ...edited fields } }
+```
+
+Both endpoints require an admin session. Omitted fields are preserved, including
+`adminPassword`; an explicit empty password cancels a pending reset. A stale
+revision returns `409`, invalid values return `400` and failed writes return
+`500` without changing the file.
+
+The mihomo template, routing matrix, panels, plans and users live in the database
+and continue to take effect immediately when edited from the UI.
 
 ## Updates
 

@@ -13,6 +13,7 @@ import { api } from '@/api'
 import type { UpdateCheck, UpdateStatus, VersionInfo } from '@/api'
 import { CodeBlock } from '@/components/code-display'
 import { PageHeader } from '@/components/page-header'
+import { ServerConfigEditor } from '@/components/server-config-editor'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -177,7 +178,7 @@ export function SystemPage() {
   if (!info || !status) {
     return (
       <div className="flex w-full max-w-6xl flex-col gap-6">
-        <PageHeader title="系统" description="查看版本信息并安全管理应用更新" />
+        <PageHeader title="系统" description="管理服务端配置、版本与应用更新" />
         {loadError ? (
           <Alert variant="destructive">
             <TriangleAlertIcon />
@@ -206,7 +207,7 @@ export function SystemPage() {
 
   return (
     <div className="flex w-full max-w-6xl flex-col gap-6">
-      <PageHeader title="系统" description="查看版本信息并安全管理应用更新">
+      <PageHeader title="系统" description="管理服务端配置、版本与应用更新">
         <Button
           variant="outline"
           onClick={runCheck}
@@ -225,7 +226,7 @@ export function SystemPage() {
         <Card>
           <CardHeader>
             <CardTitle>当前版本</CardTitle>
-            <CardDescription>构建与更新配置由发布流水线写入当前二进制。</CardDescription>
+            <CardDescription>当前运行的构建信息与已生效的更新配置。</CardDescription>
           </CardHeader>
           <CardContent>
             <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
@@ -378,6 +379,7 @@ export function SystemPage() {
           )}
         </Card>
       </div>
+      <ServerConfigEditor />
     </div>
   )
 }

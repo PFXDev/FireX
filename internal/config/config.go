@@ -140,9 +140,8 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Save writes the config as it stands to path, in the same shape Load reads.
-// Its one caller is the admin bootstrap blanking a consumed adminPassword; the
-// file is otherwise the operator's to write.
+// Save writes an unresolved file config as it stands to path. Use Read for
+// editing; Load derives runtime paths that must not be frozen into the file.
 func (c *Config) Save(path string) error {
 	out, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -231,12 +230,23 @@ func write(path string, data []byte) error {
 			return fmt.Errorf("create config dir: %w", err)
 		}
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), ".firex-config-*")
+	if err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+	defer os.Remove(f.Name())
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("sync %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", path, err)
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil

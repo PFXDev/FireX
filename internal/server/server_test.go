@@ -25,11 +25,13 @@ import (
 )
 
 type harness struct {
-	t      *testing.T
-	db     *store.DB
-	server *httptest.Server
-	client *http.Client
-	fake   *paneltest.Panel
+	t          *testing.T
+	db         *store.DB
+	server     *httptest.Server
+	client     *http.Client
+	fake       *paneltest.Panel
+	configPath string
+	cfg        *config.Config
 }
 
 func newHarness(t *testing.T) *harness {
@@ -55,9 +57,13 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("ensureAdmin() error = %v", err)
 	}
 
-	cfg := &config.Config{}
+	configPath := filepath.Join(t.TempDir(), "custom-config.json")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mgr := provision.NewManager(db)
-	srv := New(cfg, db, mgr, subscription.NewService(db, mgr), updater.New(
+	srv := New(cfg, configPath, db, mgr, subscription.NewService(db, mgr), updater.New(
 		func() updater.Config { return cfg.Update.Updater() },
 		func() string { return cfg.DataDir },
 		log.New(io.Discard, "", 0),
@@ -67,7 +73,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(ts.Close)
 
 	jar, _ := cookiejar.New(nil)
-	return &harness{t: t, db: db, server: ts, client: &http.Client{Jar: jar}, fake: fake}
+	return &harness{t: t, db: db, server: ts, client: &http.Client{Jar: jar}, fake: fake, configPath: configPath, cfg: cfg}
 }
 
 func (h *harness) do(method, path string, body any) (*http.Response, []byte) {

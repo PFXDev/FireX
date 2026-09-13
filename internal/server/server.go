@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -21,21 +22,23 @@ import (
 )
 
 type Server struct {
-	cfg  *config.Config
-	db   *store.DB
-	mgr  *provision.Manager
-	subs *subscription.Service
-	upd  *updater.Updater
+	cfg        *config.Config
+	db         *store.DB
+	mgr        *provision.Manager
+	subs       *subscription.Service
+	upd        *updater.Updater
+	configPath string
+	configMu   sync.Mutex
 
 	engine *gin.Engine
 	http   *http.Server
 }
 
-func New(cfg *config.Config, db *store.DB, mgr *provision.Manager, subs *subscription.Service, upd *updater.Updater) *Server {
+func New(cfg *config.Config, configPath string, db *store.DB, mgr *provision.Manager, subs *subscription.Service, upd *updater.Updater) *Server {
 	if !cfg.Debug {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	s := &Server{cfg: cfg, db: db, mgr: mgr, subs: subs, upd: upd}
+	s := &Server{cfg: cfg, configPath: configPath, db: db, mgr: mgr, subs: subs, upd: upd}
 	s.engine = gin.New()
 	s.engine.Use(gin.Recovery())
 	if cfg.Debug {
@@ -105,6 +108,8 @@ func (s *Server) routes() {
 
 	authed.GET("/settings/clashTemplate", s.getClashTemplate)
 	authed.PUT("/settings/clashTemplate", s.setClashTemplate)
+	authed.GET("/settings/server", s.getServerConfig)
+	authed.PUT("/settings/server", s.setServerConfig)
 
 	// Self-update sits behind the admin session like everything else. The
 	// session lives in the database, so it survives the restart an update

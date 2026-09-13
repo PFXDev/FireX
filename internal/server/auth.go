@@ -59,7 +59,13 @@ func BootstrapAdmin(db *store.DB, cfg *config.Config, configPath string) error {
 		log.Printf("firex: reset the password of admin %q from %s and signed out its sessions", cfg.AdminUser, configPath)
 	}
 	cfg.AdminPassword = ""
-	if err := cfg.Save(configPath); err != nil {
+	// Edit the file form so a derived dbPath remains empty on disk.
+	fileCfg, err := config.Read(configPath)
+	if err == nil {
+		fileCfg.AdminPassword = ""
+		err = fileCfg.Save(configPath)
+	}
+	if err != nil {
 		log.Printf("firex: could not blank adminPassword in %s: %v; remove it by hand, or it is applied again on every start", configPath, err)
 	}
 	return nil

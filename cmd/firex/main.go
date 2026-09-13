@@ -96,7 +96,7 @@ func main() {
 			IsBusy: mgr.IsBusy,
 		},
 	)
-	srv = server.New(cfg, db, mgr, subs, upd)
+	srv = server.New(cfg, *configPath, db, mgr, subs, upd)
 
 	go runLoop(bgCtx, "discover", cfg.DiscoverInterval.Duration(), 0, func(ctx context.Context) error {
 		return mgr.DiscoverAll(ctx)
