@@ -30,6 +30,7 @@ type Group struct {
 	Interval  int
 	Tolerance int
 	Members   []string
+	Hidden    bool
 }
 
 type Input struct {
@@ -109,6 +110,9 @@ func groupNode(g Group) *Ordered {
 	node := NewOrdered()
 	node.Set("name", g.Name)
 	node.Set("type", g.Type)
+	if g.Hidden {
+		node.Set("hidden", true)
+	}
 	applyProbe(node, g.Type, g.TestURL, g.Interval, g.Tolerance)
 	members := make([]any, 0, len(g.Members))
 	for _, m := range g.Members {

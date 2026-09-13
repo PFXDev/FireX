@@ -247,6 +247,7 @@ func compile(db *store.DB, profileID uint, groups []model.NodeGroup, proxies []P
 			Interval:  c.egress.Interval,
 			Tolerance: c.egress.Tolerance,
 			Members:   names,
+			Hidden:    c.egress.ClientHidden,
 		})
 	}
 	for i := range groups {

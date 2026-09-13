@@ -308,6 +308,15 @@ emitted at all for that tier, and its traffic falls through). The
 `all-node-groups` member expands to **the profile's own whitelist**, which is why
 one default column serves every tier and most cells stay empty.
 
+Each egress also has an independent **hide in client** switch (`clientHidden`).
+It emits `hidden: true` on the mihomo proxy-group while keeping its members,
+rules and references intact, including the final `MATCH` policy. Profiles
+inherit this switch with the default egress and can override it per cell.
+It is off by default. Hiding requires a client that supports mihomo's `hidden`
+flag; the group remains readable in the downloaded config and the controller
+API. This differs from **do not emit** (`hidden`), which removes the policy
+group and its rules for that profile.
+
 ### Invariants
 
 Everything references a node group or policy by its **bare name**, never by the

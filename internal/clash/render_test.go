@@ -151,7 +151,7 @@ func TestRenderPrunesEmptyGroupsAndRepointsRules(t *testing.T) {
 		Proxies: []Proxy{{Name: "A", Entry: mustEntry(t, "vless://u@a.example:443?security=tls#A")}},
 		Groups: []Group{
 			{Name: "keep", Type: "select", Members: []string{"A"}},
-			{Name: "media", Type: "select", Members: []string{"empty"}},
+			{Name: "media", Type: "select", Members: []string{"empty"}, Hidden: true},
 			{Name: "empty", Type: "url-test"},
 		},
 		Rules: []string{"GEOSITE,netflix,media", "MATCH,media"},

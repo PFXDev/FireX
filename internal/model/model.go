@@ -261,6 +261,9 @@ type Egress struct {
 	// Hidden emits neither the proxy-group nor the policy's rules; that traffic
 	// falls through to whatever matches next.
 	Hidden bool `json:"hidden"`
+	// ClientHidden keeps the group and its rules, but asks compatible clients
+	// to hide the group in their UI. It is not an access restriction.
+	ClientHidden bool `json:"clientHidden" gorm:"default:false"`
 }
 
 // EgressMember kinds. Ref carries a bare Name so an emoji edit can never orphan

@@ -204,7 +204,10 @@ export interface Egress {
   testUrl: string
   interval: number
   tolerance: number
+  /** Omits the policy group and its rules entirely. */
   hidden: boolean
+  /** Keeps routing active and hides the group in compatible clients. */
+  clientHidden: boolean
   members: EgressMember[]
 }
 

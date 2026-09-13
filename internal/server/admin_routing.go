@@ -538,13 +538,14 @@ type matrixEgress struct {
 	// policy created in this same save need no id to exist yet.
 	PolicyIndex int `json:"policyIndex"`
 	// ProfileID is 0 for the default column.
-	ProfileID uint           `json:"profileId"`
-	Type      string         `json:"type"`
-	TestURL   string         `json:"testUrl"`
-	Interval  int            `json:"interval"`
-	Tolerance int            `json:"tolerance"`
-	Hidden    bool           `json:"hidden"`
-	Members   []matrixMember `json:"members"`
+	ProfileID    uint           `json:"profileId"`
+	Type         string         `json:"type"`
+	TestURL      string         `json:"testUrl"`
+	Interval     int            `json:"interval"`
+	Tolerance    int            `json:"tolerance"`
+	Hidden       bool           `json:"hidden"`
+	ClientHidden bool           `json:"clientHidden"`
+	Members      []matrixMember `json:"members"`
 }
 
 type matrixDoc struct {
@@ -592,7 +593,7 @@ func (s *Server) getRouting(c *gin.Context) {
 		cells = append(cells, matrixEgress{
 			PolicyIndex: index, ProfileID: e.ProfileID, Type: e.Type,
 			TestURL: e.TestURL, Interval: e.Interval, Tolerance: e.Tolerance,
-			Hidden: e.Hidden, Members: jsonList(byEgress[e.ID]),
+			Hidden: e.Hidden, ClientHidden: e.ClientHidden, Members: jsonList(byEgress[e.ID]),
 		})
 	}
 
@@ -729,7 +730,7 @@ func writeMatrix(handle *gorm.DB, doc *matrixDoc) error {
 		egress := model.Egress{
 			PolicyID: idByIndex[cell.PolicyIndex], ProfileID: cell.ProfileID, Type: cell.Type,
 			TestURL: strings.TrimSpace(cell.TestURL), Interval: cell.Interval,
-			Tolerance: cell.Tolerance, Hidden: cell.Hidden,
+			Tolerance: cell.Tolerance, Hidden: cell.Hidden, ClientHidden: cell.ClientHidden,
 		}
 		if egress.Type == "" {
 			egress.Type = model.GroupTypeSelect

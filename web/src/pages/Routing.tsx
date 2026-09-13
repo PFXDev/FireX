@@ -67,6 +67,7 @@ import {
 } from "@/components/ui/empty";
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldGroup,
   FieldLabel,
@@ -125,6 +126,7 @@ function blankEgress(profileId: number): Egress {
     interval: 300,
     tolerance: 50,
     hidden: false,
+    clientHidden: false,
     members: [],
   };
 }
@@ -964,11 +966,11 @@ function cellSummary(
   inheriting: boolean,
 ): { text: string; tone: "normal" | "muted" | "hidden" } {
   if (!resolved) return { text: "未配置", tone: "hidden" };
-  if (resolved.egress.hidden) return { text: "不可见", tone: "hidden" };
+  if (resolved.egress.hidden) return { text: "不下发", tone: "hidden" };
   const names = resolved.egress.members.map(memberLabel);
   const text = names.length === 0 ? "（空）" : names.join(" · ");
   return {
-    text: `${resolved.egress.type} · ${text}`,
+    text: `${resolved.egress.clientHidden ? "客户端隐藏 · " : ""}${resolved.egress.type} · ${text}`,
     tone: inheriting ? "muted" : "normal",
   };
 }
@@ -1294,7 +1296,7 @@ function EgressDialog({
   open: boolean;
   policyName: string;
   profileName: string;
-  /** The MATCH policy: every column needs it, so it cannot be hidden. */
+  /** The MATCH policy must be emitted in every column, even when hidden in clients. */
   isFinal: boolean;
   isDefaultColumn: boolean;
   own: Egress | null;
@@ -1352,7 +1354,7 @@ function EgressDialog({
                     : [
                         {
                           value: "hidden",
-                          label: "不可见（这个方案没有这条分流）",
+                          label: "不下发（这个方案没有这条分流）",
                         },
                       ]),
                 ]}
@@ -1370,7 +1372,7 @@ function EgressDialog({
                     <SelectItem value="custom">自定义出口</SelectItem>
                     {(!isFinal || mode === "hidden") && (
                       <SelectItem value="hidden">
-                        不可见（这个方案没有这条分流）
+                        不下发（这个方案没有这条分流）
                       </SelectItem>
                     )}
                   </SelectGroup>
@@ -1383,7 +1385,7 @@ function EgressDialog({
               )}
               {isFinal && (
                 <FieldDescription>
-                  兜底策略每个方案都必须有，所以不能设为不可见。
+                  兜底策略每个方案都必须下发，但可以在客户端隐藏。
                 </FieldDescription>
               )}
             </Field>
@@ -1391,6 +1393,22 @@ function EgressDialog({
 
           {mode !== "hidden" && current && (
             <>
+              <Field orientation="horizontal">
+                <FieldContent>
+                  <FieldLabel htmlFor="egress-client-hidden">
+                    在客户端隐藏
+                  </FieldLabel>
+                  <FieldDescription id="egress-client-hidden-description">
+                    保留策略组和分流规则，只在支持隐藏的客户端中收起展示。配置文件中仍可查看。
+                  </FieldDescription>
+                </FieldContent>
+                <Switch
+                  id="egress-client-hidden"
+                  checked={current.clientHidden ?? false}
+                  aria-describedby="egress-client-hidden-description"
+                  onCheckedChange={(checked) => patch({ clientHidden: checked })}
+                />
+              </Field>
               <FieldGroup className="grid gap-4 sm:grid-cols-2">
                 <Field>
                   <FieldLabel htmlFor="egress-type">选择方式</FieldLabel>
