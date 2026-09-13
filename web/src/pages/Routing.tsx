@@ -98,6 +98,7 @@ import {
 import { useUnsavedGuard } from "@/hooks/use-unsaved-guard";
 import { errorMessage } from "@/lib/format";
 import { reportSyncError } from "@/lib/sync";
+import { cn } from "@/lib/utils";
 
 /** profileId 0 addresses the default column every profile falls back to. */
 const DEFAULT_COLUMN = 0;
@@ -151,6 +152,7 @@ export function RoutingPage() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [needsReview, setNeedsReview] = useState(false);
+  const [matrixScrolled, setMatrixScrolled] = useState(false);
 
   const [policyEditor, setPolicyEditor] = useState<number | null>(null);
   const [cellEditor, setCellEditor] = useState<{
@@ -674,110 +676,142 @@ export function RoutingPage() {
           )}
         </CardHeader>
         <CardContent className="px-0">
-          <ScrollArea className="w-full">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="min-w-56">分流策略</TableHead>
-                  <TableHead className="min-w-48">默认出口</TableHead>
-                  {profiles.map((profile) => (
-                    <TableHead key={profile.id} className="min-w-44">
+          <Table
+            containerProps={{
+              role: "region",
+              "aria-label": "分流矩阵，可横向滚动",
+              tabIndex: 0,
+              onScroll: (event) =>
+                setMatrixScrolled(event.currentTarget.scrollLeft > 0),
+              className: cn(
+                "isolate [--policy-width:7rem] [--default-expanded-width:8rem] [--default-width:var(--default-expanded-width)] [--actions-width:3rem] sm:[--policy-width:14rem] sm:[--default-expanded-width:20rem] sm:[--actions-width:7rem]",
+                matrixScrolled &&
+                  "[--default-width:6rem] sm:[--default-width:10rem]",
+              ),
+            }}
+            className="table-fixed min-w-full"
+            // Keep the scroll range stable when the default column shrinks;
+            // the spacer before the fixed actions absorbs the released space.
+            style={{
+              width: `calc(var(--policy-width) + var(--default-expanded-width) + ${profiles.length * 16}rem + var(--actions-width))`,
+            }}
+          >
+            <TableHeader>
+              <TableRow>
+                <TableHead className="sticky left-0 z-20 w-(--policy-width) bg-card">
+                  分流策略
+                </TableHead>
+                <TableHead className="sticky left-(--policy-width) z-10 w-(--default-width) border-r bg-card">
+                  默认出口
+                </TableHead>
+                {profiles.map((profile) => (
+                  <TableHead key={profile.id} className="w-64">
+                    <span className="block truncate" title={profile.name}>
                       {profile.name}
-                    </TableHead>
-                  ))}
-                  <TableHead className="w-28">
-                    <span className="sr-only">顺序与操作</span>
+                    </span>
                   </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((row, index) => (
-                  <TableRow
-                    key={index}
-                    data-disabled={!row.policy.enabled || undefined}
-                  >
-                    <TableCell>
-                      <button
-                        type="button"
-                        className="flex flex-col items-start gap-1 text-left"
-                        onClick={() => setPolicyEditor(index)}
-                      >
-                        <span className="flex items-center gap-2 font-medium">
-                          {row.policy.icon && <span>{row.policy.icon}</span>}
-                          {row.policy.name}
-                          {row.policy.isFinal && (
-                            <Badge variant="outline">兜底</Badge>
-                          )}
-                          {!row.policy.enabled && (
-                            <StatusBadge tone="idle">停用</StatusBadge>
-                          )}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {ruleCountLabel(row.policy.rules)}
-                        </span>
-                      </button>
-                    </TableCell>
+                ))}
+                <TableHead aria-hidden="true" className="p-0" />
+                <TableHead className="sticky right-0 z-20 w-(--actions-width) border-l bg-card">
+                  <span className="sr-only">顺序与操作</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row, index) => (
+                <TableRow
+                  key={index}
+                  data-disabled={!row.policy.enabled || undefined}
+                >
+                  <TableCell className="sticky left-0 z-20 bg-card">
+                    <button
+                      type="button"
+                      className="flex w-full min-w-0 flex-col items-start gap-1 rounded-md text-left focus-visible:outline-ring"
+                      title={`${row.policy.name} · ${ruleCountLabel(row.policy.rules)}`}
+                      onClick={() => setPolicyEditor(index)}
+                    >
+                      <span className="flex w-full items-center gap-2 font-medium">
+                        {row.policy.icon && (
+                          <span className="shrink-0">{row.policy.icon}</span>
+                        )}
+                        <span className="truncate">{row.policy.name}</span>
+                        {row.policy.isFinal && (
+                          <Badge variant="outline">兜底</Badge>
+                        )}
+                        {!row.policy.enabled && (
+                          <StatusBadge tone="idle">停用</StatusBadge>
+                        )}
+                      </span>
+                      <span className="w-full truncate text-xs text-muted-foreground">
+                        {ruleCountLabel(row.policy.rules)}
+                      </span>
+                    </button>
+                  </TableCell>
 
+                  <CellButton
+                    className="sticky left-(--policy-width) z-10 border-r bg-card"
+                    compact={matrixScrolled}
+                    label={`${row.policy.name} · 默认出口`}
+                    summary={cellSummary(
+                      effective(row, DEFAULT_COLUMN),
+                      memberLabel,
+                      false,
+                    )}
+                    onClick={() =>
+                      setCellEditor({ row: index, profileId: DEFAULT_COLUMN })
+                    }
+                  />
+
+                  {profiles.map((profile) => (
                     <CellButton
+                      key={profile.id}
+                      label={`${row.policy.name} · ${profile.name}`}
                       summary={cellSummary(
-                        effective(row, DEFAULT_COLUMN),
+                        effective(row, profile.id),
                         memberLabel,
-                        false,
+                        !row.cells.has(profile.id),
                       )}
                       onClick={() =>
-                        setCellEditor({ row: index, profileId: DEFAULT_COLUMN })
+                        setCellEditor({ row: index, profileId: profile.id })
                       }
                     />
+                  ))}
 
-                    {profiles.map((profile) => (
-                      <CellButton
-                        key={profile.id}
-                        summary={cellSummary(
-                          effective(row, profile.id),
-                          memberLabel,
-                          !row.cells.has(profile.id),
-                        )}
-                        onClick={() =>
-                          setCellEditor({ row: index, profileId: profile.id })
-                        }
-                      />
-                    ))}
-
-                    <TableCell>
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`上移 ${row.policy.name}`}
-                          disabled={index === 0}
-                          onClick={() => patchRows(move(rows, index, -1))}
-                        >
-                          ↑
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`下移 ${row.policy.name}`}
-                          disabled={index === rows.length - 1}
-                          onClick={() => patchRows(move(rows, index, 1))}
-                        >
-                          ↓
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`删除策略 ${row.policy.name}`}
-                          onClick={() => setPendingPolicyDelete(index)}
-                        >
-                          <TrashIcon />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </ScrollArea>
+                  <TableCell aria-hidden="true" className="p-0" />
+                  <TableCell className="sticky right-0 z-20 border-l bg-card">
+                    <div className="flex flex-col items-center justify-end gap-1 sm:flex-row">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`上移 ${row.policy.name}`}
+                        disabled={index === 0}
+                        onClick={() => patchRows(move(rows, index, -1))}
+                      >
+                        ↑
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`下移 ${row.policy.name}`}
+                        disabled={index === rows.length - 1}
+                        onClick={() => patchRows(move(rows, index, 1))}
+                      >
+                        ↓
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`删除策略 ${row.policy.name}`}
+                        onClick={() => setPendingPolicyDelete(index)}
+                      >
+                        <TrashIcon />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 
@@ -964,41 +998,55 @@ function cellSummary(
   resolved: { egress: Egress; inherited: boolean } | null,
   memberLabel: (member: EgressMember) => string,
   inheriting: boolean,
-): { text: string; tone: "normal" | "muted" | "hidden" } {
+): {
+  text: string;
+  compactText?: string;
+  tone: "normal" | "muted" | "hidden";
+} {
   if (!resolved) return { text: "未配置", tone: "hidden" };
   if (resolved.egress.hidden) return { text: "不下发", tone: "hidden" };
   const names = resolved.egress.members.map(memberLabel);
   const text = names.length === 0 ? "（空）" : names.join(" · ");
   return {
     text: `${resolved.egress.clientHidden ? "客户端隐藏 · " : ""}${resolved.egress.type} · ${text}`,
+    compactText: `${resolved.egress.clientHidden ? "隐藏 · " : ""}${names[0] ?? "（空）"}${names.length > 1 ? ` +${names.length - 1}` : ""}`,
     tone: inheriting ? "muted" : "normal",
   };
 }
 
 function CellButton({
+  className,
+  compact = false,
+  label,
   summary,
   onClick,
 }: {
-  summary: { text: string; tone: "normal" | "muted" | "hidden" };
+  className?: string;
+  compact?: boolean;
+  label: string;
+  summary: ReturnType<typeof cellSummary>;
   onClick: () => void;
 }) {
   return (
-    <TableCell>
+    <TableCell className={className}>
       <button
         type="button"
-        className="w-full rounded-md px-2 py-1 text-left text-sm hover:bg-accent"
+        className={cn(
+          "w-full rounded-md px-2 py-1 text-left text-sm hover:bg-accent focus-visible:outline-ring",
+          compact && "px-1",
+        )}
+        aria-label={`${label}：${summary.text}`}
+        title={summary.text}
         onClick={onClick}
       >
         <span
-          className={
-            summary.tone === "muted"
-              ? "text-muted-foreground"
-              : summary.tone === "hidden"
-                ? "text-muted-foreground italic"
-                : undefined
-          }
+          className={cn(
+            "block truncate",
+            summary.tone !== "normal" && "text-muted-foreground",
+            summary.tone === "hidden" && "italic",
+          )}
         >
-          {summary.text}
+          {compact ? (summary.compactText ?? summary.text) : summary.text}
         </span>
       </button>
     </TableCell>
