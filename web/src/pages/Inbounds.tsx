@@ -128,7 +128,8 @@ export function InboundsPage() {
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!draft) return
+    if (!draft || pendingAction) return
+    if (!event.currentTarget.reportValidity()) return
     setPendingAction('save')
     try {
       const result = await api.put<{ syncError: string }>(`/inbounds/${draft.id}`, draft)

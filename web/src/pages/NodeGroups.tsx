@@ -136,7 +136,7 @@ export function NodeGroupsPage() {
   const inboundsByPanel = useMemo(() => {
     const byPanel = new Map<string, Inbound[]>()
     inbounds
-      .filter((inbound) => !inbound.missing)
+      .filter((inbound) => inbound.enabled && !inbound.missing)
       .forEach((inbound) => {
         const key = inbound.panelName || `面板 #${inbound.panelId}`
         byPanel.set(key, [...(byPanel.get(key) ?? []), inbound])
@@ -197,9 +197,10 @@ export function NodeGroupsPage() {
 
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!draft) return
+    if (!draft || saving) return
     setShowErrors(true)
     if (!draft.name.trim() || draft.name.includes(',')) return
+    if (!event.currentTarget.reportValidity()) return
 
     setSaving(true)
     const body = {
@@ -281,6 +282,10 @@ export function NodeGroupsPage() {
   const nameInvalid = Boolean(showErrors && draft && !draft.name.trim())
   const commaInvalid = Boolean(showErrors && draft && draft.name.includes(','))
   const probeGroup = draft?.type !== 'select'
+  const selectedInboundCount = inboundsByPanel.reduce(
+    (count, [, panelInbounds]) => count + panelInbounds.filter((inbound) => draft?.inboundIds.includes(inbound.id)).length,
+    0,
+  )
   const enabledGroups = groups.filter((group) => group.enabled).length
   const unreachable = groups.filter((group) => group.enabled && group.profileCount === 0).length
 
@@ -495,14 +500,14 @@ export function NodeGroupsPage() {
           }
         }}
       >
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
+        <DialogContent className="flex flex-col overflow-hidden p-0 sm:max-w-2xl">
+          <DialogHeader className="shrink-0 px-4 pt-4 pr-10">
             <DialogTitle>{draft?.id ? '编辑节点组' : '新建节点组'}</DialogTitle>
             <DialogDescription>分组名会直接作为客户端里的策略组名称显示。</DialogDescription>
           </DialogHeader>
           {draft && (
-            <form className="flex min-h-0 flex-col gap-4" noValidate onSubmit={save}>
-              <FieldGroup>
+            <form className="flex min-h-0 flex-col" noValidate onSubmit={save}>
+              <FieldGroup className="min-h-0 overflow-y-auto px-4 pt-1 pb-4">
                 <FieldGroup className="grid gap-4 sm:grid-cols-[6rem_1fr]">
                   <Field>
                     <FieldLabel htmlFor="group-emoji">图标</FieldLabel>
@@ -662,7 +667,7 @@ export function NodeGroupsPage() {
                 )}
 
                 <FieldSet>
-                  <FieldLegend variant="label">包含入站（已选 {draft.inboundIds.length} 个）</FieldLegend>
+                  <FieldLegend variant="label">包含入站（已选 {selectedInboundCount} 个）</FieldLegend>
                   <FieldDescription>一个入站可以同时属于多个分组。</FieldDescription>
                   <ScrollArea className="h-64 rounded-lg border">
                     {inboundsByPanel.length === 0 ? (
@@ -672,7 +677,7 @@ export function NodeGroupsPage() {
                             <BoxesIcon />
                           </EmptyMedia>
                           <EmptyTitle>还没有可用入站</EmptyTitle>
-                          <EmptyDescription>先连接面板并完成入站发现。</EmptyDescription>
+                          <EmptyDescription>先连接面板、完成入站发现并启用入站。</EmptyDescription>
                         </EmptyHeader>
                       </Empty>
                     ) : (
@@ -710,7 +715,6 @@ export function NodeGroupsPage() {
                                       <span className="text-muted-foreground">
                                         {inbound.inboundTag || inbound.protocol}:{inbound.port}
                                       </span>
-                                      {!inbound.enabled && <StatusBadge tone="idle">未启用</StatusBadge>}
                                     </FieldLabel>
                                   </Field>
                                 ))}
@@ -742,7 +746,7 @@ export function NodeGroupsPage() {
                 </Field>
               </FieldGroup>
 
-              <DialogFooter>
+              <DialogFooter className="mx-0 mb-0 shrink-0">
                 <Button type="button" variant="outline" disabled={saving} onClick={() => setDraft(null)}>
                   取消
                 </Button>

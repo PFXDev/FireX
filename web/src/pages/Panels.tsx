@@ -315,9 +315,9 @@ export function PanelsPage() {
                   const discoveringPanel = discovering.has(panel.id)
                   return (
                     <TableRow key={panel.id}>
-                      <TableCell>
+                      <TableCell className="min-w-40 max-w-80 whitespace-normal [overflow-wrap:anywhere]">
                         <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span className="font-medium">{panel.name}</span>
                             {!panel.enabled && <StatusBadge tone="idle">已停用</StatusBadge>}
                           </div>

@@ -13,7 +13,6 @@ import {
   MoonIcon,
   ServerIcon,
   SettingsIcon,
-  ShieldCheckIcon,
   SplitIcon,
   SunIcon,
   TicketIcon,
@@ -23,7 +22,6 @@ import {
 import { ApiError, FIREX_UNAUTHORIZED_EVENT, api } from '@/api'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -66,6 +64,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/format'
+import { confirmUnsavedNavigation } from '@/hooks/use-unsaved-guard'
 import { OverviewPage } from '@/pages/Overview'
 import { PanelsPage } from '@/pages/Panels'
 import { InboundsPage } from '@/pages/Inbounds'
@@ -112,7 +111,18 @@ function Shell() {
   const [route, setRoute] = useState<RouteKey>(currentRoute)
 
   useEffect(() => {
-    const onHash = () => setRoute(currentRoute())
+    let acceptedUrl = window.location.href
+    let acceptedRoute = currentRoute()
+    const onHash = () => {
+      const nextRoute = currentRoute()
+      if (nextRoute !== acceptedRoute && !confirmUnsavedNavigation()) {
+        window.history.replaceState(window.history.state, '', acceptedUrl)
+        return
+      }
+      acceptedUrl = window.location.href
+      acceptedRoute = nextRoute
+      setRoute(nextRoute)
+    }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
@@ -272,6 +282,7 @@ function NavUser({ username, onSignedOut }: { username: string; onSignedOut: () 
   const { isMobile, setOpenMobile } = useSidebar()
 
   const signOut = async () => {
+    if (!confirmUnsavedNavigation()) return
     try {
       await api.post('/auth/logout')
       onSignedOut()
@@ -418,54 +429,11 @@ function Login({ onSignedIn }: { onSignedIn: () => Promise<void> }) {
   }
 
   return (
-    <main className="grid min-h-svh bg-background lg:grid-cols-2">
-      <section className="relative hidden overflow-hidden border-r bg-muted/30 p-10 lg:flex lg:flex-col xl:p-14">
-        <div className="pointer-events-none absolute -left-24 top-1/4 size-80 rounded-full bg-brand/10 blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-32 right-0 size-96 rounded-full bg-brand/10 blur-3xl" />
-
-        <div className="relative flex items-center gap-3">
-          <div className="flex size-10 items-center justify-center rounded-xl bg-brand text-brand-foreground">
-            <FlameIcon />
-          </div>
-          <div>
-            <p className="font-heading font-semibold">FireX</p>
-            <p className="text-sm text-muted-foreground">3X-UI 控制平面</p>
-          </div>
-        </div>
-
-        <div className="relative my-auto flex max-w-xl flex-col gap-6">
-          <Badge variant="outline">统一管理 · 清晰掌控</Badge>
-          <div className="flex flex-col gap-3">
-            <h1 className="font-heading text-4xl font-semibold tracking-tight xl:text-5xl">
-              一个入口，掌握所有面板与节点。
-            </h1>
-            <p className="max-w-lg text-base leading-relaxed text-muted-foreground">
-              集中查看健康状态、交付套餐与订阅，并让同步、流量和系统维护保持高效可控。
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge variant="secondary">
-              <ServerIcon data-icon="inline-start" />
-              多面板管理
-            </Badge>
-            <Badge variant="secondary">
-              <LayersIcon data-icon="inline-start" />
-              节点自动发现
-            </Badge>
-            <Badge variant="secondary">
-              <ShieldCheckIcon data-icon="inline-start" />
-              安全会话
-            </Badge>
-          </div>
-        </div>
-
-        <p className="relative text-sm text-muted-foreground">可靠地运行在你的基础设施中</p>
-      </section>
-
+    <main className="grid min-h-svh bg-background">
       <section className="relative flex items-center justify-center overflow-hidden p-4 sm:p-8 lg:p-12">
         <div className="pointer-events-none absolute inset-x-8 top-0 h-40 rounded-full bg-brand/10 blur-3xl lg:hidden" />
         <div className="relative flex w-full max-w-md flex-col gap-6">
-          <div className="flex items-center gap-3 lg:hidden">
+          <div className="flex items-center gap-3">
             <div className="flex size-10 items-center justify-center rounded-xl bg-brand text-brand-foreground">
               <FlameIcon />
             </div>

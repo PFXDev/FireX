@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDownIcon,
   EyeIcon,
@@ -146,6 +146,7 @@ export function RoutingPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [needsReview, setNeedsReview] = useState(false);
 
@@ -167,6 +168,7 @@ export function RoutingPage() {
     error?: string;
   } | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const previewRequest = useRef(0);
 
   const load = useCallback(async () => {
     try {
@@ -230,7 +232,11 @@ export function RoutingPage() {
   };
 
   const save = async () => {
+    if (saving) return;
     setSaving(true);
+    previewRequest.current++;
+    setPreviewing(false);
+    setPreview(null);
     try {
       await api.put("/routing", {
         policies: rows.map((row) => row.policy),
@@ -241,8 +247,9 @@ export function RoutingPage() {
           })),
         ),
       });
+      setDirty(false);
       toast.success("分流已保存");
-      await load();
+      if (!(await load())) toast.warning("分流已保存，但刷新失败，请重新加载。");
     } catch (err) {
       toast.error(errorMessage(err, "保存失败"));
     } finally {
@@ -251,19 +258,30 @@ export function RoutingPage() {
   };
 
   const runPreview = async () => {
+    if (previewing) return;
+    const requestId = ++previewRequest.current;
     setPreviewing(true);
+    setPreview(null);
     try {
-      setPreview(
-        await api.get<{ yaml?: string; error?: string }>(
-          `/routing/preview?profileId=${previewProfile}`,
-        ),
+      const result = await api.get<{ yaml?: string; error?: string }>(
+        `/routing/preview?profileId=${previewProfile}`,
       );
+      if (requestId === previewRequest.current) setPreview(result);
     } catch (err) {
-      setPreview({ error: errorMessage(err, "预览失败") });
+      if (requestId === previewRequest.current) setPreview({ error: errorMessage(err, "预览失败") });
     } finally {
-      setPreviewing(false);
+      if (requestId === previewRequest.current) setPreviewing(false);
     }
   };
+
+  useEffect(() => {
+    previewRequest.current++;
+    setPreview(null);
+    setPreviewing(false);
+    if (previewProfile !== DEFAULT_COLUMN && !profiles.some((profile) => profile.id === previewProfile)) {
+      setPreviewProfile(DEFAULT_COLUMN);
+    }
+  }, [profiles, previewProfile]);
 
   const groupByName = useMemo(
     () => new Map(groups.map((group) => [group.name, group])),
@@ -404,23 +422,27 @@ export function RoutingPage() {
   };
 
   const saveProfile = async () => {
-    if (!profileDraft) return;
+    if (!profileDraft?.name.trim() || profileSaving) return;
+    setProfileSaving(true);
+    const body = { ...profileDraft, name: profileDraft.name.trim() };
     try {
       if (profileDraft.id) {
         const result = await api.put<{ syncError: string }>(
           `/profiles/${profileDraft.id}`,
-          profileDraft,
+          body,
         );
         if (result.syncError) reportSyncError(result.syncError);
         else toast.success("方案已保存，相关用户已同步到面板");
       } else {
-        await api.post("/profiles", profileDraft);
+        await api.post("/profiles", body);
         toast.success("方案已创建");
       }
       setProfileDraft(null);
       await reloadProfiles();
     } catch (err) {
       toast.error(errorMessage(err, "保存失败"));
+    } finally {
+      setProfileSaving(false);
     }
   };
 
@@ -475,7 +497,7 @@ export function RoutingPage() {
     : null;
 
   return (
-    <div className="flex w-full flex-col gap-6">
+    <div className="flex w-full flex-col gap-6" aria-busy={saving} inert={saving}>
       <PageHeader
         title="分流"
         description="行是分流策略（一份规则清单），列是分流方案。第一列是默认出口，方案列只写和默认不同的部分。"
@@ -758,13 +780,14 @@ export function RoutingPage() {
       </Card>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-col gap-3">
           <CardTitle>渲染预览</CardTitle>
           <CardDescription>
             按已保存的配置渲染一份完整配置。代理字段是占位，实际值在订阅时从面板取回，但分组和规则就是客户端会拿到的。
           </CardDescription>
-          <CardAction className="flex items-center gap-2">
+          <CardAction className="flex w-full flex-wrap items-center gap-2">
             <Select
+              disabled={previewing}
               items={[
                 {
                   value: String(DEFAULT_COLUMN),
@@ -776,9 +799,12 @@ export function RoutingPage() {
                 })),
               ]}
               value={String(previewProfile)}
-              onValueChange={(value) => setPreviewProfile(Number(value))}
+              onValueChange={(value) => {
+                setPreviewProfile(Number(value));
+                setPreview(null);
+              }}
             >
-              <SelectTrigger aria-label="预览哪个方案" className="w-56">
+              <SelectTrigger aria-label="预览哪个方案" className="w-full sm:w-56">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -829,7 +855,7 @@ export function RoutingPage() {
           {preview?.yaml && (
             <CodeBlock className="max-h-[60vh]">{preview.yaml}</CodeBlock>
           )}
-          {!preview && (
+          {!preview && !previewing && (
             <p className="text-sm text-muted-foreground">还没有生成预览。</p>
           )}
         </CardContent>
@@ -889,6 +915,7 @@ export function RoutingPage() {
       />
 
       <ProfileDialog
+        saving={profileSaving}
         draft={profileDraft}
         groups={groups}
         onChange={setProfileDraft}
@@ -1600,20 +1627,22 @@ function MemberPicker({
 
 function ProfileDialog({
   draft,
+  saving,
   groups,
   onChange,
   onClose,
   onSave,
 }: {
   draft: ProfileDraft | null;
+  saving: boolean;
   groups: NodeGroup[];
   onChange: (draft: ProfileDraft) => void;
   onClose: () => void;
   onSave: () => void;
 }) {
   return (
-    <Dialog open={draft !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-xl">
+    <Dialog open={draft !== null} onOpenChange={(open) => !open && !saving && onClose()}>
+      <DialogContent className="sm:max-w-xl" showCloseButton={!saving}>
         <DialogHeader>
           <DialogTitle>
             {draft?.id ? "编辑分流方案" : "新建分流方案"}
@@ -1622,109 +1651,122 @@ function ProfileDialog({
             可用节点组决定这个方案的用户能连上哪些入站。保存后会立刻同步到相关面板。
           </DialogDescription>
         </DialogHeader>
-        {draft && (
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="profile-name">名称</FieldLabel>
-              <Input
-                id="profile-name"
-                placeholder="VIP"
-                value={draft.name}
-                onChange={(event) =>
-                  onChange({ ...draft, name: event.target.value })
-                }
-              />
-            </Field>
+        <form
+          className="flex flex-col gap-4"
+          aria-busy={saving}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!saving && draft?.name.trim()) onSave();
+          }}
+        >
+          {draft && (
+            <FieldSet disabled={saving}>
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="profile-name">名称</FieldLabel>
+                  <Input
+                    id="profile-name"
+                    required
+                    placeholder="VIP"
+                    value={draft.name}
+                    onChange={(event) =>
+                      onChange({ ...draft, name: event.target.value })
+                    }
+                  />
+                </Field>
 
-            <Field orientation="horizontal">
-              <FieldLabel htmlFor="profile-all">包含全部节点组</FieldLabel>
-              <Switch
-                id="profile-all"
-                checked={draft.allGroups}
-                onCheckedChange={(allGroups) =>
-                  onChange({ ...draft, allGroups })
-                }
-              />
-            </Field>
+                <Field orientation="horizontal">
+                  <FieldLabel htmlFor="profile-all">包含全部节点组</FieldLabel>
+                  <Switch
+                    id="profile-all"
+                    checked={draft.allGroups}
+                    onCheckedChange={(allGroups) =>
+                      onChange({ ...draft, allGroups })
+                    }
+                  />
+                </Field>
 
-            {!draft.allGroups && (
-              <FieldSet>
-                <FieldLegend variant="label">
-                  可用节点组（已选 {draft.groupIds.length} 个）
-                </FieldLegend>
-                <ScrollArea className="h-56 rounded-lg border">
-                  <FieldGroup className="gap-2 p-3">
-                    {groups.length === 0 ? (
-                      <FieldDescription>
-                        还没有节点组，先去「节点组」页建一个。
-                      </FieldDescription>
-                    ) : (
-                      groups.map((group) => (
-                        <Field key={group.id} orientation="horizontal">
-                          <Checkbox
-                            id={`profile-group-${group.id}`}
-                            checked={draft.groupIds.includes(group.id)}
-                            onCheckedChange={() =>
-                              onChange({
-                                ...draft,
-                                groupIds: draft.groupIds.includes(group.id)
-                                  ? draft.groupIds.filter(
-                                      (id) => id !== group.id,
-                                    )
-                                  : [...draft.groupIds, group.id],
-                              })
-                            }
-                          />
-                          <FieldLabel htmlFor={`profile-group-${group.id}`}>
-                            <span>
-                              {group.emoji
-                                ? `${group.emoji} ${group.name}`
-                                : group.name}
-                            </span>
-                            <span className="text-muted-foreground">
-                              {group.usableInbounds} 个入站
-                            </span>
-                            {!group.enabled && (
-                              <StatusBadge tone="idle">停用</StatusBadge>
-                            )}
-                          </FieldLabel>
-                        </Field>
-                      ))
-                    )}
-                  </FieldGroup>
-                </ScrollArea>
-              </FieldSet>
-            )}
+                {!draft.allGroups && (
+                  <FieldSet>
+                    <FieldLegend variant="label">
+                      可用节点组（已选 {draft.groupIds.length} 个）
+                    </FieldLegend>
+                    <ScrollArea className="h-56 rounded-lg border">
+                      <FieldGroup className="gap-2 p-3">
+                        {groups.length === 0 ? (
+                          <FieldDescription>
+                            还没有节点组，先去「节点组」页建一个。
+                          </FieldDescription>
+                        ) : (
+                          groups.map((group) => (
+                            <Field key={group.id} orientation="horizontal">
+                              <Checkbox
+                                id={`profile-group-${group.id}`}
+                                checked={draft.groupIds.includes(group.id)}
+                                onCheckedChange={() =>
+                                  onChange({
+                                    ...draft,
+                                    groupIds: draft.groupIds.includes(group.id)
+                                      ? draft.groupIds.filter(
+                                          (id) => id !== group.id,
+                                        )
+                                      : [...draft.groupIds, group.id],
+                                  })
+                                }
+                              />
+                              <FieldLabel htmlFor={`profile-group-${group.id}`}>
+                                <span>
+                                  {group.emoji
+                                    ? `${group.emoji} ${group.name}`
+                                    : group.name}
+                                </span>
+                                <span className="text-muted-foreground">
+                                  {group.usableInbounds} 个入站
+                                </span>
+                                {!group.enabled && (
+                                  <StatusBadge tone="idle">停用</StatusBadge>
+                                )}
+                              </FieldLabel>
+                            </Field>
+                          ))
+                        )}
+                      </FieldGroup>
+                    </ScrollArea>
+                  </FieldSet>
+                )}
 
-            <Field orientation="horizontal">
-              <FieldLabel htmlFor="profile-enabled">启用</FieldLabel>
-              <Switch
-                id="profile-enabled"
-                checked={draft.enabled}
-                onCheckedChange={(enabled) => onChange({ ...draft, enabled })}
-              />
-            </Field>
+                <Field orientation="horizontal">
+                  <FieldLabel htmlFor="profile-enabled">启用</FieldLabel>
+                  <Switch
+                    id="profile-enabled"
+                    checked={draft.enabled}
+                    onCheckedChange={(enabled) => onChange({ ...draft, enabled })}
+                  />
+                </Field>
 
-            <Field>
-              <FieldLabel htmlFor="profile-remark">备注</FieldLabel>
-              <Input
-                id="profile-remark"
-                value={draft.remark}
-                onChange={(event) =>
-                  onChange({ ...draft, remark: event.target.value })
-                }
-              />
-            </Field>
-          </FieldGroup>
-        )}
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            取消
-          </Button>
-          <Button disabled={!draft?.name.trim()} onClick={onSave}>
-            保存方案
-          </Button>
-        </DialogFooter>
+                <Field>
+                  <FieldLabel htmlFor="profile-remark">备注</FieldLabel>
+                  <Input
+                    id="profile-remark"
+                    value={draft.remark}
+                    onChange={(event) =>
+                      onChange({ ...draft, remark: event.target.value })
+                    }
+                  />
+                </Field>
+              </FieldGroup>
+            </FieldSet>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={saving} onClick={onClose}>
+              取消
+            </Button>
+            <Button type="submit" disabled={saving || !draft?.name.trim()}>
+              {saving && <Spinner data-icon="inline-start" />}
+              {saving ? "保存中…" : "保存方案"}
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

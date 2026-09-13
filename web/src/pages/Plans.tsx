@@ -126,9 +126,10 @@ export function PlansPage() {
 
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!draft) return
+    if (!draft || saving) return
     setShowErrors(true)
     if (!draft.name.trim()) return
+    if (!event.currentTarget.reportValidity()) return
 
     setSaving(true)
     const body = {
@@ -359,7 +360,7 @@ export function PlansPage() {
                 <FieldGroup className="grid gap-4 sm:grid-cols-2">
                   <Field>
                     <FieldLabel htmlFor="plan-traffic">流量 (GB)</FieldLabel>
-                    <Input id="plan-traffic" type="number" min={0} step="0.1" value={draft.trafficGb} onChange={(event) => setDraft({ ...draft, trafficGb: Number(event.target.value) })} />
+                    <Input id="plan-traffic" type="number" min={0} step="any" value={draft.trafficGb} onChange={(event) => setDraft({ ...draft, trafficGb: Number(event.target.value) })} />
                     <FieldDescription>0 表示不限；新建用户时作为默认值。</FieldDescription>
                   </Field>
                   <Field>

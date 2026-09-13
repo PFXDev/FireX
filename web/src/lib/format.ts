@@ -62,15 +62,23 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     // The Clipboard API needs a secure context; a panel reached over plain
     // HTTP still has to be able to hand out subscription links.
+    const focused = document.activeElement
     const el = document.createElement('textarea')
-    el.value = text
-    el.style.position = 'fixed'
-    el.style.opacity = '0'
-    document.body.appendChild(el)
-    el.select()
-    const ok = document.execCommand('copy')
-    document.body.removeChild(el)
-    return ok
+    try {
+      el.value = text
+      el.style.position = 'fixed'
+      el.style.opacity = '0'
+      // Keep the fallback inside a modal's focus trap when copying previews.
+      const container = focused?.closest('[role="dialog"], [role="alertdialog"]') ?? document.body
+      container.appendChild(el)
+      el.select()
+      return document.execCommand('copy')
+    } catch {
+      return false
+    } finally {
+      el.remove()
+      if (focused instanceof HTMLElement) focused.focus({ preventScroll: true })
+    }
   }
 }
 

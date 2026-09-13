@@ -13,6 +13,7 @@ import {
 import { ApiError, api } from '@/api'
 import { CodeTextarea } from '@/components/code-display'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { confirmUnsavedNavigation, useUnsavedGuard } from '@/hooks/use-unsaved-guard'
 import { PageHeader } from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -44,6 +45,9 @@ export function SettingsPage() {
   const [passwordAttempted, setPasswordAttempted] = useState(false)
   const [passwordBusy, setPasswordBusy] = useState(false)
   const loadPromiseRef = useRef<Promise<boolean> | null>(null)
+  const savedTemplate = tpl ? tpl.template || tpl.default : ''
+  const dirty = Boolean(tpl) && text !== savedTemplate
+  useUnsavedGuard(dirty)
 
   const load = useCallback(() => {
     if (loadPromiseRef.current) return loadPromiseRef.current
@@ -78,6 +82,8 @@ export function SettingsPage() {
     try {
       try {
         await api.put('/settings/clashTemplate', { template: value })
+        setTpl((current) => current && ({ ...current, template: value, isDefault: !value }))
+        setText(value || tpl?.default || '')
       } catch (err) {
         toast.error(errorMessage(err, '保存失败'))
         return
@@ -96,6 +102,8 @@ export function SettingsPage() {
     try {
       try {
         await api.put('/settings/clashTemplate', { template: '' })
+        setTpl((current) => current && ({ ...current, template: '', isDefault: true }))
+        setText(tpl?.default || '')
       } catch (err) {
         toast.error(errorMessage(err, '恢复默认模板失败'))
         throw err
@@ -153,8 +161,6 @@ export function SettingsPage() {
     )
   }
 
-  const savedTemplate = tpl.template || tpl.default
-  const dirty = text !== savedTemplate
   const canRestore = !tpl.isDefault || dirty
   const templateBusy = loading || saving || restoring
 
@@ -168,7 +174,9 @@ export function SettingsPage() {
           <AlertTitle>最新设置加载失败</AlertTitle>
           <AlertDescription className="flex flex-col items-start gap-3">
             <p>{loadError}</p>
-            <Button variant="outline" size="sm" disabled={loading} onClick={() => void load()}>
+            <Button variant="outline" size="sm" disabled={templateBusy} onClick={() => {
+              if (confirmUnsavedNavigation()) void load()
+            }}>
               {loading ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
               {loading ? '重试中…' : '重新加载'}
             </Button>

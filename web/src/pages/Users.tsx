@@ -188,11 +188,12 @@ export function UsersPage() {
 
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!draft) return
+    if (!draft || saving) return
     setShowErrors(true)
     const usernameValid = draft.username.trim().length > 0 && USERNAME_RE.test(draft.username)
     const uuidValid = !draft.uuid || UUID_RE.test(draft.uuid)
     if (!usernameValid || !uuidValid) return
+    if (!event.currentTarget.reportValidity()) return
 
     setSaving(true)
     const body: Record<string, unknown> = {
@@ -500,7 +501,7 @@ export function UsersPage() {
                   <FieldGroup className="grid gap-4 sm:grid-cols-2">
                     <Field>
                       <FieldLabel htmlFor="user-traffic">流量上限 (GB)</FieldLabel>
-                      <Input id="user-traffic" type="number" min={0} step="0.1" value={draft.trafficGb} onChange={(event) => setDraft({ ...draft, trafficGb: Number(event.target.value) })} />
+                      <Input id="user-traffic" type="number" min={0} step="any" value={draft.trafficGb} onChange={(event) => setDraft({ ...draft, trafficGb: Number(event.target.value) })} />
                       <FieldDescription>0 表示不限。</FieldDescription>
                     </Field>
                     <Field>
