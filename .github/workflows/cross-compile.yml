@@ -78,33 +78,21 @@ jobs:
       fail-fast: false
       matrix:
         # Each target must match updater.targetName() exactly: the asset name
-        # is firex-{goos}-{goarch}{ext}, and a name only one side knows about
+        # is firex-{goos}-{goarch}, and a name only one side knows about
         # is a permanent 404 for those machines.
         include:
           - target: linux-amd64
             goos: linux
             goarch: amd64
-            ext: ""
           - target: linux-arm64
             goos: linux
             goarch: arm64
-            ext: ""
           - target: darwin-amd64
             goos: darwin
             goarch: amd64
-            ext: ""
           - target: darwin-arm64
             goos: darwin
             goarch: arm64
-            ext: ""
-          - target: windows-amd64
-            goos: windows
-            goarch: amd64
-            ext: ".exe"
-          - target: windows-arm64
-            goos: windows
-            goarch: arm64
-            ext: ".exe"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -137,7 +125,7 @@ jobs:
           mkdir -p dist
 
           PKG="github.com/PFXDev/FireX/internal/version"
-          BIN="firex-${{ matrix.target }}${{ matrix.ext }}"
+          BIN="firex-${{ matrix.target }}"
           go build -trimpath \
             -ldflags="-s -w \
               -X ${PKG}.Version=${{ needs.meta.outputs.version }} \

@@ -217,7 +217,8 @@ discovery and reconcile cycle re-converges every panel.
 
 Releases come from `.github/workflows/cross-compile.yml`: pushes to `main`
 refresh the rolling `dev` prerelease, and a `v*` tag publishes a stable release.
-Asset names are `firex-{goos}-{goarch}[.exe]` and must stay identical to
+CI builds Linux and macOS binaries for amd64 and arm64; Windows artifacts are
+not published. Asset names are `firex-{goos}-{goarch}` and must stay identical to
 `targetName()` in `internal/updater` — a name only one side knows about is a
 permanent 404 for those machines.
 
