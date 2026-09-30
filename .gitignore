@@ -40,6 +40,9 @@ reference/
 # Runtime data (SQLite database)
 /data/
 
+# Local preview and scratch programs
+/.tmp/
+
 # Frontend
 web/node_modules/
 web/*.tsbuildinfo
