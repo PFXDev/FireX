@@ -66,12 +66,22 @@ type Inbound struct {
 	Port          int    `json:"port"`
 	RemoteRemark  string `json:"remoteRemark"`
 	RemoteEnabled bool   `json:"remoteEnabled"`
+	Listen        string `json:"listen"`
+	Network       string `json:"network"`
+	Security      string `json:"security"`
+	DisableFlow   bool   `json:"disableFlow"`
+	// Config is the last discovered inbound configuration, without client
+	// accounts or traffic counters. Only the admin detail endpoint exposes it.
+	Config string `json:"-"`
 
 	Name      string `json:"name"`
 	Emoji     string `json:"emoji"`
 	SortOrder int    `json:"sortOrder" gorm:"default:100"`
 	Enabled   bool   `json:"enabled" gorm:"default:false"`
 	UDP       bool   `json:"udp" gorm:"default:true"`
+	// Nil preserves each existing client's flow when upgrading from a version
+	// without this setting. Discovery explicitly disables Vision for new rows.
+	Vision *bool `json:"vision"`
 
 	// PublicAddress and PublicPort are the endpoint clients actually dial when
 	// it differs from what the panel advertises. A panel only knows where xray

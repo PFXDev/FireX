@@ -26,7 +26,7 @@ import (
 
 // EmailSuffix namespaces FireX-managed clients on a shared panel so a manually
 // created client is never mistaken for one of ours.
-const EmailSuffix = "@firex"
+const EmailSuffix = "@FireX"
 
 // ClientGroup labels FireX-managed clients in the panel UI.
 const ClientGroup = "firex"
@@ -121,6 +121,7 @@ func (m *Manager) DiscoverPanel(ctx context.Context, p *model.Panel) error {
 				Name:      ib.Remark,
 				SortOrder: 100,
 				UDP:       true,
+				Vision:    new(bool),
 				// A newly discovered inbound stays out of every subscription
 				// until an admin reviews it and puts it in a node group.
 				Enabled:   false,
@@ -134,6 +135,10 @@ func (m *Manager) DiscoverPanel(ctx context.Context, p *model.Panel) error {
 		row.Port = ib.Port
 		row.RemoteRemark = ib.Remark
 		row.RemoteEnabled = ib.Enable
+		row.Listen = ib.Listen
+		row.Network, row.Security = ib.Transport()
+		row.DisableFlow = ib.DisableFlow
+		row.Config = ib.Configuration()
 		row.Missing = false
 		row.LastSeenAt = now
 		row.UpdatedAt = now
@@ -189,13 +194,17 @@ func (m *Manager) DiscoverAll(ctx context.Context) error {
 type desiredClient struct {
 	InboundIDs []int
 	Client     panel.RemoteClient
+	// An absent entry preserves the live flow on that attachment. This keeps
+	// upgrades from overwriting per-user settings the admin has not adopted.
+	Flows map[int]string
 }
 
 func (d desiredClient) hash() string {
 	buf, _ := json.Marshal(struct {
 		I []int              `json:"i"`
 		C panel.RemoteClient `json:"c"`
-	}{d.InboundIDs, d.Client})
+		F map[int]string     `json:"f"`
+	}{d.InboundIDs, d.Client, d.Flows})
 	sum := sha256.Sum256(buf)
 	return hex.EncodeToString(sum[:8])
 }
@@ -213,22 +222,37 @@ func (m *Manager) DesiredFor(u *model.User) (map[uint]desiredClient, error) {
 		return nil, err
 	}
 
+	active := u.Active(NowMs())
 	byPanel := map[uint][]int{}
+	flows := map[uint]map[int]string{}
 	for _, n := range inbounds {
 		byPanel[n.PanelID] = append(byPanel[n.PanelID], n.RemoteID)
+		if flows[n.PanelID] == nil {
+			flows[n.PanelID] = map[int]string{}
+		}
+		if n.Vision == nil {
+			continue
+		}
+		flow := ""
+		// Disabling an expired/blocked account must still work if the panel
+		// changed this inbound to a transport that no longer accepts Vision.
+		if *n.Vision && active {
+			flow = panel.VisionFlow
+		}
+		flows[n.PanelID][n.RemoteID] = flow
 	}
 
 	limitIP := 0
 	if plan != nil {
 		limitIP = plan.DeviceLimit
 	}
-	active := u.Active(NowMs())
 
 	out := make(map[uint]desiredClient, len(byPanel))
 	for panelID, inboundIDs := range byPanel {
 		sort.Ints(inboundIDs)
 		out[panelID] = desiredClient{
 			InboundIDs: inboundIDs,
+			Flows:      flows[panelID],
 			Client: panel.RemoteClient{
 				ID:       u.UUID,
 				Password: u.UUID,
@@ -357,37 +381,126 @@ func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.
 		return m.db.Where("user_id = ? AND panel_id = ?", u.ID, p.ID).Delete(&model.UserPanel{}).Error
 	}
 
+	// Revoke removed attachments before validating or granting access. A bad
+	// Vision configuration on one remaining inbound must not retain access to
+	// an unrelated inbound the user's plan no longer allows.
+	attach, detach := diffInts(want.InboundIDs, actual)
+	if exists && len(detach) > 0 {
+		if err := client.DetachClient(ctx, email, detach); err != nil {
+			return fail(fmt.Errorf("panel %s: detach: %w", p.Name, err))
+		}
+	}
+
+	// Check explicit Vision choices against live capability before adding or
+	// changing clients. Preserved flows are not new requests to enable Vision.
+	for _, ib := range inbounds {
+		if want.Flows[ib.ID] == panel.VisionFlow {
+			network, security := ib.Transport()
+			if reason := panel.VisionReason(ib.Protocol, network, security, ib.DisableFlow); reason != "" {
+				return fail(fmt.Errorf("panel %s inbound %d: %s", p.Name, ib.ID, reason))
+			}
+		}
+	}
+	desiredHash := want.hash()
+	forceUpdate := exists && record.DesiredHash != desiredHash
+	// Resolve preserved flows before attaching: a new attachment must start
+	// without flow, not inherit an unrelated inbound's canonical client flow.
+	liveFlows := inboundFlows(inbounds, email)
+	resolvedFlows := make(map[int]string, len(want.InboundIDs))
+	for _, id := range want.InboundIDs {
+		flow, managed := want.Flows[id]
+		if !managed {
+			flow = liveFlows[id]
+		}
+		resolvedFlows[id] = flow
+	}
+	want.Flows = resolvedFlows
+	refresh := false
 	if !exists {
 		if err := client.AddClient(ctx, want.Client, want.InboundIDs); err != nil {
 			return fail(fmt.Errorf("panel %s: add client: %w", p.Name, err))
 		}
+		refresh = true
 	} else {
-		attach, detach := diffInts(want.InboundIDs, actual)
 		if len(attach) > 0 {
 			if err := client.AttachClient(ctx, email, attach); err != nil {
 				return fail(fmt.Errorf("panel %s: attach: %w", p.Name, err))
 			}
+			refresh, forceUpdate = true, true
 		}
-		if len(detach) > 0 {
-			if err := client.DetachClient(ctx, email, detach); err != nil {
-				return fail(fmt.Errorf("panel %s: detach: %w", p.Name, err))
-			}
+	}
+	if refresh {
+		inbounds, err = client.Inbounds(ctx)
+		if err != nil {
+			return fail(fmt.Errorf("panel %s: read attached clients: %w", p.Name, err))
 		}
-		// Re-push the fields only when they actually drifted; a no-op update
-		// still makes the panel restart-check its xray config.
-		if record.DesiredHash != want.hash() || len(attach) > 0 {
-			if err := client.UpdateClient(ctx, email, want.Client); err != nil {
-				return fail(fmt.Errorf("panel %s: update client: %w", p.Name, err))
-			}
-		}
+	}
+	if err := syncClientFlows(ctx, client, email, want, inbounds, forceUpdate); err != nil {
+		return fail(fmt.Errorf("panel %s: %w", p.Name, err))
 	}
 
 	record.InboundIDs = joinInts(want.InboundIDs)
-	record.DesiredHash = want.hash()
+	record.DesiredHash = desiredHash
 	record.State = model.SyncStateSynced
 	record.LastError = ""
 	record.UpdatedAt = NowMs()
 	return m.db.Save(&record).Error
+}
+
+func syncClientFlows(ctx context.Context, client *panel.Client, email string, want desiredClient, inbounds []panel.Inbound, force bool) error {
+	actual := inboundFlows(inbounds, email)
+	groups := map[string][]int{}
+	for _, id := range want.InboundIDs {
+		flow, exists := actual[id]
+		if !exists {
+			return fmt.Errorf("inbound %d: client attachment missing", id)
+		}
+		if force || flow != want.Flows[id] {
+			groups[want.Flows[id]] = append(groups[want.Flows[id]], id)
+		}
+	}
+	// Empty flow sorts first. Keep legacy flow values as well as Vision when
+	// an upgrade preserves a panel's existing per-client settings.
+	flowOrder := make([]string, 0, len(groups))
+	for flow := range groups {
+		flowOrder = append(flowOrder, flow)
+	}
+	sort.Strings(flowOrder)
+	for _, flow := range flowOrder {
+		if ids := groups[flow]; len(ids) > 0 {
+			cl := want.Client
+			cl.Flow = flow
+			if err := client.UpdateClientInbounds(ctx, email, cl, ids); err != nil {
+				return fmt.Errorf("update client flow on inbounds %v: %w", ids, err)
+			}
+		}
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+	// Detect panels that reject/ignore flow or the inbound filter instead of
+	// reporting a successful sync and handing out a non-working subscription.
+	verified, err := client.Inbounds(ctx)
+	if err != nil {
+		return fmt.Errorf("verify client flow: %w", err)
+	}
+	actual = inboundFlows(verified, email)
+	for _, id := range want.InboundIDs {
+		if flow, exists := actual[id]; !exists || flow != want.Flows[id] {
+			return fmt.Errorf("inbound %d: panel did not retain flow %q; check 3X-UI inboundIds support and Disable flow", id, want.Flows[id])
+		}
+	}
+	return nil
+}
+
+func inboundFlows(inbounds []panel.Inbound, email string) map[int]string {
+	out := map[int]string{}
+	for _, ib := range inbounds {
+		if flow, ok := ib.ClientFlows()[strings.ToLower(email)]; ok {
+			out[ib.ID] = flow
+		}
+	}
+	return out
 }
 
 // ReconcileAll converges every user. Used by the periodic sync job and after

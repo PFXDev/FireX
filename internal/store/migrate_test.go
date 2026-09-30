@@ -54,6 +54,46 @@ const legacyRoutingJSON = `{
   "final": {"kind":"policy","ref":"漏网之鱼"}
 }`
 
+func TestMigrationPreservesUnsetVisionAcrossRestarts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "firex.db")
+	seedLegacy(t, path)
+	db, err := store.Open(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inbounds []model.Inbound
+	if err := db.Order("id").Find(&inbounds).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, inbound := range inbounds {
+		if inbound.Vision != nil {
+			t.Fatalf("upgraded inbound %d must preserve existing flow", inbound.ID)
+		}
+	}
+	// Both explicit false and true must remain distinct from an unset value.
+	if err := db.Model(&model.Inbound{}).Where("id = ?", inbounds[0].ID).Update("vision", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.Inbound{}).Where("id = ?", inbounds[1].ID).Update("vision", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = store.Open(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	inbounds = nil
+	if err := db.Order("id").Find(&inbounds).Error; err != nil {
+		t.Fatal(err)
+	}
+	if inbounds[0].Vision == nil || *inbounds[0].Vision || inbounds[1].Vision == nil || !*inbounds[1].Vision || inbounds[2].Vision != nil {
+		t.Fatal("restart changed explicit off/on or legacy unset Vision")
+	}
+}
+
 // seedLegacy writes a pre-v2 database: one panel, three inbounds, one hand-made
 // group covering two of them, and two plans with different inbound sets.
 func seedLegacy(t *testing.T, path string) {

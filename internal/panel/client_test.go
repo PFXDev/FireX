@@ -92,7 +92,7 @@ func TestWriteIsNeverRetried(t *testing.T) {
 	}
 	c := newTestClient(t, rt)
 
-	if err := c.DeleteClient(context.Background(), "alice@firex"); err == nil {
+	if err := c.DeleteClient(context.Background(), "alice@FireX"); err == nil {
 		t.Fatal("DeleteClient() error = nil, want the dial failure")
 	}
 	if rt.attempts != 1 {

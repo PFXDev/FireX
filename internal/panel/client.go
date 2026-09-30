@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -247,6 +248,20 @@ func (c *Client) AddClient(ctx context.Context, cl RemoteClient, inboundIDs []in
 // client object at the top level here, unlike add.
 func (c *Client) UpdateClient(ctx context.Context, email string, cl RemoteClient) error {
 	return c.do(ctx, http.MethodPost, "/panel/api/clients/update/"+url.PathEscape(email), cl, nil)
+}
+
+// UpdateClientInbounds scopes stream-specific fields such as flow to these
+// attachments. The same email can have different flows on the same panel.
+func (c *Client) UpdateClientInbounds(ctx context.Context, email string, cl RemoteClient, ids []int) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("update client: inbound ids required")
+	}
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.Itoa(id)
+	}
+	query := url.Values{"inboundIds": {strings.Join(parts, ",")}}
+	return c.do(ctx, http.MethodPost, "/panel/api/clients/update/"+url.PathEscape(email)+"?"+query.Encode(), cl, nil)
 }
 
 func (c *Client) DeleteClient(ctx context.Context, email string) error {

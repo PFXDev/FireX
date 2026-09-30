@@ -8,17 +8,24 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 )
 
 type Inbound struct {
-	ID       int
-	Port     int
-	Protocol string
-	Remark   string
-	Tag      string
-	Enable   bool
+	ID             int
+	Port           int
+	Protocol       string
+	Remark         string
+	Tag            string
+	Enable         bool
+	Listen         string
+	Settings       string
+	StreamSettings string
+	Sniffing       string
+	DisableFlow    bool
 }
 
 type Client struct {
@@ -28,6 +35,7 @@ type Client struct {
 	TotalGB    int64
 	ExpiryTime int64
 	LimitIP    int
+	Flow       string
 	Up         int64
 	Down       int64
 }
@@ -40,6 +48,7 @@ type Panel struct {
 	clients  map[string]*Client
 	// members maps lowercase email to the inbound ids it is attached to.
 	members map[string]map[int]bool
+	flows   map[string]map[int]string
 	calls   []string
 
 	Token  string
@@ -53,6 +62,7 @@ func New(token string, inbounds ...Inbound) *Panel {
 		inbounds: inbounds,
 		clients:  map[string]*Client{},
 		members:  map[string]map[int]bool{},
+		flows:    map[string]map[int]string{},
 		Token:    token,
 		FailNext: map[string]bool{},
 	}
@@ -111,6 +121,18 @@ func (p *Panel) SetTraffic(email string, up, down int64) {
 	if c, ok := p.clients[strings.ToLower(email)]; ok {
 		c.Up, c.Down = up, down
 	}
+}
+
+func (p *Panel) ClientFlow(email string, inboundID int) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.flows[strings.ToLower(email)][inboundID]
+}
+
+func (p *Panel) SetClientFlow(email string, inboundID int, flow string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.flows[strings.ToLower(email)][inboundID] = flow
 }
 
 // AddInbound simulates an admin creating an inbound on the panel.
@@ -189,20 +211,32 @@ func (p *Panel) inboundPayload() []map[string]any {
 				continue
 			}
 			c := p.clients[email]
-			clients = append(clients, map[string]any{"email": c.Email, "id": c.ID})
+			clients = append(clients, map[string]any{"email": c.Email, "id": c.ID, "flow": p.flows[email][ib.ID]})
 			stats = append(stats, map[string]any{
 				"inboundId": ib.ID, "email": c.Email, "up": c.Up, "down": c.Down,
 				"enable": c.Enable, "total": c.TotalGB, "expiryTime": c.ExpiryTime,
 			})
 		}
-		settings, _ := json.Marshal(map[string]any{"clients": clients})
+		settingsMap := map[string]any{}
+		_ = json.Unmarshal([]byte(ib.Settings), &settingsMap)
+		settingsMap["clients"] = clients
+		settings, _ := json.Marshal(settingsMap)
+		stream := ib.StreamSettings
+		if stream == "" {
+			stream = `{"network":"tcp","security":"reality","realitySettings":{"serverNames":["www.example.com"],"privateKey":"test-private-key","shortIds":["ab"],"settings":{"publicKey":"PBK","fingerprint":"chrome"}}}`
+		}
+		sniffing := ib.Sniffing
+		if sniffing == "" {
+			sniffing = `{"enabled":false}`
+		}
 		out = append(out, map[string]any{
 			"id": ib.ID, "port": ib.Port, "protocol": ib.Protocol,
 			"remark": ib.Remark, "tag": ib.Tag, "enable": ib.Enable,
 			"settings":       json.RawMessage(settings),
-			"streamSettings": json.RawMessage(`{"network":"tcp","security":"none"}`),
-			"sniffing":       json.RawMessage(`{"enabled":false}`),
-			"clientStats":    stats,
+			"streamSettings": json.RawMessage(stream),
+			"sniffing":       json.RawMessage(sniffing),
+			"listen":         ib.Listen, "disableFlow": ib.DisableFlow,
+			"clientStats": stats,
 		})
 	}
 	return out
@@ -227,8 +261,10 @@ func (p *Panel) addClient(w http.ResponseWriter, r *http.Request) {
 	c := body.Client
 	p.clients[key] = &c
 	p.members[key] = map[int]bool{}
+	p.flows[key] = map[int]string{}
 	for _, id := range body.InboundIDs {
 		p.members[key][id] = true
+		p.flows[key][id] = c.Flow
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true})
 }
@@ -252,6 +288,18 @@ func (p *Panel) updateClient(w http.ResponseWriter, r *http.Request, email strin
 	c.TotalGB = incoming.TotalGB
 	c.ExpiryTime = incoming.ExpiryTime
 	c.LimitIP = incoming.LimitIP
+	c.Flow = incoming.Flow
+	filter := map[int]bool{}
+	for _, raw := range strings.Split(r.URL.Query().Get("inboundIds"), ",") {
+		if id, err := strconv.Atoi(raw); err == nil {
+			filter[id] = true
+		}
+	}
+	for id := range p.members[key] {
+		if len(filter) == 0 || filter[id] {
+			p.flows[key][id] = incoming.Flow
+		}
+	}
 	writeJSON(w, http.StatusOK, envelope{Success: true})
 }
 
@@ -265,6 +313,7 @@ func (p *Panel) deleteClient(w http.ResponseWriter, email string) {
 	}
 	delete(p.clients, key)
 	delete(p.members, key)
+	delete(p.flows, key)
 	writeJSON(w, http.StatusOK, envelope{Success: true})
 }
 
@@ -300,8 +349,10 @@ func (p *Panel) attachDetach(w http.ResponseWriter, r *http.Request, path string
 	for _, id := range body.InboundIDs {
 		if action == "attach" {
 			set[id] = true
+			p.flows[key][id] = p.clients[key].Flow
 		} else {
 			delete(set, id)
+			delete(p.flows[key], id)
 		}
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true})
@@ -324,9 +375,13 @@ func (p *Panel) clientLinks(w http.ResponseWriter, email string) {
 		if !set[ib.ID] {
 			continue
 		}
+		flow := ""
+		if value := p.flows[key][ib.ID]; value != "" {
+			flow = "&flow=" + url.QueryEscape(value)
+		}
 		links = append(links, fmt.Sprintf(
-			"vless://%s@host%d.example.com:%d?type=tcp&security=reality&pbk=PBK%d&sid=ab&fp=chrome&sni=www.example.com&flow=xtls-rprx-vision#%s",
-			c.ID, ib.ID, ib.Port, ib.ID, ib.Remark))
+			"vless://%s@host%d.example.com:%d?type=tcp&security=reality&pbk=PBK%d&sid=ab&fp=chrome&sni=www.example.com%s#%s",
+			c.ID, ib.ID, ib.Port, ib.ID, flow, ib.Remark))
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Obj: links})
 }

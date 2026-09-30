@@ -55,7 +55,7 @@ to a panel.
 
 Provisioning state is tracked per (user, panel) because 3x-ui keys a client and
 its traffic counters by a panel-unique email. FireX writes clients as
-`<username>@firex` so its own clients are always distinguishable from ones you
+`<username>@FireX` so its own clients are always distinguishable from ones you
 created by hand.
 
 ## Requirements
@@ -276,6 +276,30 @@ on `127.0.0.1:9443` behind an SNI router that owns 443, a relay, a CDN. Set
 them into the link and the mihomo entry after matching; everything else in the
 link, Reality keys included, is left as the panel wrote it. Leave a field empty
 to keep the panel's value for that half.
+
+**Inbound parameters and Vision.** Click an inbound's name or **参数** to inspect
+its last discovered configuration, grouped by connection, transport/security,
+protocol and sniffing, or as JSON. Unknown panel options are retained; client
+accounts and their traffic counters are excluded. Keys are hidden by default
+and can be revealed and copied. **同步参数** refreshes the panel snapshot.
+
+In **编辑入站**, choose **开启 Vision** for VLESS over TCP/RAW with REALITY or TLS.
+Newly discovered inbounds default to off. Inbounds from versions without this
+setting show **保留现有流控**: upgrades, quota edits and rediscovery preserve each
+existing user's flow, even when users on the same inbound differ. New users
+and new attachments start without flow while this mode is retained. Choosing
+on or off explicitly takes ownership of the inbound's flow and survives
+rediscovery; ordinary edits leave the preserved setting unchanged. Enabling it pushes
+`xtls-rprx-vision` to this inbound's FireX users and invalidates cached links;
+clients must refresh their subscriptions. Turning it off explicitly clears
+the flow. New users and new attachments inherit the inbound's setting.
+Other transports cannot enable Vision, and a panel-side `disableFlow` must
+be cleared in 3X-UI first. Per-inbound updates require 3X-UI's
+`POST /panel/api/clients/update/:email?inboundIds=...` support. FireX reads the
+flows back before recording a successful sync and retries failures on the
+next sync; it never fabricates Vision in a subscription after a failed push.
+Removed inbound permissions are revoked before validating the remaining
+inbounds, so an incompatible Vision setting cannot block that revocation.
 
 ## Routing
 

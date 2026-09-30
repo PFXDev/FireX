@@ -56,6 +56,10 @@ dev: ## Run the Vite dev server against a local backend on :8080
 test: dist-stub ## Run the Go test suite
 	go test -shuffle=on $(PKG)
 
+.PHONY: test-ui
+test-ui: ## Run frontend regression tests
+	cd $(UI_DIR) && npm test
+
 .PHONY: vet
 vet: dist-stub ## Run go vet
 	go vet $(PKG)
@@ -69,7 +73,7 @@ typecheck: ## Typecheck the frontend
 	cd $(UI_DIR) && npx tsc -b
 
 .PHONY: verify
-verify: vet test typecheck build ## Vet, test, typecheck, then build everything
+verify: vet test test-ui typecheck build ## Vet, test, typecheck, then build everything
 
 .PHONY: clean
 clean: ## Remove build artifacts

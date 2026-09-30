@@ -123,6 +123,9 @@ func TestDiscoverCreatesDisabledInbounds(t *testing.T) {
 		if n.Enabled {
 			t.Errorf("inbound %d discovered already enabled", n.RemoteID)
 		}
+		if n.Vision == nil || *n.Vision {
+			t.Errorf("new inbound %d must explicitly default to Vision off", n.RemoteID)
+		}
 	}
 	if inbounds[0].Port != 443 || inbounds[0].Protocol != "vless" || inbounds[0].RemoteRemark != "hk-reality" {
 		t.Errorf("inbound 1 = %+v", inbounds[0])
@@ -199,14 +202,14 @@ func TestReconcileCreatesClientOnProfileInbounds(t *testing.T) {
 		t.Fatalf("ReconcileUser() error = %v", err)
 	}
 
-	client := f.fake.Client("alice@firex")
+	client := f.fake.Client("alice@FireX")
 	if client == nil {
 		t.Fatal("client was not created on the panel")
 	}
 	if client.ID != "uuid-alice" || !client.Enable || client.TotalGB != 1000 || client.LimitIP != 3 {
 		t.Errorf("client = %+v", client)
 	}
-	if got := f.fake.Members("alice@firex"); len(got) != 1 || got[0] != 1 {
+	if got := f.fake.Members("alice@FireX"); len(got) != 1 || got[0] != 1 {
 		t.Errorf("members = %v, want [1]", got)
 	}
 
@@ -235,7 +238,7 @@ func TestReconcileFollowsNodeGroupMembership(t *testing.T) {
 	if err := f.mgr.ReconcileUser(ctx, u); err != nil {
 		t.Fatalf("ReconcileUser() error = %v", err)
 	}
-	if got := f.fake.Members("alice@firex"); len(got) != 2 {
+	if got := f.fake.Members("alice@FireX"); len(got) != 2 {
 		t.Fatalf("members = %v, want both inbounds", got)
 	}
 
@@ -244,7 +247,7 @@ func TestReconcileFollowsNodeGroupMembership(t *testing.T) {
 	if err := f.mgr.ReconcileUser(ctx, u); err != nil {
 		t.Fatalf("ReconcileUser() error = %v", err)
 	}
-	if got := f.fake.Members("alice@firex"); len(got) != 1 || got[0] != 2 {
+	if got := f.fake.Members("alice@FireX"); len(got) != 1 || got[0] != 2 {
 		t.Errorf("members = %v, want [2]", got)
 	}
 }
@@ -266,7 +269,7 @@ func TestReconcileFollowsAllGroupsProfile(t *testing.T) {
 	if err := f.mgr.ReconcileUser(ctx, u); err != nil {
 		t.Fatalf("ReconcileUser() error = %v", err)
 	}
-	if got := f.fake.Members("alice@firex"); len(got) != 2 {
+	if got := f.fake.Members("alice@FireX"); len(got) != 2 {
 		t.Errorf("members = %v, want the new group's inbound included", got)
 	}
 }
@@ -309,12 +312,12 @@ func TestReconcileDisablesInactiveUser(t *testing.T) {
 	if err := f.mgr.ReconcileUser(ctx, u); err != nil {
 		t.Fatalf("ReconcileUser() error = %v", err)
 	}
-	client := f.fake.Client("alice@firex")
+	client := f.fake.Client("alice@FireX")
 	if client == nil || client.Enable {
 		t.Fatalf("client = %+v, want enable=false", client)
 	}
 	// Disabling must not delete the client, or its traffic history is lost.
-	if got := f.fake.Members("alice@firex"); len(got) != 2 {
+	if got := f.fake.Members("alice@FireX"); len(got) != 2 {
 		t.Errorf("members = %v, want the client kept on both inbounds", got)
 	}
 }
@@ -333,7 +336,7 @@ func TestReconcileRemovesClientWhenPlanCleared(t *testing.T) {
 	if err := f.mgr.ReconcileUser(ctx, u); err != nil {
 		t.Fatalf("ReconcileUser() error = %v", err)
 	}
-	if c := f.fake.Client("alice@firex"); c != nil {
+	if c := f.fake.Client("alice@FireX"); c != nil {
 		t.Errorf("client %+v still on the panel after losing every node", c)
 	}
 	var count int64
@@ -365,7 +368,7 @@ func TestReconcileRecordsPanelFailure(t *testing.T) {
 	if err := f.mgr.ReconcileUser(ctx, u); err != nil {
 		t.Fatalf("recovery ReconcileUser() error = %v", err)
 	}
-	if f.fake.Client("alice@firex") == nil {
+	if f.fake.Client("alice@FireX") == nil {
 		t.Error("client was not created on the retry")
 	}
 }
@@ -379,7 +382,7 @@ func TestCollectTrafficAccumulatesDeltas(t *testing.T) {
 	u := f.newUser(t, plan.ID)
 	f.mgr.ReconcileUser(ctx, u)
 
-	f.fake.SetTraffic("alice@firex", 100, 200)
+	f.fake.SetTraffic("alice@FireX", 100, 200)
 	if err := f.mgr.CollectTraffic(ctx); err != nil {
 		t.Fatalf("CollectTraffic() error = %v", err)
 	}
@@ -390,7 +393,7 @@ func TestCollectTrafficAccumulatesDeltas(t *testing.T) {
 	}
 
 	// A second poll must add only the delta, not the whole counter again.
-	f.fake.SetTraffic("alice@firex", 150, 260)
+	f.fake.SetTraffic("alice@FireX", 150, 260)
 	if err := f.mgr.CollectTraffic(ctx); err != nil {
 		t.Fatalf("CollectTraffic() error = %v", err)
 	}
@@ -409,12 +412,12 @@ func TestCollectTrafficHandlesPanelSideReset(t *testing.T) {
 	u := f.newUser(t, plan.ID)
 	f.mgr.ReconcileUser(ctx, u)
 
-	f.fake.SetTraffic("alice@firex", 400, 400)
+	f.fake.SetTraffic("alice@FireX", 400, 400)
 	f.mgr.CollectTraffic(ctx)
 
 	// Someone reset the counters on the panel: the counter goes backwards, and
 	// the new reading is the whole delta rather than a negative one.
-	f.fake.SetTraffic("alice@firex", 10, 5)
+	f.fake.SetTraffic("alice@FireX", 10, 5)
 	if err := f.mgr.CollectTraffic(ctx); err != nil {
 		t.Fatalf("CollectTraffic() error = %v", err)
 	}
@@ -434,7 +437,7 @@ func TestCollectTrafficDisablesDepletedUser(t *testing.T) {
 	u := f.newUser(t, plan.ID) // TrafficLimit 1000
 	f.mgr.ReconcileUser(ctx, u)
 
-	f.fake.SetTraffic("alice@firex", 600, 500)
+	f.fake.SetTraffic("alice@FireX", 600, 500)
 	if err := f.mgr.CollectTraffic(ctx); err != nil {
 		t.Fatalf("CollectTraffic() error = %v", err)
 	}
@@ -444,7 +447,7 @@ func TestCollectTrafficDisablesDepletedUser(t *testing.T) {
 	if !got.Depleted {
 		t.Fatal("Depleted = false after crossing the quota")
 	}
-	client := f.fake.Client("alice@firex")
+	client := f.fake.Client("alice@FireX")
 	if client == nil || client.Enable {
 		t.Errorf("client = %+v, want the panel to have disabled it", client)
 	}

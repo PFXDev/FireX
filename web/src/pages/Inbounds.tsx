@@ -1,10 +1,11 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { BoxesIcon, LayersIcon, PencilIcon, RefreshCwIcon, ServerIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react'
+import { BoxesIcon, LayersIcon, ListTreeIcon, PencilIcon, RefreshCwIcon, ServerIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react'
 
 import { api } from '@/api'
 import type { Inbound } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { InboundDetails } from '@/components/inbound-details'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -31,6 +32,7 @@ import {
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
@@ -45,12 +47,15 @@ type Draft = {
   sortOrder: number
   enabled: boolean
   udp: boolean
+  vision: boolean | null
   publicAddress: string
   publicPort: number
 }
 
 type LoadState = 'loading' | 'ready' | 'error'
 type PendingAction = 'bulk-enable' | 'bulk-disable' | 'save' | 'remove'
+
+const visionLabels = { preserve: '保留现有流控', on: '开启 Vision', off: '关闭 Vision' }
 
 function label(inbound: Inbound): string {
   return inbound.name || inbound.remoteRemark || inbound.inboundTag
@@ -64,6 +69,18 @@ export function InboundsPage() {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Inbound | null>(null)
+  const [detailID, setDetailID] = useState<number | null>(null)
+  const detailInbound = inbounds.find((inbound) => inbound.id === detailID) ?? null
+  const editingInbound = inbounds.find((inbound) => inbound.id === draft?.id)
+
+  const edit = (inbound: Inbound) => {
+    setDetailID(null)
+    setDraft({
+      id: inbound.id, name: inbound.name, emoji: inbound.emoji,
+      sortOrder: inbound.sortOrder, enabled: inbound.enabled, udp: inbound.udp,
+      vision: inbound.vision, publicAddress: inbound.publicAddress, publicPort: inbound.publicPort,
+    })
+  }
 
   const load = useCallback(async () => {
     setLoadState('loading')
@@ -166,7 +183,7 @@ export function InboundsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="入站"
-        description="入站由面板自动发现。新入站默认停用，确认信息后启用，再到「节点组」里挑进分组才会有人用到。"
+        description="点击名称查看完整参数，编辑入站设置 Vision 流控。新入站默认停用，启用并加入节点组后即可下发给用户。"
       />
 
       {orphanCount > 0 && (
@@ -320,20 +337,34 @@ export function InboundsPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <span className="font-medium">
+                        <button type="button" className="text-left font-medium underline-offset-4 hover:underline focus-visible:underline focus-visible:outline-none" onClick={() => setDetailID(inbound.id)}>
                           {inbound.emoji && `${inbound.emoji} `}
                           {label(inbound)}
-                        </span>
+                        </button>
                         {!inbound.name && (
                           <span className="hidden text-xs text-muted-foreground 2xl:inline">沿用面板备注</span>
                         )}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 md:hidden">
+                        <span className="text-xs text-muted-foreground">{[inbound.network, inbound.security].filter(Boolean).join(' · ').toUpperCase()}</span>
+                        {inbound.vision && <Badge variant={inbound.visionSupported ? 'secondary' : 'destructive'}>Vision</Badge>}
+                        {inbound.vision === null && <Badge variant="outline">保留现有流控</Badge>}
                       </div>
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground lg:table-cell">
                       {inbound.panelName} #{inbound.remoteId}
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
-                      <Badge variant="outline">{inbound.protocol}</Badge>
+                      <div className="flex flex-col items-start gap-1.5">
+                        <div className="flex flex-wrap gap-1">
+                          <Badge variant="outline">{inbound.protocol.toUpperCase()}</Badge>
+                          {inbound.vision && <Badge variant={inbound.visionSupported ? 'secondary' : 'destructive'}>Vision{!inbound.visionSupported && ' · 不兼容'}</Badge>}
+                          {inbound.vision === null && <Badge variant="outline">保留现有流控</Badge>}
+                        </div>
+                        <span className="text-xs text-muted-foreground">
+                          {[inbound.network, inbound.security].filter(Boolean).join(' · ').toUpperCase() || '等待同步参数'}
+                        </span>
+                      </div>
                     </TableCell>
                     <TableCell className="hidden tabular-nums text-muted-foreground xl:table-cell">
                       <EndpointCell inbound={inbound} />
@@ -350,24 +381,17 @@ export function InboundsPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-1">
+                        <Button type="button" variant="ghost" size="sm" aria-label={`查看 ${label(inbound)} 的完整参数`} onClick={() => setDetailID(inbound.id)}>
+                          <ListTreeIcon data-icon="inline-start" />
+                          <span className="hidden sm:inline">参数</span>
+                        </Button>
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
                           aria-label={`编辑 ${label(inbound)}`}
                           disabled={pendingAction !== null}
-                          onClick={() =>
-                            setDraft({
-                              id: inbound.id,
-                              name: inbound.name,
-                              emoji: inbound.emoji,
-                              sortOrder: inbound.sortOrder,
-                              enabled: inbound.enabled,
-                              udp: inbound.udp,
-                              publicAddress: inbound.publicAddress,
-                              publicPort: inbound.publicPort,
-                            })
-                          }
+                          onClick={() => edit(inbound)}
                         >
                           <PencilIcon data-icon="inline-start" />
                           <span className="hidden sm:inline">编辑</span>
@@ -407,16 +431,45 @@ export function InboundsPage() {
           if (!open && pendingAction !== 'save') setDraft(null)
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="flex flex-col overflow-hidden sm:max-w-xl">
           {draft && (
             <form className="contents" noValidate onSubmit={save}>
-              <DialogHeader>
+              <DialogHeader className="shrink-0">
                 <DialogTitle>编辑入站</DialogTitle>
                 <DialogDescription>
-                  这些字段由 FireX 持有，重新拉取面板不会覆盖。地区、线路这类分类信息填在节点组上。
+                  {editingInbound ? `${label(editingInbound)} · ${editingInbound.panelName}` : '入站设置'}。设置保存后生效，重新同步面板会保留。
                 </DialogDescription>
               </DialogHeader>
-              <FieldGroup>
+              <FieldGroup className="-mx-4 min-h-0 overflow-y-auto px-4 py-1">
+                <Field>
+                  <FieldLabel htmlFor="inbound-vision">Vision 流控</FieldLabel>
+                  <Select
+                    items={visionLabels}
+                    value={draft.vision === null ? 'preserve' : draft.vision ? 'on' : 'off'}
+                    disabled={pendingAction === 'save'}
+                    onValueChange={(value) => {
+                      if (value !== null) setDraft({ ...draft, vision: value === 'preserve' ? null : value === 'on' })
+                    }}
+                  >
+                    <SelectTrigger id="inbound-vision" aria-describedby="inbound-vision-description" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {editingInbound?.vision === null && <SelectItem value="preserve">保留现有流控</SelectItem>}
+                        <SelectItem value="on" disabled={!editingInbound?.visionSupported}>开启 Vision</SelectItem>
+                        <SelectItem value="off">关闭 Vision</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription id="inbound-vision-description">
+                    {draft.vision === null
+                      ? '保留每位用户在面板中的现有流控。选择开启或关闭后，将统一应用到此入站的用户。'
+                      : editingInbound?.visionSupported
+                        ? '同步到服务端和客户端订阅，保存后请刷新订阅。'
+                        : editingInbound?.visionReason || '请先同步面板参数'}
+                  </FieldDescription>
+                </Field>
                 <FieldGroup className="sm:grid sm:grid-cols-[1fr_120px]">
                   <Field>
                     <FieldLabel htmlFor="inbound-name">显示名称</FieldLabel>
@@ -491,7 +544,7 @@ export function InboundsPage() {
                   />
                 </Field>
               </FieldGroup>
-              <DialogFooter>
+              <DialogFooter className="shrink-0">
                 <Button type="button" variant="outline" disabled={pendingAction === 'save'} onClick={() => setDraft(null)}>
                   取消
                 </Button>
@@ -504,6 +557,8 @@ export function InboundsPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <InboundDetails inbound={detailInbound} onClose={() => setDetailID(null)} onEdit={edit} onRefresh={refreshAfterMutation} />
 
       <ConfirmDialog
         open={pendingDelete !== null}

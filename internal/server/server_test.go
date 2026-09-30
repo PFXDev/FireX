@@ -380,11 +380,11 @@ func TestUnknownSubTokenIs404(t *testing.T) {
 func TestDeletingUserRemovesRemoteClient(t *testing.T) {
 	h := newHarness(t)
 	u := h.seed()
-	if h.fake.Client("carol@firex") == nil {
+	if h.fake.Client("carol@FireX") == nil {
 		t.Fatal("client was never created on the panel")
 	}
 	h.mustDo(http.MethodDelete, "/api/users/"+itoa(u.ID), nil)
-	if c := h.fake.Client("carol@firex"); c != nil {
+	if c := h.fake.Client("carol@FireX"); c != nil {
 		t.Errorf("client %+v left behind on the panel after the user was deleted", c)
 	}
 }

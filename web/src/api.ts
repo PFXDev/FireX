@@ -115,6 +115,14 @@ export interface Inbound {
   port: number
   remoteRemark: string
   remoteEnabled: boolean
+  listen: string
+  network: string
+  security: string
+  disableFlow: boolean
+  vision: boolean | null
+  visionSupported: boolean
+  visionReason: string
+  lastSeenAt: number
   name: string
   emoji: string
   sortOrder: number
@@ -126,6 +134,11 @@ export interface Inbound {
   missing: boolean
   /** How many node groups hold it. Zero means it reaches nobody. */
   groupCount: number
+}
+
+export interface InboundDetail {
+  parameters: Record<string, unknown> | null
+  lastSeenAt: number
 }
 
 export interface NodeGroupTag {

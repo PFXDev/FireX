@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"strconv"
@@ -253,7 +254,37 @@ type inboundRow struct {
 	PanelName string `json:"panelName"`
 	// GroupCount is how many node groups hold this inbound. Zero means it
 	// reaches nobody, whatever its enabled flag says.
-	GroupCount int64 `json:"groupCount"`
+	GroupCount      int64  `json:"groupCount"`
+	VisionSupported bool   `json:"visionSupported"`
+	VisionReason    string `json:"visionReason"`
+}
+
+func inboundVisionReason(n model.Inbound) string {
+	if n.Missing {
+		return "入站已失联，请先恢复并同步面板"
+	}
+	return panel.VisionReason(n.Protocol, n.Network, n.Security, n.DisableFlow)
+}
+
+func (s *Server) getInbound(c *gin.Context) {
+	id, ok := paramID(c)
+	if !ok {
+		return
+	}
+	var inbound model.Inbound
+	if err := s.db.First(&inbound, id).Error; err != nil {
+		failMsg(c, http.StatusNotFound, "inbound not found")
+		return
+	}
+	var config any
+	if inbound.Config != "" {
+		if err := json.Unmarshal([]byte(inbound.Config), &config); err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"parameters": config, "lastSeenAt": inbound.LastSeenAt})
 }
 
 func (s *Server) listInbounds(c *gin.Context) {
@@ -286,7 +317,8 @@ func (s *Server) listInbounds(c *gin.Context) {
 
 	out := make([]inboundRow, 0, len(inbounds))
 	for _, n := range inbounds {
-		out = append(out, inboundRow{Inbound: n, PanelName: names[n.PanelID], GroupCount: counts[n.ID]})
+		reason := inboundVisionReason(n)
+		out = append(out, inboundRow{Inbound: n, PanelName: names[n.PanelID], GroupCount: counts[n.ID], VisionSupported: reason == "", VisionReason: reason})
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -297,6 +329,7 @@ type inboundRequest struct {
 	SortOrder *int   `json:"sortOrder"`
 	Enabled   *bool  `json:"enabled"`
 	UDP       *bool  `json:"udp"`
+	Vision    *bool  `json:"vision"`
 	// PublicAddress and PublicPort override the endpoint the panel advertises.
 	// Absent leaves the stored value; an empty string or zero clears it.
 	PublicAddress *string `json:"publicAddress"`
@@ -332,6 +365,7 @@ func (s *Server) updateInbound(c *gin.Context) {
 		return
 	}
 	wasEnabled := inbound.Enabled
+	visionChanged := req.Vision != nil && (inbound.Vision == nil || *inbound.Vision != *req.Vision)
 	inbound.Name = strings.TrimSpace(req.Name)
 	inbound.Emoji = strings.TrimSpace(req.Emoji)
 	if req.SortOrder != nil {
@@ -342,6 +376,15 @@ func (s *Server) updateInbound(c *gin.Context) {
 	}
 	if req.UDP != nil {
 		inbound.UDP = *req.UDP
+	}
+	if req.Vision != nil {
+		if *req.Vision {
+			if reason := inboundVisionReason(inbound); reason != "" {
+				failMsg(c, http.StatusBadRequest, reason)
+				return
+			}
+		}
+		inbound.Vision = req.Vision
 	}
 	if req.PublicAddress != nil {
 		addr := strings.TrimSpace(*req.PublicAddress)
@@ -363,11 +406,11 @@ func (s *Server) updateInbound(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	s.subs.InvalidateAll()
 	var syncErr error
-	if wasEnabled != inbound.Enabled {
+	if wasEnabled != inbound.Enabled || visionChanged {
 		syncErr = s.reconcileInbound(inbound.ID)
 	}
+	s.subs.InvalidateAll()
 	c.JSON(http.StatusOK, gin.H{"inbound": inbound, "syncError": errString(syncErr)})
 }
 

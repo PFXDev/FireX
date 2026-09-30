@@ -250,7 +250,7 @@ func TestBase64OutputCarriesRenamedLinks(t *testing.T) {
 
 func TestBuildReportsPanelFailureWithoutLosingOtherPanels(t *testing.T) {
 	f := newFixture(t)
-	f.fake.FailNext["/clients/links/bob@firex"] = true
+	f.fake.FailNext["/clients/links/bob@FireX"] = true
 	result, err := f.svc.Build(context.Background(), f.user)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)

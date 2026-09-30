@@ -113,6 +113,7 @@ jobs:
       - name: Build frontend
         run: |
           npm ci --prefix web
+          npm test --prefix web
           npm run build --prefix web
 
       - name: Build binary

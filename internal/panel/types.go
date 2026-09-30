@@ -52,6 +52,8 @@ type Inbound struct {
 	Port        int             `json:"port"`
 	Protocol    string          `json:"protocol"`
 	Tag         string          `json:"tag"`
+	DisableFlow bool            `json:"disableFlow"`
+	Raw         json.RawMessage `json:"-"`
 	ClientStats []ClientTraffic `json:"clientStats"`
 	// 3x-ui v3.7+ returns these as nested JSON objects, while older panels
 	// return JSON-encoded strings. UnmarshalJSON normalizes both shapes to the
@@ -80,6 +82,7 @@ func (i *Inbound) UnmarshalJSON(data []byte) error {
 	i.Settings = jsonTextFromRaw(aux.Settings)
 	i.StreamSettings = jsonTextFromRaw(aux.StreamSettings)
 	i.Sniffing = jsonTextFromRaw(aux.Sniffing)
+	i.Raw = append(i.Raw[:0], data...)
 	return nil
 }
 
@@ -107,7 +110,7 @@ func jsonTextFromRaw(raw json.RawMessage) string {
 type RemoteClient struct {
 	ID         string `json:"id,omitempty"`
 	Password   string `json:"password,omitempty"`
-	Flow       string `json:"flow,omitempty"`
+	Flow       string `json:"flow"`
 	Email      string `json:"email"`
 	LimitIP    int    `json:"limitIp"`
 	TotalGB    int64  `json:"totalGB"`

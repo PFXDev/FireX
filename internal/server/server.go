@@ -73,6 +73,7 @@ func (s *Server) routes() {
 	authed.POST("/panels/test", s.testPanel)
 
 	authed.GET("/inbounds", s.listInbounds)
+	authed.GET("/inbounds/:id", s.getInbound)
 	authed.PUT("/inbounds/:id", s.updateInbound)
 	authed.POST("/inbounds/bulk", s.bulkUpdateInbounds)
 	authed.DELETE("/inbounds/:id", s.deleteInbound)
