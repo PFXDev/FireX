@@ -681,8 +681,11 @@ export function RoutingPage() {
               role: "region",
               "aria-label": "分流矩阵，可横向滚动",
               tabIndex: 0,
-              onScroll: (event) =>
-                setMatrixScrolled(event.currentTarget.scrollLeft > 0),
+              onScroll: (event) => {
+                const { scrollLeft } = event.currentTarget;
+                // Ignore tiny trackpad movements near the start of the table.
+                setMatrixScrolled((compact) => scrollLeft > (compact ? 4 : 24));
+              },
               className: cn(
                 "isolate [--policy-width:7rem] [--default-expanded-width:8rem] [--default-width:var(--default-expanded-width)] [--actions-width:3rem] sm:[--policy-width:14rem] sm:[--default-expanded-width:20rem] sm:[--actions-width:7rem]",
                 matrixScrolled &&
@@ -701,7 +704,7 @@ export function RoutingPage() {
                 <TableHead className="sticky left-0 z-20 w-(--policy-width) bg-card">
                   分流策略
                 </TableHead>
-                <TableHead className="sticky left-(--policy-width) z-10 w-(--default-width) border-r bg-card">
+                <TableHead className="sticky left-(--policy-width) z-10 w-(--default-width) border-r bg-card transition-[width] duration-300 ease-out motion-reduce:transition-none">
                   默认出口
                 </TableHead>
                 {profiles.map((profile) => (
@@ -1016,7 +1019,7 @@ function cellSummary(
 
 function CellButton({
   className,
-  compact = false,
+  compact,
   label,
   summary,
   onClick,
@@ -1032,7 +1035,7 @@ function CellButton({
       <button
         type="button"
         className={cn(
-          "w-full rounded-md px-2 py-1 text-left text-sm hover:bg-accent focus-visible:outline-ring",
+          "w-full rounded-md px-2 py-1 text-left text-sm transition-[padding] duration-300 ease-out hover:bg-accent focus-visible:outline-ring motion-reduce:transition-none",
           compact && "px-1",
         )}
         aria-label={`${label}：${summary.text}`}
@@ -1040,13 +1043,31 @@ function CellButton({
         onClick={onClick}
       >
         <span
+          aria-hidden="true"
           className={cn(
-            "block truncate",
+            "grid min-w-0",
             summary.tone !== "normal" && "text-muted-foreground",
             summary.tone === "hidden" && "italic",
           )}
         >
-          {compact ? (summary.compactText ?? summary.text) : summary.text}
+          <span
+            className={cn(
+              "col-start-1 row-start-1 min-w-0 truncate transition-opacity duration-200 ease-out motion-reduce:transition-none",
+              compact && summary.compactText ? "opacity-0" : "opacity-100",
+            )}
+          >
+            {summary.text}
+          </span>
+          {compact !== undefined && summary.compactText && (
+            <span
+              className={cn(
+                "col-start-1 row-start-1 min-w-0 truncate transition-opacity duration-200 ease-out motion-reduce:transition-none",
+                compact ? "opacity-100" : "opacity-0",
+              )}
+            >
+              {summary.compactText}
+            </span>
+          )}
         </span>
       </button>
     </TableCell>
