@@ -1,25 +1,34 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   CopyIcon,
+  EyeIcon,
   MoreHorizontalIcon,
+  PencilIcon,
   PlusIcon,
-  RefreshCwIcon,
+  RadioTowerIcon,
+  RotateCcwIcon,
+  SearchIcon,
+  SearchXIcon,
+  ServerOffIcon,
+  Trash2Icon,
   TriangleAlertIcon,
   UsersIcon,
+  XIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api } from '@/api'
 import type { Plan, SubscriptionPreview, User } from '@/api'
-import { CodeTextarea } from '@/components/code-display'
+import { CodeText, CodeTextarea } from '@/components/code-display'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardFooter,
@@ -45,10 +54,9 @@ import {
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group'
 import { Progress, ProgressLabel, ProgressValue } from '@/components/ui/progress'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Separator } from '@/components/ui/separator'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -66,6 +74,7 @@ import {
   formatTime,
   gbToBytes,
 } from '@/lib/format'
+import { reportSyncError } from '@/lib/sync'
 
 type Draft = {
   id?: number
@@ -212,8 +221,9 @@ export function UsersPage() {
       const result = draft.id
         ? await api.put<{ syncError: string }>(`/users/${draft.id}`, body)
         : await api.post<{ syncError: string }>('/users', body)
-      if (result.syncError) toast.error(`已保存，但下发到面板时出错：${result.syncError}`)
+      if (result.syncError) toast.success(draft.id ? '用户已保存' : '用户已创建')
       else toast.success(draft.id ? '用户已保存并下发' : '用户已创建并下发')
+      reportSyncError(result.syncError)
       setDraft(null)
       await revalidate()
     } catch (err) {
@@ -265,9 +275,8 @@ export function UsersPage() {
     }
   }
 
-  const copySub = async (user: User) => {
-    const copied = await copyText(user.subUrl)
-    if (copied) toast.success('订阅链接已复制')
+  const copy = async (text: string, what: string) => {
+    if (await copyText(text)) toast.success(`${what}已复制`)
     else toast.error('复制失败，请手动复制')
   }
 
@@ -279,7 +288,7 @@ export function UsersPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="用户" description="统一管理账号、套餐、流量与订阅交付状态。">
-        <Button onClick={openCreate}>
+        <Button type="button" onClick={openCreate}>
           <PlusIcon data-icon="inline-start" />
           新建用户
         </Button>
@@ -288,40 +297,53 @@ export function UsersPage() {
       <Card>
         <CardHeader>
           <CardTitle>用户列表</CardTitle>
-          <CardDescription>每个用户在所有节点共用同一 UUID，并通过一条订阅链接接收配置。</CardDescription>
+          <CardDescription>
+            {loading || (loadError && users.length === 0) ? '' : `${activeUsers}/${users.length} 个用户可用。`}
+            每个用户在所有节点共用同一 UUID，并通过一条订阅链接接收配置。
+          </CardDescription>
+          <CardAction>
+            <RefreshButton loading={loading || refreshing} disabled={saving} onClick={() => void refresh()} />
+          </CardAction>
         </CardHeader>
-        <CardContent className="px-0">
-          <div className="flex flex-col gap-2 px-(--card-spacing) sm:flex-row sm:items-center">
-            {!loading && <Badge variant="secondary">{activeUsers}/{users.length} 可用</Badge>}
-            <Field>
-              <FieldLabel htmlFor="user-search" className="sr-only">搜索用户</FieldLabel>
-              <Input id="user-search" className="w-full sm:w-48" placeholder="搜索用户…" value={query} onChange={(event) => setQuery(event.target.value)} />
-            </Field>
-            <Button variant="outline" size="sm" aria-label="刷新用户列表" disabled={loading || refreshing} onClick={refresh}>
-              {refreshing ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
-              刷新
-            </Button>
-          </div>
-          <Separator className="my-(--card-spacing)" />
-          {loading ? (
-            <div className="flex flex-col gap-3 px-(--card-spacing)" aria-label="用户加载中">
-              <Skeleton className="h-9 w-full" />
-              <Skeleton className="h-14 w-full" />
-              <Skeleton className="h-14 w-full" />
+        <CardContent className="flex flex-col gap-4 px-0">
+          {users.length > 0 && (
+            <div className="px-4">
+              <InputGroup className="sm:max-w-64">
+                <InputGroupInput
+                  aria-label="搜索用户"
+                  placeholder="按用户名、套餐或备注搜索…"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                />
+                <InputGroupAddon>
+                  <SearchIcon />
+                </InputGroupAddon>
+                {query && (
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton size="icon-xs" aria-label="清除搜索" onClick={() => setQuery('')}>
+                      <XIcon />
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                )}
+              </InputGroup>
             </div>
+          )}
+          {loading ? (
+            <TableSkeleton
+              columns={[
+                { label: '用户', width: 'w-24' },
+                { label: '套餐', width: 'w-16' },
+                { label: '流量', width: 'w-28' },
+                { label: '到期', className: 'hidden md:table-cell', width: 'w-20' },
+                { label: '节点', className: 'hidden lg:table-cell', width: 'w-8' },
+                { label: '状态', width: 'w-14' },
+                { label: '最近拉取', className: 'hidden xl:table-cell', width: 'w-28' },
+                { width: 'w-28' },
+              ]}
+            />
           ) : loadError && users.length === 0 ? (
-            <div className="px-(--card-spacing)">
-              <Alert variant="destructive">
-                <TriangleAlertIcon />
-                <AlertTitle>无法加载用户</AlertTitle>
-                <AlertDescription>{loadError}</AlertDescription>
-                <AlertAction>
-                  <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing}>
-                    {refreshing && <Spinner data-icon="inline-start" />}
-                    重试
-                  </Button>
-                </AlertAction>
-              </Alert>
+            <div className="px-4">
+              <LoadErrorAlert title="用户加载失败" message={loadError} retrying={refreshing} onRetry={() => void refresh()} />
             </div>
           ) : users.length === 0 ? (
             <Empty>
@@ -340,16 +362,21 @@ export function UsersPage() {
           ) : filteredUsers.length === 0 ? (
             <Empty>
               <EmptyHeader>
-                <EmptyMedia variant="icon"><UsersIcon /></EmptyMedia>
+                <EmptyMedia variant="icon"><SearchXIcon /></EmptyMedia>
                 <EmptyTitle>没有匹配的用户</EmptyTitle>
                 <EmptyDescription>换一个关键词，或清除当前搜索条件。</EmptyDescription>
               </EmptyHeader>
-              <EmptyContent><Button variant="outline" onClick={() => setQuery('')}>清除搜索</Button></EmptyContent>
+              <EmptyContent>
+                <Button type="button" variant="outline" onClick={() => setQuery('')}>
+                  <XIcon data-icon="inline-start" />
+                  清除搜索
+                </Button>
+              </EmptyContent>
             </Empty>
           ) : (
             <div className="flex flex-col gap-3">
               {loadError && (
-                <div className="px-(--card-spacing)">
+                <div className="px-4">
                   <Alert variant="warning">
                     <TriangleAlertIcon />
                     <AlertTitle>列表可能不是最新状态</AlertTitle>
@@ -379,14 +406,16 @@ export function UsersPage() {
                       <TableRow key={user.id}>
                         <TableCell>
                           <div className="flex flex-col gap-1">
-                            <strong>{user.username}</strong>
-                            {user.remark && <span className="text-muted-foreground">{user.remark}</span>}
+                            <span className="font-medium">{user.username}</span>
+                            {user.remark && <span className="text-xs text-muted-foreground">{user.remark}</span>}
                           </div>
                         </TableCell>
-                        <TableCell>{user.planName || '未分配'}</TableCell>
+                        <TableCell>
+                          {user.planName || <span className="text-muted-foreground">未分配</span>}
+                        </TableCell>
                         <TableCell className="min-w-40">
                           <div className="flex flex-col gap-1.5">
-                            <span>{formatBytes(user.used)} / {formatQuota(user.trafficLimit)}</span>
+                            <span className="tabular-nums">{formatBytes(user.used)} / {formatQuota(user.trafficLimit)}</span>
                             {user.trafficLimit > 0 && (
                               <Progress value={usage}>
                                 <ProgressLabel className="sr-only">{user.username} 流量使用率</ProgressLabel>
@@ -395,35 +424,64 @@ export function UsersPage() {
                             )}
                           </div>
                         </TableCell>
-                        <TableCell className="hidden md:table-cell">{formatExpiry(user.expiresAt)}</TableCell>
-                        <TableCell className="hidden lg:table-cell">{user.inboundCount}</TableCell>
+                        <TableCell className="hidden text-muted-foreground md:table-cell">{formatExpiry(user.expiresAt)}</TableCell>
+                        <TableCell className="hidden tabular-nums text-muted-foreground lg:table-cell">{user.inboundCount}</TableCell>
                         <TableCell><UserStatuses user={user} /></TableCell>
-                        <TableCell className="hidden xl:table-cell">{formatTime(user.lastSubAt)}</TableCell>
+                        <TableCell className="hidden text-muted-foreground xl:table-cell">{formatTime(user.lastSubAt)}</TableCell>
                         <TableCell>
-                          <div className="flex items-center justify-end gap-2">
-                            <Button variant="outline" size="icon-sm" aria-label={`复制 ${user.username} 的订阅链接`} onClick={() => copySub(user)}>
-                              <CopyIcon data-icon="inline-start" />
-                            </Button>
-                            <Button variant="outline" size="sm" disabled={previewing} onClick={() => openPreview(user)}>
-                              {previewing && <Spinner data-icon="inline-start" />}
-                              查看
+                          <div className="flex justify-end gap-1">
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon-sm"
+                                    aria-label={`复制 ${user.username} 的订阅链接`}
+                                    onClick={() => void copy(user.subUrl, '订阅链接')}
+                                  />
+                                }
+                              >
+                                <CopyIcon />
+                              </TooltipTrigger>
+                              <TooltipContent>复制订阅链接</TooltipContent>
+                            </Tooltip>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              aria-label={`查看 ${user.username} 的订阅`}
+                              disabled={previewing}
+                              onClick={() => void openPreview(user)}
+                            >
+                              {previewing ? <Spinner data-icon="inline-start" /> : <EyeIcon data-icon="inline-start" />}
+                              <span className="hidden sm:inline">{previewing ? '加载中…' : '查看'}</span>
                             </Button>
                             <DropdownMenu>
-                              <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={`${user.username} 的更多操作`} />}>
-                                <MoreHorizontalIcon data-icon="inline-start" />
+                              <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label={`${user.username} 的更多操作`} />}>
+                                <MoreHorizontalIcon />
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
                                 <DropdownMenuGroup>
-                                  <DropdownMenuItem onClick={() => openEdit(user)}>编辑</DropdownMenuItem>
-                                  <DropdownMenuItem disabled={resyncing} onClick={() => runResync(user)}>
-                                    {resyncing && <Spinner />}
-                                    重新下发
+                                  <DropdownMenuItem onClick={() => openEdit(user)}>
+                                    <PencilIcon />
+                                    编辑
                                   </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => setPending({ user, kind: 'resetTraffic' })}>清空流量</DropdownMenuItem>
+                                  <DropdownMenuItem disabled={resyncing} onClick={() => void runResync(user)}>
+                                    {resyncing ? <Spinner /> : <RadioTowerIcon />}
+                                    {resyncing ? '下发中…' : '重新下发'}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => setPending({ user, kind: 'resetTraffic' })}>
+                                    <RotateCcwIcon />
+                                    清空流量
+                                  </DropdownMenuItem>
                                 </DropdownMenuGroup>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuGroup>
-                                  <DropdownMenuItem variant="destructive" onClick={() => setPending({ user, kind: 'delete' })}>删除</DropdownMenuItem>
+                                  <DropdownMenuItem variant="destructive" onClick={() => setPending({ user, kind: 'delete' })}>
+                                    <Trash2Icon />
+                                    删除
+                                  </DropdownMenuItem>
                                 </DropdownMenuGroup>
                               </DropdownMenuContent>
                             </DropdownMenu>
@@ -463,23 +521,23 @@ export function UsersPage() {
         }}
       >
         <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{draft?.id ? `编辑用户 ${draft.username}` : '新建用户'}</DialogTitle>
-            <DialogDescription>保存后会立即同步到套餐涉及的所有面板。</DialogDescription>
-          </DialogHeader>
           {draft && (
-            <form className="flex flex-col gap-4" noValidate onSubmit={save}>
+            <form className="contents" noValidate onSubmit={save}>
+              <DialogHeader>
+                <DialogTitle>{draft.id ? `编辑用户 ${draft.username}` : '新建用户'}</DialogTitle>
+                <DialogDescription>保存后会立即同步到套餐涉及的所有面板。</DialogDescription>
+              </DialogHeader>
               <FieldGroup>
-                <Field data-disabled={draft.id ? true : undefined} data-invalid={usernameInvalid}>
+                <Field data-disabled={draft.id || saving ? true : undefined} data-invalid={usernameInvalid || undefined}>
                   <FieldLabel htmlFor="user-name">用户名</FieldLabel>
-                  <Input id="user-name" value={draft.username} required disabled={Boolean(draft.id)} aria-invalid={usernameInvalid} onChange={(event) => setDraft({ ...draft, username: event.target.value })} />
+                  <Input id="user-name" value={draft.username} required disabled={Boolean(draft.id) || saving} aria-invalid={usernameInvalid || undefined} onChange={(event) => setDraft({ ...draft, username: event.target.value })} />
                   <FieldDescription>{draft.id ? '用户名与面板客户端标识关联，创建后不可修改。' : '仅允许字母、数字、连字符、下划线与句点。'}</FieldDescription>
                   {usernameInvalid && <FieldError>请输入有效用户名。</FieldError>}
                 </Field>
 
-                <Field>
+                <Field data-disabled={saving || undefined}>
                   <FieldLabel htmlFor="user-plan">套餐</FieldLabel>
-                  <Select items={planItems} value={draft.planId} onValueChange={(value) => setDraft({ ...draft, planId: Number(value), inheritPlan: Number(value) === 0 ? false : draft.inheritPlan })}>
+                  <Select items={planItems} value={draft.planId} disabled={saving} onValueChange={(value) => setDraft({ ...draft, planId: Number(value), inheritPlan: Number(value) === 0 ? false : draft.inheritPlan })}>
                     <SelectTrigger id="user-plan" className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
@@ -491,42 +549,42 @@ export function UsersPage() {
                 </Field>
 
                 {!draft.id && draft.planId !== 0 && (
-                  <Field orientation="horizontal">
+                  <Field orientation="horizontal" data-disabled={saving || undefined}>
                     <FieldLabel htmlFor="user-inherit">沿用套餐的流量与到期默认值</FieldLabel>
-                    <Switch id="user-inherit" checked={draft.inheritPlan} onCheckedChange={(inheritPlan) => setDraft({ ...draft, inheritPlan })} />
+                    <Switch id="user-inherit" disabled={saving} checked={draft.inheritPlan} onCheckedChange={(inheritPlan) => setDraft({ ...draft, inheritPlan })} />
                   </Field>
                 )}
 
                 {(draft.id || !draft.inheritPlan) && (
-                  <FieldGroup className="grid gap-4 sm:grid-cols-2">
-                    <Field>
+                  <FieldGroup className="sm:grid sm:grid-cols-2">
+                    <Field data-disabled={saving || undefined}>
                       <FieldLabel htmlFor="user-traffic">流量上限 (GB)</FieldLabel>
-                      <Input id="user-traffic" type="number" min={0} step="any" value={draft.trafficGb} onChange={(event) => setDraft({ ...draft, trafficGb: Number(event.target.value) })} />
+                      <Input id="user-traffic" disabled={saving} type="number" min={0} step="any" value={draft.trafficGb} onChange={(event) => setDraft({ ...draft, trafficGb: Number(event.target.value) })} />
                       <FieldDescription>0 表示不限。</FieldDescription>
                     </Field>
-                    <Field>
+                    <Field data-disabled={saving || undefined}>
                       <FieldLabel htmlFor="user-expiry">到期日</FieldLabel>
-                      <Input id="user-expiry" type="date" value={dateInputValue(draft.expiresAt)} onChange={(event) => setDraft({ ...draft, expiresAt: dateInputToMs(event.target.value) })} />
+                      <Input id="user-expiry" disabled={saving} type="date" value={dateInputValue(draft.expiresAt)} onChange={(event) => setDraft({ ...draft, expiresAt: dateInputToMs(event.target.value) })} />
                       <FieldDescription>留空表示永久。</FieldDescription>
                     </Field>
                   </FieldGroup>
                 )}
 
-                <Field data-invalid={uuidInvalid}>
+                <Field data-invalid={uuidInvalid || undefined} data-disabled={saving || undefined}>
                   <FieldLabel htmlFor="user-uuid">UUID</FieldLabel>
-                  <Input id="user-uuid" value={draft.uuid} aria-invalid={uuidInvalid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} />
+                  <Input id="user-uuid" className="font-mono" spellCheck={false} disabled={saving} value={draft.uuid} aria-invalid={uuidInvalid || undefined} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} />
                   <FieldDescription>留空自动生成；所有节点共用同一个 UUID。</FieldDescription>
                   {uuidInvalid && <FieldError>请输入标准 UUID，或留空自动生成。</FieldError>}
                 </Field>
 
-                <Field>
+                <Field data-disabled={saving || undefined}>
                   <FieldLabel htmlFor="user-remark">备注</FieldLabel>
-                  <Input id="user-remark" value={draft.remark} onChange={(event) => setDraft({ ...draft, remark: event.target.value })} />
+                  <Input id="user-remark" disabled={saving} value={draft.remark} onChange={(event) => setDraft({ ...draft, remark: event.target.value })} />
                 </Field>
 
-                <Field orientation="horizontal">
+                <Field orientation="horizontal" data-disabled={saving || undefined}>
                   <FieldLabel htmlFor="user-enabled">启用用户</FieldLabel>
-                  <Switch id="user-enabled" checked={draft.enabled} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} />
+                  <Switch id="user-enabled" disabled={saving} checked={draft.enabled} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} />
                 </Field>
               </FieldGroup>
 
@@ -552,7 +610,21 @@ export function UsersPage() {
             <FieldGroup>
               <Field>
                 <FieldLabel htmlFor="sub-url">订阅链接</FieldLabel>
-                <Input id="sub-url" readOnly value={preview.data.subUrl} onFocus={(event) => event.target.select()} />
+                <InputGroup>
+                  <InputGroupInput
+                    id="sub-url"
+                    readOnly
+                    className="font-mono text-xs"
+                    value={preview.data.subUrl}
+                    onFocus={(event) => event.target.select()}
+                  />
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton aria-label="复制订阅链接" onClick={() => void copy(preview.data.subUrl, '订阅链接')}>
+                      <CopyIcon />
+                      复制
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
               </Field>
 
               {preview.data.warnings.length > 0 && (
@@ -576,6 +648,7 @@ export function UsersPage() {
                   {preview.data.entries.length === 0 ? (
                     <Empty>
                       <EmptyHeader>
+                        <EmptyMedia variant="icon"><ServerOffIcon /></EmptyMedia>
                         <EmptyTitle>没有可用节点</EmptyTitle>
                         <EmptyDescription>检查该用户套餐绑定的分流方案里有没有选中节点组。</EmptyDescription>
                       </EmptyHeader>
@@ -593,9 +666,9 @@ export function UsersPage() {
                       <TableBody>
                         {preview.data.entries.map((entry) => (
                           <TableRow key={`${entry.panelId}-${entry.name}-${entry.link}`}>
-                            <TableCell><strong>{entry.name}</strong></TableCell>
+                            <TableCell className="font-medium">{entry.name}</TableCell>
                             <TableCell className="tabular-nums text-muted-foreground">#{entry.panelId}</TableCell>
-                            <TableCell>{entry.protocol}</TableCell>
+                            <TableCell><CodeText>{entry.protocol}</CodeText></TableCell>
                             <TableCell>{entry.clashSupported ? <StatusBadge tone="good">支持</StatusBadge> : <StatusBadge tone="bad">不支持</StatusBadge>}</TableCell>
                           </TableRow>
                         ))}
@@ -618,23 +691,17 @@ export function UsersPage() {
             </FieldGroup>
           )}
           <DialogFooter className="flex-wrap">
-            <Button variant="outline" onClick={async () => {
-              if (!preview) return
-              const copied = await copyText(preview.data.subUrl)
-              copied ? toast.success('订阅链接已复制') : toast.error('复制失败')
-            }}>
-              <CopyIcon data-icon="inline-start" />
-              复制订阅
+            <Button type="button" variant="outline" onClick={() => setPreview(null)}>
+              关闭
             </Button>
-            <Button variant="outline" disabled={!preview?.data.clash || Boolean(preview?.data.renderError)} onClick={async () => {
-              if (!preview) return
-              const copied = await copyText(preview.data.clash)
-              copied ? toast.success('Clash 配置已复制') : toast.error('复制失败')
-            }}>
+            <Button
+              type="button"
+              disabled={!preview?.data.clash || Boolean(preview?.data.renderError)}
+              onClick={() => preview && void copy(preview.data.clash, 'Clash 配置')}
+            >
               <CopyIcon data-icon="inline-start" />
               复制配置
             </Button>
-            <Button onClick={() => setPreview(null)}>关闭</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -668,14 +735,8 @@ function UserStatuses({ user }: { user: User }) {
       {user.syncState === 'failed' && (
         <Tooltip>
           <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                aria-label={`查看 ${user.username} 的下发失败详情`}
-              />
-            }
+            render={<span tabIndex={0} className="rounded-4xl outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" />}
+            aria-label={`${user.username} 下发失败：${user.syncErrors.join('；') || '面板下发失败'}`}
           >
             <StatusBadge tone="bad">下发失败</StatusBadge>
           </TooltipTrigger>

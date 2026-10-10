@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowDownIcon,
+  ArrowLeftIcon,
+  ArrowUpIcon,
   ChevronDownIcon,
   EyeIcon,
   ListTreeIcon,
+  PencilIcon,
   PlusIcon,
+  RouteIcon,
   SaveIcon,
-  TrashIcon,
+  Trash2Icon,
   TriangleAlertIcon,
+  XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -22,6 +28,11 @@ import type {
 } from "@/api";
 import { CodeBlock } from "@/components/code-display";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import {
+  LoadErrorAlert,
+  RefreshButton,
+  TableSkeleton,
+} from "@/components/load-state";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -60,6 +71,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -69,6 +81,7 @@ import {
   Field,
   FieldContent,
   FieldDescription,
+  FieldError,
   FieldGroup,
   FieldLabel,
   FieldLegend,
@@ -148,6 +161,8 @@ export function RoutingPage() {
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [refreshingProfiles, setRefreshingProfiles] = useState(false);
   const [saving, setSaving] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -253,7 +268,7 @@ export function RoutingPage() {
       });
       setDirty(false);
       toast.success("分流已保存");
-      if (!(await load())) toast.warning("分流已保存，但刷新失败，请重新加载。");
+      if (!(await load())) toast.warning("分流已保存，但刷新失败，请重新加载");
     } catch (err) {
       toast.error(errorMessage(err, "保存失败"));
     } finally {
@@ -301,7 +316,7 @@ export function RoutingPage() {
             ? found.emoji
               ? `${found.emoji} ${found.name}`
               : found.name
-            : `⚠️ ${member.ref}`;
+            : `${member.ref}（未找到）`;
         }
         case "policy": {
           const found = rows.find((row) => row.policy.name === member.ref);
@@ -309,7 +324,7 @@ export function RoutingPage() {
             ? found.policy.icon
               ? `${found.policy.icon} ${found.policy.name}`
               : found.policy.name
-            : `⚠️ ${member.ref}`;
+            : `${member.ref}（未找到）`;
         }
         case "all-node-groups":
           return "全部节点组";
@@ -319,6 +334,15 @@ export function RoutingPage() {
           return member.ref;
       }
     },
+    [groupByName, rows],
+  );
+
+  /** A member pointing at a node group or policy that no longer exists. */
+  const memberMissing = useCallback(
+    (member: EgressMember): boolean =>
+      (member.kind === "node-group" && !groupByName.has(member.ref)) ||
+      (member.kind === "policy" &&
+        !rows.some((row) => row.policy.name === member.ref)),
     [groupByName, rows],
   );
 
@@ -379,7 +403,7 @@ export function RoutingPage() {
   /**
    * Members reference a policy by bare name; the server rewrites them on save
    * as well, but the draft has to follow too or the other cells would show a
-   * dangling ⚠️ until then.
+   * dangling reference until then.
    */
   const renamePolicy = (index: number, name: string) => {
     const previous = rows[index].policy.name;
@@ -435,8 +459,10 @@ export function RoutingPage() {
           `/profiles/${profileDraft.id}`,
           body,
         );
-        if (result.syncError) reportSyncError(result.syncError);
-        else toast.success("方案已保存，相关用户已同步到面板");
+        toast.success(
+          result.syncError ? "方案已保存" : "方案已保存，相关用户已同步到面板",
+        );
+        reportSyncError(result.syncError);
       } else {
         await api.post("/profiles", body);
         toast.success("方案已创建");
@@ -470,26 +496,73 @@ export function RoutingPage() {
     }
   };
 
+  const retry = () => {
+    setRetrying(true);
+    void load().finally(() => setRetrying(false));
+  };
+
+  const refreshProfiles = () => {
+    setRefreshingProfiles(true);
+    void reloadProfiles().finally(() => setRefreshingProfiles(false));
+  };
+
+  const openNewProfile = () =>
+    setProfileDraft({
+      name: "",
+      allGroups: false,
+      enabled: true,
+      remark: "",
+      groupIds: [],
+    });
+
   if (loading || !options) {
     return (
-      <div className="flex w-full flex-col gap-6">
+      <div className="flex flex-col gap-6">
         <PageHeader
           title="分流"
           description="行是分流策略，列是分流方案，格子里是出口。"
         />
         {loadError ? (
-          <Alert variant="destructive">
-            <TriangleAlertIcon />
-            <AlertTitle>无法加载分流配置</AlertTitle>
-            <AlertDescription className="flex flex-col items-start gap-3">
-              <p>{loadError}</p>
-              <Button variant="outline" size="sm" onClick={() => void load()}>
-                重新加载
-              </Button>
-            </AlertDescription>
-          </Alert>
+          <LoadErrorAlert
+            title="无法加载分流配置"
+            message={loadError}
+            retrying={retrying}
+            onRetry={retry}
+          />
         ) : (
-          <Skeleton className="h-96 w-full" />
+          <>
+            <Card>
+              <CardHeader>
+                <CardTitle>分流方案</CardTitle>
+              </CardHeader>
+              <CardContent className="px-0">
+                <TableSkeleton
+                  rows={2}
+                  columns={[
+                    { label: "方案", width: "w-24" },
+                    { label: "可用节点组", width: "w-16" },
+                    { label: "可用入站", className: "hidden md:table-cell", width: "w-10" },
+                    { label: "套餐", className: "hidden md:table-cell", width: "w-10" },
+                    { width: "w-24" },
+                  ]}
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>分流矩阵</CardTitle>
+              </CardHeader>
+              <CardContent className="px-0">
+                <TableSkeleton
+                  columns={[
+                    { label: "分流策略", width: "w-28" },
+                    { label: "默认出口", width: "w-40" },
+                    { width: "w-16" },
+                  ]}
+                />
+              </CardContent>
+            </Card>
+          </>
         )}
       </div>
     );
@@ -501,7 +574,7 @@ export function RoutingPage() {
     : null;
 
   return (
-    <div className="flex w-full flex-col gap-6" aria-busy={saving} inert={saving}>
+    <div className="flex flex-col gap-6" aria-busy={saving} inert={saving}>
       <PageHeader
         title="分流"
         description="行是分流策略（一份规则清单），列是分流方案。第一列是默认出口，方案列只写和默认不同的部分。"
@@ -535,7 +608,12 @@ export function RoutingPage() {
               disabled={saving}
               onClick={() => void save()}
             >
-              确认并保存
+              {saving ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <SaveIcon data-icon="inline-start" />
+              )}
+              {saving ? "保存中…" : "确认并保存"}
             </Button>
           </AlertAction>
         </Alert>
@@ -547,20 +625,12 @@ export function RoutingPage() {
           <CardDescription>
             方案的「可用节点组」决定它的用户能连上哪些入站——这是唯一会写到面板的设置。套餐绑方案，用户绑套餐。
           </CardDescription>
-          <CardAction>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                setProfileDraft({
-                  name: "",
-                  allGroups: false,
-                  enabled: true,
-                  remark: "",
-                  groupIds: [],
-                })
-              }
-            >
+          <CardAction className="flex gap-2">
+            <RefreshButton
+              loading={refreshingProfiles}
+              onClick={refreshProfiles}
+            />
+            <Button variant="outline" size="sm" onClick={openNewProfile}>
               <PlusIcon data-icon="inline-start" />
               新建方案
             </Button>
@@ -578,6 +648,12 @@ export function RoutingPage() {
                   没有方案，套餐就无处可绑，用户也拿不到任何节点。
                 </EmptyDescription>
               </EmptyHeader>
+              <EmptyContent>
+                <Button onClick={openNewProfile}>
+                  <PlusIcon data-icon="inline-start" />
+                  新建方案
+                </Button>
+              </EmptyContent>
             </Empty>
           ) : (
             <Table>
@@ -597,18 +673,20 @@ export function RoutingPage() {
               <TableBody>
                 {profiles.map((profile) => (
                   <TableRow key={profile.id}>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <strong>{profile.name}</strong>
-                        {!profile.enabled && (
-                          <StatusBadge tone="idle">停用</StatusBadge>
+                    <TableCell className="min-w-40 max-w-80 whitespace-normal [overflow-wrap:anywhere]">
+                      <div className="flex flex-col gap-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium">{profile.name}</span>
+                          {!profile.enabled && (
+                            <StatusBadge tone="idle">停用</StatusBadge>
+                          )}
+                        </div>
+                        {profile.remark && (
+                          <span className="text-xs text-muted-foreground">
+                            {profile.remark}
+                          </span>
                         )}
                       </div>
-                      {profile.remark && (
-                        <span className="text-muted-foreground">
-                          {profile.remark}
-                        </span>
-                      )}
                     </TableCell>
                     <TableCell>
                       {profile.allGroups ? (
@@ -628,10 +706,11 @@ export function RoutingPage() {
                       {profile.planCount}
                     </TableCell>
                     <TableCell>
-                      <div className="flex justify-end gap-2">
+                      <div className="flex justify-end gap-1">
                         <Button
                           variant="outline"
                           size="sm"
+                          aria-label={`编辑方案 ${profile.name}`}
                           onClick={() =>
                             setProfileDraft({
                               id: profile.id,
@@ -643,15 +722,17 @@ export function RoutingPage() {
                             })
                           }
                         >
-                          编辑
+                          <PencilIcon data-icon="inline-start" />
+                          <span className="hidden sm:inline">编辑</span>
                         </Button>
                         <Button
-                          variant="destructive"
+                          variant="ghost"
                           size="sm"
                           aria-label={`删除方案 ${profile.name}`}
                           onClick={() => setPendingProfileDelete(profile)}
                         >
-                          删除
+                          <Trash2Icon data-icon="inline-start" />
+                          <span className="hidden sm:inline">删除</span>
                         </Button>
                       </div>
                     </TableCell>
@@ -676,6 +757,25 @@ export function RoutingPage() {
           )}
         </CardHeader>
         <CardContent className="px-0">
+          {rows.length === 0 ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <RouteIcon />
+                </EmptyMedia>
+                <EmptyTitle>还没有分流策略</EmptyTitle>
+                <EmptyDescription>
+                  策略是一份规则清单，每个方案在矩阵里为它选一个出口。
+                </EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button onClick={addPolicy}>
+                  <PlusIcon data-icon="inline-start" />
+                  新建策略
+                </Button>
+              </EmptyContent>
+            </Empty>
+          ) : (
           <Table
             containerProps={{
               role: "region",
@@ -790,7 +890,7 @@ export function RoutingPage() {
                         disabled={index === 0}
                         onClick={() => patchRows(move(rows, index, -1))}
                       >
-                        ↑
+                        <ArrowUpIcon />
                       </Button>
                       <Button
                         variant="ghost"
@@ -799,7 +899,7 @@ export function RoutingPage() {
                         disabled={index === rows.length - 1}
                         onClick={() => patchRows(move(rows, index, 1))}
                       >
-                        ↓
+                        <ArrowDownIcon />
                       </Button>
                       <Button
                         variant="ghost"
@@ -807,7 +907,7 @@ export function RoutingPage() {
                         aria-label={`删除策略 ${row.policy.name}`}
                         onClick={() => setPendingPolicyDelete(index)}
                       >
-                        <TrashIcon />
+                        <Trash2Icon />
                       </Button>
                     </div>
                   </TableCell>
@@ -815,16 +915,19 @@ export function RoutingPage() {
               ))}
             </TableBody>
           </Table>
+          )}
         </CardContent>
       </Card>
 
       <Card>
-        <CardHeader className="flex flex-col gap-3">
+        <CardHeader>
           <CardTitle>渲染预览</CardTitle>
           <CardDescription>
             按已保存的配置渲染一份完整配置。代理字段是占位，实际值在订阅时从面板取回，但分组和规则就是客户端会拿到的。
           </CardDescription>
-          <CardAction className="flex w-full flex-wrap items-center gap-2">
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center gap-2">
             <Select
               disabled={previewing}
               items={[
@@ -870,13 +973,11 @@ export function RoutingPage() {
               ) : (
                 <EyeIcon data-icon="inline-start" />
               )}
-              生成预览
+              {previewing ? "生成中…" : "生成预览"}
             </Button>
-          </CardAction>
-        </CardHeader>
-        <CardContent>
+          </div>
           {dirty && (
-            <Alert variant="warning" className="mb-3">
+            <Alert variant="warning">
               <TriangleAlertIcon />
               <AlertTitle>预览用的是已保存的配置</AlertTitle>
               <AlertDescription>
@@ -894,8 +995,21 @@ export function RoutingPage() {
           {preview?.yaml && (
             <CodeBlock className="max-h-[60vh]">{preview.yaml}</CodeBlock>
           )}
+          {previewing && (
+            <Skeleton className="h-64 w-full" aria-label="正在生成预览" />
+          )}
           {!preview && !previewing && (
-            <p className="text-sm text-muted-foreground">还没有生成预览。</p>
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <EyeIcon />
+                </EmptyMedia>
+                <EmptyTitle>还没有生成预览</EmptyTitle>
+                <EmptyDescription>
+                  选择一个方案，再点「生成预览」。
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           )}
         </CardContent>
       </Card>
@@ -946,6 +1060,7 @@ export function RoutingPage() {
         groups={groups}
         policies={rows.map((row) => row.policy)}
         memberLabel={memberLabel}
+        memberMissing={memberMissing}
         onClose={() => setCellEditor(null)}
         onChange={(egress) => {
           if (!cellEditor) return;
@@ -1090,6 +1205,13 @@ function PolicyDialog({
   onSetFinal: () => void;
 }) {
   const policy = row?.policy;
+  const nameError = !policy
+    ? ""
+    : !policy.name.trim()
+      ? "请输入策略名称。"
+      : policy.name.includes(",")
+        ? "名称不能包含英文逗号。"
+        : "";
   return (
     <Dialog
       open={policy !== undefined}
@@ -1116,21 +1238,21 @@ function PolicyDialog({
                   }
                 />
               </Field>
-              <Field>
+              <Field data-invalid={nameError ? true : undefined}>
                 <FieldLabel htmlFor="policy-name">名称</FieldLabel>
                 <Input
                   id="policy-name"
                   value={policy.name}
-                  aria-invalid={
-                    !policy.name.trim() ||
-                    policy.name.includes(",") ||
-                    undefined
-                  }
+                  aria-invalid={nameError ? true : undefined}
                   onChange={(event) => onRename(event.target.value)}
                 />
-                <FieldDescription>
-                  客户端里的策略组名称就是「图标 + 名称」。
-                </FieldDescription>
+                {nameError ? (
+                  <FieldError>{nameError}</FieldError>
+                ) : (
+                  <FieldDescription>
+                    客户端里的策略组名称就是「图标 + 名称」。
+                  </FieldDescription>
+                )}
               </Field>
             </FieldGroup>
 
@@ -1216,11 +1338,10 @@ function PolicyDialog({
                         </SelectContent>
                       </Select>
                       <Input
-                        className={
-                          rule.disabled
-                            ? "flex-1 line-through opacity-60"
-                            : "flex-1"
-                        }
+                        className={cn(
+                          "flex-1",
+                          rule.disabled && "line-through opacity-60",
+                        )}
                         aria-label={`规则 ${index + 1} 的内容`}
                         placeholder="例如 openai"
                         aria-invalid={!rule.value.trim() || undefined}
@@ -1236,8 +1357,15 @@ function PolicyDialog({
                           })
                         }
                       />
-                      <label className="flex items-center gap-1 text-sm text-muted-foreground">
+                      <Field
+                        orientation="horizontal"
+                        className="w-auto"
+                        data-disabled={
+                          !options.noResolveTypes[rule.type] || undefined
+                        }
+                      >
                         <Checkbox
+                          id={`policy-rule-${index}-no-resolve`}
                           aria-label={`规则 ${index + 1} 不解析域名`}
                           disabled={!options.noResolveTypes[rule.type]}
                           checked={
@@ -1255,8 +1383,13 @@ function PolicyDialog({
                             })
                           }
                         />
-                        no-resolve
-                      </label>
+                        <FieldLabel
+                          htmlFor={`policy-rule-${index}-no-resolve`}
+                          className="font-normal text-muted-foreground"
+                        >
+                          no-resolve
+                        </FieldLabel>
+                      </Field>
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -1269,7 +1402,7 @@ function PolicyDialog({
                           })
                         }
                       >
-                        ↑
+                        <ArrowUpIcon />
                       </Button>
                       <Button
                         variant="ghost"
@@ -1283,7 +1416,7 @@ function PolicyDialog({
                           })
                         }
                       >
-                        ↓
+                        <ArrowDownIcon />
                       </Button>
                       <Button
                         variant="ghost"
@@ -1296,7 +1429,7 @@ function PolicyDialog({
                           })
                         }
                       >
-                        <TrashIcon />
+                        <Trash2Icon />
                       </Button>
                     </div>
                   ))}
@@ -1359,6 +1492,7 @@ function EgressDialog({
   groups,
   policies,
   memberLabel,
+  memberMissing,
   onClose,
   onChange,
 }: {
@@ -1374,6 +1508,7 @@ function EgressDialog({
   groups: NodeGroup[];
   policies: Policy[];
   memberLabel: (member: EgressMember) => string;
+  memberMissing: (member: EgressMember) => boolean;
   onClose: () => void;
   onChange: (egress: Egress | null) => void;
 }) {
@@ -1564,26 +1699,34 @@ function EgressDialog({
                   {current.members.map((member, index) => (
                     <Badge
                       key={index}
-                      variant="secondary"
-                      className="gap-1 pr-1"
+                      variant={memberMissing(member) ? "destructive" : "secondary"}
+                      className="pr-0.5"
+                      title={
+                        memberMissing(member)
+                          ? "找不到这个成员，渲染时会跳过"
+                          : undefined
+                      }
                     >
+                      {memberMissing(member) && (
+                        <TriangleAlertIcon data-icon="inline-start" />
+                      )}
                       {memberLabel(member)}
                       <Button
                         variant="ghost"
-                        size="icon-sm"
-                        className="size-5"
+                        size="icon-xs"
+                        className="size-4"
                         aria-label={`把成员 ${index + 1} 前移`}
                         disabled={index === 0}
                         onClick={() =>
                           patch({ members: move(current.members, index, -1) })
                         }
                       >
-                        ←
+                        <ArrowLeftIcon />
                       </Button>
                       <Button
                         variant="ghost"
-                        size="icon-sm"
-                        className="size-5"
+                        size="icon-xs"
+                        className="size-4"
                         aria-label={`移除成员 ${index + 1}`}
                         onClick={() =>
                           patch({
@@ -1593,7 +1736,7 @@ function EgressDialog({
                           })
                         }
                       >
-                        ×
+                        <XIcon />
                       </Button>
                     </Badge>
                   ))}
@@ -1727,39 +1870,50 @@ function ProfileDialog({
   onClose: () => void;
   onSave: () => void;
 }) {
+  const [attempted, setAttempted] = useState(false);
+  const open = draft !== null;
+  useEffect(() => {
+    if (!open) setAttempted(false);
+  }, [open]);
+  const nameInvalid = attempted && !draft?.name.trim();
+
   return (
-    <Dialog open={draft !== null} onOpenChange={(open) => !open && !saving && onClose()}>
+    <Dialog open={open} onOpenChange={(next) => !next && !saving && onClose()}>
       <DialogContent className="sm:max-w-xl" showCloseButton={!saving}>
-        <DialogHeader>
-          <DialogTitle>
-            {draft?.id ? "编辑分流方案" : "新建分流方案"}
-          </DialogTitle>
-          <DialogDescription>
-            可用节点组决定这个方案的用户能连上哪些入站。保存后会立刻同步到相关面板。
-          </DialogDescription>
-        </DialogHeader>
         <form
-          className="flex flex-col gap-4"
+          className="contents"
+          noValidate
           aria-busy={saving}
           onSubmit={(event) => {
             event.preventDefault();
+            setAttempted(true);
             if (!saving && draft?.name.trim()) onSave();
           }}
         >
+          <DialogHeader>
+            <DialogTitle>
+              {draft?.id ? "编辑分流方案" : "新建分流方案"}
+            </DialogTitle>
+            <DialogDescription>
+              可用节点组决定这个方案的用户能连上哪些入站。保存后会立刻同步到相关面板。
+            </DialogDescription>
+          </DialogHeader>
           {draft && (
             <FieldSet disabled={saving}>
               <FieldGroup>
-                <Field>
+                <Field data-invalid={nameInvalid || undefined}>
                   <FieldLabel htmlFor="profile-name">名称</FieldLabel>
                   <Input
                     id="profile-name"
                     required
                     placeholder="VIP"
                     value={draft.name}
+                    aria-invalid={nameInvalid || undefined}
                     onChange={(event) =>
                       onChange({ ...draft, name: event.target.value })
                     }
                   />
+                  {nameInvalid && <FieldError>请输入方案名称。</FieldError>}
                 </Field>
 
                 <Field orientation="horizontal">
@@ -1807,7 +1961,7 @@ function ProfileDialog({
                                     ? `${group.emoji} ${group.name}`
                                     : group.name}
                                 </span>
-                                <span className="text-muted-foreground">
+                                <span className="text-xs text-muted-foreground">
                                   {group.usableInbounds} 个入站
                                 </span>
                                 {!group.enabled && (
@@ -1848,7 +2002,7 @@ function ProfileDialog({
             <Button type="button" variant="outline" disabled={saving} onClick={onClose}>
               取消
             </Button>
-            <Button type="submit" disabled={saving || !draft?.name.trim()}>
+            <Button type="submit" disabled={saving}>
               {saving && <Spinner data-icon="inline-start" />}
               {saving ? "保存中…" : "保存方案"}
             </Button>

@@ -11,11 +11,12 @@ import {
 
 import { api } from '@/api'
 import type { UpdateCheck, UpdateStatus, VersionInfo } from '@/api'
-import { CodeBlock } from '@/components/code-display'
+import { CodeBlock, CodeText } from '@/components/code-display'
+import { FieldsSkeleton, LoadErrorAlert } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
 import { ServerConfigEditor } from '@/components/server-config-editor'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge, type Tone } from '@/components/status-badge'
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -29,8 +30,17 @@ import {
 import { Progress, ProgressLabel, ProgressValue } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
-import { errorMessage } from '@/lib/format'
-import { cn } from '@/lib/utils'
+import { errorMessage, formatTime } from '@/lib/format'
+
+// A downloaded update waiting for a restart is good news, not a warning.
+const STATE_TONES: Record<UpdateStatus['state'], Tone> = {
+  idle: 'idle',
+  checking: 'idle',
+  downloading: 'idle',
+  ready: 'good',
+  applying: 'idle',
+  failed: 'bad',
+}
 
 const BUSY_STATES: UpdateStatus['state'][] = ['checking', 'downloading', 'applying']
 
@@ -177,23 +187,32 @@ export function SystemPage() {
 
   if (!info || !status) {
     return (
-      <div className="flex w-full max-w-6xl flex-col gap-6">
+      <div className="flex flex-col gap-6">
         <PageHeader title="系统" description="管理服务端配置、版本与应用更新" />
         {loadError ? (
-          <Alert variant="destructive">
-            <TriangleAlertIcon />
-            <AlertTitle>无法加载系统信息</AlertTitle>
-            <AlertDescription className="flex flex-col items-start gap-3">
-              <p>{loadError}</p>
-              <Button variant="outline" size="sm" disabled={loading} onClick={() => void load()}>
-                {loading ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
-                {loading ? '重试中…' : '重新加载'}
-              </Button>
-            </AlertDescription>
-          </Alert>
+          <LoadErrorAlert title="无法加载系统信息" message={loadError} retrying={loading} onRetry={() => void load()} />
         ) : (
-          <div aria-busy="true" aria-label="正在加载系统信息">
-            <Skeleton className="h-64 w-full" />
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <Card>
+              <CardHeader>
+                <CardTitle>当前版本</CardTitle>
+                <CardDescription>当前运行的构建信息与已生效的更新配置。</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <FieldsSkeleton fields={3} />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>应用更新</CardTitle>
+                <CardDescription>
+                  <Skeleton className="h-4 w-40" />
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <FieldsSkeleton fields={2} />
+              </CardContent>
+            </Card>
           </div>
         )}
       </div>
@@ -206,7 +225,7 @@ export function SystemPage() {
   const checking = action === 'check' || status.state === 'checking'
 
   return (
-    <div className="flex w-full max-w-6xl flex-col gap-6">
+    <div className="flex flex-col gap-6">
       <PageHeader title="系统" description="管理服务端配置、版本与应用更新">
         <Button
           variant="outline"
@@ -222,7 +241,7 @@ export function SystemPage() {
         更新状态：{STATE_LABELS[status.state]}
       </span>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <Card>
           <CardHeader>
             <CardTitle>当前版本</CardTitle>
@@ -253,16 +272,14 @@ export function SystemPage() {
               {status.lastCheck ? (
                 <>
                   最近检查：
-                  <time dateTime={status.lastCheck}>
-                    {new Date(status.lastCheck).toLocaleString('zh-CN', { hour12: false })}
-                  </time>
+                  <time dateTime={status.lastCheck}>{formatTime(Date.parse(status.lastCheck))}</time>
                 </>
               ) : (
                 '尚未检查过更新'
               )}
             </CardDescription>
             <CardAction>
-              <Badge variant={badgeVariant(status.state)}>{STATE_LABELS[status.state]}</Badge>
+              <StatusBadge tone={STATE_TONES[status.state]}>{STATE_LABELS[status.state]}</StatusBadge>
             </CardAction>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -281,7 +298,20 @@ export function SystemPage() {
               <Alert variant="destructive">
                 <TriangleAlertIcon />
                 <AlertTitle>更新失败</AlertTitle>
-                <AlertDescription><code>{status.error}</code></AlertDescription>
+                <AlertDescription>
+                  <CodeText className="break-all">{status.error}</CodeText>
+                </AlertDescription>
+                <AlertAction>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={action !== null || busy}
+                    onClick={runCheck}
+                  >
+                    {checking ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
+                    {checking ? '重试中…' : '重试'}
+                  </Button>
+                </AlertAction>
               </Alert>
             )}
 
@@ -296,7 +326,7 @@ export function SystemPage() {
             )}
 
             {updateAvailable && !busy && status.state !== 'ready' && (
-              <Alert variant="warning">
+              <Alert>
                 <DownloadIcon />
                 <AlertTitle>发现新版本 {check.latestVersion}</AlertTitle>
                 <AlertDescription>更新已准备好，可在确认后开始下载和安装。</AlertDescription>
@@ -314,9 +344,7 @@ export function SystemPage() {
             {showProgress && (
               <Progress value={status.progress}>
                 <ProgressLabel>{status.state === 'downloading' ? '正在下载更新' : '正在安装更新'}</ProgressLabel>
-                {status.state === 'downloading' && (
-                  <ProgressValue>{() => `${Math.round(status.downloadProgress)}%`}</ProgressValue>
-                )}
+                <ProgressValue>{() => `${Math.round(status.progress)}%`}</ProgressValue>
               </Progress>
             )}
 
@@ -328,7 +356,7 @@ export function SystemPage() {
 
             {status.releaseNotes ? (
               <section className="flex flex-col gap-1" aria-labelledby="release-notes-title">
-                <h3 id="release-notes-title" className="text-xs tracking-wide text-muted-foreground uppercase">
+                <h3 id="release-notes-title" className="text-xs text-muted-foreground">
                   发布说明
                 </h3>
                 <CodeBlock
@@ -384,12 +412,6 @@ export function SystemPage() {
   )
 }
 
-function badgeVariant(state: UpdateStatus['state']) {
-  if (state === 'failed') return 'destructive' as const
-  if (state === 'ready') return 'warning' as const
-  if (state === 'idle') return 'outline' as const
-  return 'secondary' as const
-}
 
 function Detail({
   label,
@@ -406,9 +428,15 @@ function Detail({
 
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
-      <dt className="text-xs tracking-wide text-muted-foreground uppercase">{label}</dt>
-      <dd className={cn('text-sm', mono && 'font-mono break-all')}>
-        {dateTime && value ? <time dateTime={dateTime}>{content}</time> : content}
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="text-sm">
+        {mono && value ? (
+          <CodeText className="text-sm break-all text-foreground">
+            {dateTime ? <time dateTime={dateTime}>{content}</time> : content}
+          </CodeText>
+        ) : (
+          content
+        )}
       </dd>
     </div>
   )

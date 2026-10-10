@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PlusIcon, RefreshCwIcon, TicketIcon, TriangleAlertIcon } from 'lucide-react'
+import { PencilIcon, PlusIcon, TicketIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api } from '@/api'
 import type { Plan, Profile } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -31,11 +31,12 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { bytesToGb, errorMessage, formatQuota, gbToBytes } from '@/lib/format'
+import { reportSyncError } from '@/lib/sync'
 
 type Draft = {
   id?: number
@@ -147,8 +148,8 @@ export function PlansPage() {
     try {
       if (draft.id) {
         const result = await api.put<{ syncError: string }>(`/plans/${draft.id}`, body)
-        if (result.syncError) toast.error(`已保存，但下发到面板时出错：${result.syncError}`)
-        else toast.success('已保存并同步到面板')
+        toast.success(result.syncError ? '套餐已保存' : '套餐已保存并同步到面板')
+        reportSyncError(result.syncError)
       } else {
         await api.post('/plans', body)
         toast.success('套餐已创建')
@@ -197,34 +198,32 @@ export function PlansPage() {
       <Card>
         <CardHeader>
           <CardTitle>套餐列表</CardTitle>
-          <CardDescription>集中管理交付规则；修改套餐后，关联用户会自动重新下发。</CardDescription>
-          <CardAction className="flex items-center gap-2">
-            {!loading && <Badge variant="secondary">{enabledPlans} 个启用</Badge>}
-            <Button variant="ghost" size="icon-sm" aria-label="刷新套餐列表" disabled={loading || refreshing} onClick={refresh}>
-              {refreshing ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
-            </Button>
+          <CardDescription>
+            {loading || (loadError && plans.length === 0)
+              ? '集中管理交付规则；修改套餐后，关联用户会自动重新下发。'
+              : `共 ${plans.length} 个套餐，${enabledPlans} 个启用。修改套餐后，关联用户会自动重新下发。`}
+          </CardDescription>
+          <CardAction>
+            <RefreshButton loading={loading || refreshing} disabled={saving} onClick={() => void refresh()} />
           </CardAction>
         </CardHeader>
         <CardContent className="px-0">
           {loading ? (
-            <div className="flex flex-col gap-3 px-(--card-spacing)" aria-label="套餐加载中">
-              <Skeleton className="h-9 w-full" />
-              <Skeleton className="h-12 w-full" />
-              <Skeleton className="h-12 w-full" />
-            </div>
+            <TableSkeleton
+              columns={[
+                { label: '名称', width: 'w-28' },
+                { label: '流量', width: 'w-16' },
+                { label: '时长', className: 'hidden md:table-cell', width: 'w-12' },
+                { label: '设备数', className: 'hidden lg:table-cell', width: 'w-10' },
+                { label: '分流方案', className: 'hidden sm:table-cell', width: 'w-24' },
+                { label: '用户', width: 'w-8' },
+                { label: '状态', width: 'w-14' },
+                { width: 'w-24' },
+              ]}
+            />
           ) : loadError && plans.length === 0 ? (
-            <div className="px-(--card-spacing)">
-              <Alert variant="destructive">
-                <TriangleAlertIcon />
-                <AlertTitle>无法加载套餐</AlertTitle>
-                <AlertDescription>{loadError}</AlertDescription>
-                <AlertAction>
-                  <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing}>
-                    {refreshing && <Spinner data-icon="inline-start" />}
-                    重试
-                  </Button>
-                </AlertAction>
-              </Alert>
+            <div className="px-4">
+              <LoadErrorAlert title="套餐加载失败" message={loadError} retrying={refreshing} onRetry={() => void refresh()} />
             </div>
           ) : plans.length === 0 ? (
             <Empty>
@@ -245,7 +244,7 @@ export function PlansPage() {
           ) : (
             <div className="flex flex-col gap-3">
               {loadError && (
-                <div className="px-(--card-spacing)">
+                <div className="px-4">
                   <Alert variant="warning">
                     <TriangleAlertIcon />
                     <AlertTitle>列表可能不是最新状态</AlertTitle>
@@ -271,16 +270,16 @@ export function PlansPage() {
                     <TableRow key={plan.id}>
                       <TableCell>
                         <div className="flex flex-col gap-1">
-                          <strong>{plan.name}</strong>
-                          {plan.remark && <span className="text-muted-foreground">{plan.remark}</span>}
-                          {plan.speedNote && <span className="text-muted-foreground">{plan.speedNote}</span>}
+                          <span className="font-medium">{plan.name}</span>
+                          {plan.remark && <span className="text-xs text-muted-foreground">{plan.remark}</span>}
+                          {plan.speedNote && <span className="text-xs text-muted-foreground">{plan.speedNote}</span>}
                         </div>
                       </TableCell>
-                      <TableCell>{formatQuota(plan.trafficBytes)}</TableCell>
-                      <TableCell className="hidden md:table-cell">
+                      <TableCell className="tabular-nums">{formatQuota(plan.trafficBytes)}</TableCell>
+                      <TableCell className="hidden tabular-nums text-muted-foreground md:table-cell">
                         {plan.durationDays > 0 ? `${plan.durationDays} 天` : '永久'}
                       </TableCell>
-                      <TableCell className="hidden lg:table-cell">
+                      <TableCell className="hidden tabular-nums text-muted-foreground lg:table-cell">
                         {plan.deviceLimit > 0 ? plan.deviceLimit : '不限'}
                       </TableCell>
                       <TableCell className="hidden sm:table-cell">
@@ -293,22 +292,44 @@ export function PlansPage() {
                           </span>
                         )}
                       </TableCell>
-                      <TableCell>{plan.userCount}</TableCell>
+                      <TableCell className="tabular-nums">{plan.userCount}</TableCell>
                       <TableCell>
                         {plan.enabled ? <StatusBadge tone="good">启用</StatusBadge> : <StatusBadge tone="idle">停用</StatusBadge>}
                       </TableCell>
                       <TableCell>
-                        <div className="flex justify-end gap-2">
-                          <Button variant="outline" size="sm" onClick={() => openEdit(plan)}>编辑</Button>
+                        <div className="flex justify-end gap-1">
                           <Button
-                            variant="destructive"
+                            type="button"
+                            variant="outline"
                             size="sm"
-                            disabled={plan.userCount > 0}
-                            aria-label={plan.userCount > 0 ? `套餐 ${plan.name} 仍有用户，不能删除` : `删除套餐 ${plan.name}`}
-                            onClick={() => setPendingDelete(plan)}
+                            aria-label={`编辑 ${plan.name}`}
+                            onClick={() => openEdit(plan)}
                           >
-                            删除
+                            <PencilIcon data-icon="inline-start" />
+                            <span className="hidden sm:inline">编辑</span>
                           </Button>
+                          {plan.userCount > 0 ? (
+                            <Tooltip>
+                              <TooltipTrigger render={<span tabIndex={0} />}>
+                                <Button type="button" variant="ghost" size="sm" disabled aria-label={`删除 ${plan.name}`}>
+                                  <Trash2Icon data-icon="inline-start" />
+                                  <span className="hidden sm:inline">删除</span>
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>仍有 {plan.userCount} 个用户使用此套餐，先把他们换到其他套餐</TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              aria-label={`删除 ${plan.name}`}
+                              onClick={() => setPendingDelete(plan)}
+                            >
+                              <Trash2Icon data-icon="inline-start" />
+                              <span className="hidden sm:inline">删除</span>
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -338,61 +359,62 @@ export function PlansPage() {
         }}
       >
         <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{draft?.id ? '编辑套餐' : '新建套餐'}</DialogTitle>
-            <DialogDescription>套餐只管配额与时长，用户能用哪些节点由绑定的分流方案决定。保存后会立即同步到面板。</DialogDescription>
-          </DialogHeader>
           {draft && (
-            <form className="flex min-h-0 flex-col gap-4" noValidate onSubmit={save}>
+            <form className="contents" noValidate onSubmit={save}>
+              <DialogHeader>
+                <DialogTitle>{draft.id ? '编辑套餐' : '新建套餐'}</DialogTitle>
+                <DialogDescription>套餐只管配额与时长，用户能用哪些节点由绑定的分流方案决定。保存后会立即同步到面板。</DialogDescription>
+              </DialogHeader>
               <FieldGroup>
-                <FieldGroup className="grid gap-4 sm:grid-cols-2">
-                  <Field data-invalid={nameInvalid}>
+                <FieldGroup className="sm:grid sm:grid-cols-2">
+                  <Field data-invalid={nameInvalid || undefined} data-disabled={saving || undefined}>
                     <FieldLabel htmlFor="plan-name">名称</FieldLabel>
-                    <Input id="plan-name" value={draft.name} required aria-invalid={nameInvalid} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+                    <Input id="plan-name" value={draft.name} required aria-invalid={nameInvalid || undefined} disabled={saving} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
                     {nameInvalid && <FieldError>请输入套餐名称。</FieldError>}
                   </Field>
-                  <Field>
+                  <Field data-disabled={saving || undefined}>
                     <FieldLabel htmlFor="plan-remark">备注</FieldLabel>
-                    <Input id="plan-remark" value={draft.remark} onChange={(event) => setDraft({ ...draft, remark: event.target.value })} />
+                    <Input id="plan-remark" disabled={saving} value={draft.remark} onChange={(event) => setDraft({ ...draft, remark: event.target.value })} />
                   </Field>
                 </FieldGroup>
 
-                <FieldGroup className="grid gap-4 sm:grid-cols-2">
-                  <Field>
+                <FieldGroup className="sm:grid sm:grid-cols-2">
+                  <Field data-disabled={saving || undefined}>
                     <FieldLabel htmlFor="plan-traffic">流量 (GB)</FieldLabel>
-                    <Input id="plan-traffic" type="number" min={0} step="any" value={draft.trafficGb} onChange={(event) => setDraft({ ...draft, trafficGb: Number(event.target.value) })} />
+                    <Input id="plan-traffic" disabled={saving} type="number" min={0} step="any" value={draft.trafficGb} onChange={(event) => setDraft({ ...draft, trafficGb: Number(event.target.value) })} />
                     <FieldDescription>0 表示不限；新建用户时作为默认值。</FieldDescription>
                   </Field>
-                  <Field>
+                  <Field data-disabled={saving || undefined}>
                     <FieldLabel htmlFor="plan-duration">时长 (天)</FieldLabel>
-                    <Input id="plan-duration" type="number" min={0} value={draft.durationDays} onChange={(event) => setDraft({ ...draft, durationDays: Number(event.target.value) })} />
+                    <Input id="plan-duration" disabled={saving} type="number" min={0} value={draft.durationDays} onChange={(event) => setDraft({ ...draft, durationDays: Number(event.target.value) })} />
                     <FieldDescription>0 表示永久；用于计算新用户到期时间。</FieldDescription>
                   </Field>
                 </FieldGroup>
 
-                <FieldGroup className="grid gap-4 sm:grid-cols-2">
-                  <Field>
+                <FieldGroup className="sm:grid sm:grid-cols-2">
+                  <Field data-disabled={saving || undefined}>
                     <FieldLabel htmlFor="plan-devices">设备数上限</FieldLabel>
-                    <Input id="plan-devices" type="number" min={0} value={draft.deviceLimit} onChange={(event) => setDraft({ ...draft, deviceLimit: Number(event.target.value) })} />
+                    <Input id="plan-devices" disabled={saving} type="number" min={0} value={draft.deviceLimit} onChange={(event) => setDraft({ ...draft, deviceLimit: Number(event.target.value) })} />
                     <FieldDescription>0 表示不限，对应 3x-ui 的 IP 限制。</FieldDescription>
                   </Field>
-                  <Field>
+                  <Field data-disabled={saving || undefined}>
                     <FieldLabel htmlFor="plan-sort">排序</FieldLabel>
-                    <Input id="plan-sort" type="number" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })} />
+                    <Input id="plan-sort" disabled={saving} type="number" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })} />
                   </Field>
                 </FieldGroup>
 
-                <Field>
+                <Field data-disabled={saving || undefined}>
                   <FieldLabel htmlFor="plan-speed-note">速率说明</FieldLabel>
-                  <Input id="plan-speed-note" placeholder="例如：峰值 500 Mbps" value={draft.speedNote} onChange={(event) => setDraft({ ...draft, speedNote: event.target.value })} />
+                  <Input id="plan-speed-note" disabled={saving} placeholder="例如：峰值 500 Mbps" value={draft.speedNote} onChange={(event) => setDraft({ ...draft, speedNote: event.target.value })} />
                   <FieldDescription>仅用于记录与辨识套餐，不参与限速。</FieldDescription>
                 </Field>
 
-                <Field>
+                <Field data-disabled={saving || undefined}>
                   <FieldLabel htmlFor="plan-profile">分流方案</FieldLabel>
                   <Select
                     items={profileItems}
                     value={String(draft.profileId)}
+                    disabled={saving}
                     onValueChange={(value) => setDraft({ ...draft, profileId: Number(value) })}
                   >
                     <SelectTrigger id="plan-profile" className="w-full">
@@ -417,9 +439,9 @@ export function PlansPage() {
                   </FieldDescription>
                 </Field>
 
-                <Field orientation="horizontal">
+                <Field orientation="horizontal" data-disabled={saving || undefined}>
                   <FieldLabel htmlFor="plan-enabled">启用套餐</FieldLabel>
-                  <Switch id="plan-enabled" checked={draft.enabled} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} />
+                  <Switch id="plan-enabled" disabled={saving} checked={draft.enabled} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} />
                 </Field>
               </FieldGroup>
 

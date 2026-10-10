@@ -1,19 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CopyIcon, EyeIcon, EyeOffIcon, PencilIcon, RefreshCwIcon, TriangleAlertIcon } from 'lucide-react'
+import { CopyIcon, EyeIcon, EyeOffIcon, FileSearchIcon, PencilIcon, RefreshCwIcon, TriangleAlertIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api, type Inbound, type InboundDetail } from '@/api'
-import { CodeBlock } from '@/components/code-display'
+import { CodeBlock, CodeText } from '@/components/code-display'
+import { FieldsSkeleton, LoadErrorAlert } from '@/components/load-state'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Separator } from '@/components/ui/separator'
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { errorMessage, formatTime } from '@/lib/format'
+import { copyText, errorMessage, formatTime } from '@/lib/format'
+import { inboundTitle } from '@/lib/inbound'
+import { parameterLabel } from '@/lib/inbound-labels'
 import { concealed, isObject } from '@/lib/inbound-parameters'
 
 type Props = {
@@ -23,39 +25,9 @@ type Props = {
   onRefresh: () => Promise<void>
 }
 
-const labels: Record<string, string> = {
-  id: '入站 ID', tag: '入站标签', remark: '面板备注', protocol: '协议',
-  listen: '监听地址', port: '监听端口', enable: '启用', enabled: '启用',
-  network: '传输方式', security: '安全方式', settings: '客户端参数',
-  streamSettings: '传输与安全', sniffing: '流量嗅探',
-  realitySettings: 'REALITY', tlsSettings: 'TLS', tcpSettings: 'TCP', rawSettings: 'RAW',
-  wsSettings: 'WebSocket', grpcSettings: 'gRPC', xhttpSettings: 'XHTTP',
-  httpSettings: 'HTTP', httpupgradeSettings: 'HTTP Upgrade', sockopt: 'Socket 选项',
-  serverNames: '服务器名称 / SNI', serverName: '服务器名称 / SNI', dest: '目标地址', target: '目标地址',
-  privateKey: '私钥', publicKey: '公钥', shortIds: 'Short IDs', shortId: 'Short ID',
-  fingerprint: '指纹', spiderX: 'Spider X', show: '显示调试信息',
-  xver: 'Proxy Protocol 版本', maxTimeDiff: '最大时间差', minClientVer: '最低客户端版本',
-  maxClientVer: '最高客户端版本', alpn: 'ALPN', certificates: '证书', certificate: '证书内容',
-  certificateFile: '证书路径', keyFile: '私钥路径', key: '私钥内容',
-  allowInsecure: '允许不安全证书', rejectUnknownSni: '拒绝未知 SNI',
-  decryption: '解密', encryption: '加密', fallbacks: '回落规则',
-  path: '路径', host: 'Host', headers: '请求头', header: '传输头', type: '类型', serviceName: '服务名称',
-  multiMode: 'Multi mode', mode: '模式', extra: '扩展参数',
-  destOverride: '目标地址覆盖', routeOnly: '仅用于路由', metadataOnly: '仅嗅探元数据',
-  domainsExcluded: '排除域名', ipsExcluded: '排除 IP',
-  disableFlow: '禁用流控', allocate: '连接分配', strategy: '策略',
-  tcpFastOpen: 'TCP Fast Open', tcpNoDelay: 'TCP No Delay', tcpCongestion: 'TCP 拥塞控制',
-  dialerProxy: '拨号代理', mark: '路由标记', tproxy: '透明代理',
-  up: '上传字节', down: '下载字节', total: '配额字节', expiryTime: '到期时间',
-}
-
 async function copy(value: string) {
-  try {
-    await navigator.clipboard.writeText(value)
-    toast.success('已复制')
-  } catch {
-    toast.error('复制失败，请选择内容后手动复制')
-  }
+  if (await copyText(value)) toast.success('已复制')
+  else toast.error('复制失败，请手动复制')
 }
 
 export function InboundDetails({ inbound, onClose, onEdit, onRefresh }: Props) {
@@ -132,8 +104,8 @@ export function InboundDetails({ inbound, onClose, onEdit, onRefresh }: Props) {
       }}
     >
       <SheetContent className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl">
-        <SheetHeader className="gap-2 px-5 pt-6 pr-12 pb-4 sm:px-6 sm:pr-12">
-          <SheetTitle>{inbound?.emoji} {inbound?.name || inbound?.remoteRemark || inbound?.inboundTag || '入站参数'}</SheetTitle>
+        <SheetHeader className="gap-2 pr-12">
+          <SheetTitle>{inbound ? inboundTitle(inbound) : '入站参数'}</SheetTitle>
           <SheetDescription>{inbound?.panelName} · 入站 #{inbound?.remoteId} · {inbound?.inboundTag || '无标签'}</SheetDescription>
           <div className="flex flex-wrap gap-1.5 pt-1">
             <Badge variant="outline">{inbound?.protocol.toUpperCase()}</Badge>
@@ -143,8 +115,8 @@ export function InboundDetails({ inbound, onClose, onEdit, onRefresh }: Props) {
           </div>
         </SheetHeader>
         <Separator />
-        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-5 py-5 sm:px-6">
-          <dl className="grid grid-cols-2 gap-x-5 gap-y-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-4">
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-4">
             <Summary label="客户端地址" value={inbound?.publicAddress || '沿用面板分享地址'} />
             <Summary label="客户端端口" value={String(inbound?.publicPort || inbound?.port || '—')} />
             <Summary label="监听地址" value={`${inbound?.listen || '所有地址'} : ${inbound?.port ?? '—'}`} />
@@ -169,18 +141,15 @@ export function InboundDetails({ inbound, onClose, onEdit, onRefresh }: Props) {
               </Button>
             </div>
             {loading ? (
-              <div className="flex flex-col gap-4" aria-label="正在加载入站参数">
-                {[0, 1, 2, 3].map((item) => <Skeleton key={item} className="h-10 w-full" />)}
-              </div>
+              <FieldsSkeleton />
             ) : error ? (
-              <Alert variant="destructive">
-                <TriangleAlertIcon />
-                <AlertTitle>参数加载失败</AlertTitle>
-                <AlertDescription>{error}<Button type="button" variant="outline" size="sm" onClick={() => void load()}>重试</Button></AlertDescription>
-              </Alert>
+              <LoadErrorAlert title="参数加载失败" message={error} onRetry={() => void load()} />
             ) : !parameters ? (
               <Empty>
                 <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <FileSearchIcon />
+                  </EmptyMedia>
                   <EmptyTitle>尚未同步入站参数</EmptyTitle>
                   <EmptyDescription>点击下方「同步参数」，读取面板中的完整入站配置。</EmptyDescription>
                 </EmptyHeader>
@@ -210,7 +179,7 @@ export function InboundDetails({ inbound, onClose, onEdit, onRefresh }: Props) {
           </Tabs>
         </div>
         <Separator />
-        <SheetFooter className="flex-row justify-between px-5 py-4 sm:px-6">
+        <SheetFooter className="flex-row justify-between">
           <Button type="button" variant="outline" disabled={loading || syncing} onClick={() => void sync()}>
             {syncing ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
             {syncing ? '同步中…' : '同步参数'}
@@ -250,17 +219,19 @@ function ParameterTree({ value }: { value: Record<string, unknown> }) {
         const text = item == null ? '—' : item === '' ? '未设置' : Array.isArray(item) ? item.length ? item.join('\n') : '[]' : String(item)
         return nested ? (
           <div key={key} className="flex min-w-0 flex-col gap-2">
-            <dt className="text-xs font-medium">{labels[key] || key}</dt>
+            <dt className="text-xs font-medium">{parameterLabel(key)}</dt>
             <dd className="min-w-0 pl-3">
               <ParameterTree value={isObject(item) ? item : Object.fromEntries((item as unknown[]).map((child, index) => [String(index + 1), child]))} />
             </dd>
           </div>
         ) : (
           <div key={key} className="group grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)_auto] items-start gap-2">
-            <dt className="pt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]" title={key}>{labels[key] || key}</dt>
-            <dd className="min-w-0 pt-1 font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{typeof item === 'boolean' ? item ? '是' : '否' : text}</dd>
+            <dt className="pt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]" title={key}>{parameterLabel(key)}</dt>
+            <dd className="min-w-0 pt-1 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+              <CodeText className="text-foreground">{typeof item === 'boolean' ? item ? '是' : '否' : text}</CodeText>
+            </dd>
             <dd>
-              <Button type="button" size="icon-xs" variant="ghost" disabled={item === '••••••••'} aria-label={`复制 ${labels[key] || key}`} onClick={() => void copy(text)}>
+              <Button type="button" size="icon-xs" variant="ghost" disabled={item === '••••••••'} aria-label={`复制 ${parameterLabel(key)}`} onClick={() => void copy(text)}>
                 <CopyIcon />
               </Button>
             </dd>

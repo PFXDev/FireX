@@ -7,16 +7,15 @@ import {
   RefreshCwIcon,
   ServerOffIcon,
   Trash2Icon,
-  TriangleAlertIcon,
 } from 'lucide-react'
 
 import { api } from '@/api'
 import type { Panel } from '@/api'
 import { CodeText } from '@/components/code-display'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
 import { PanelStatusBadge, StatusBadge } from '@/components/status-badge'
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -38,7 +37,6 @@ import {
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -246,38 +244,29 @@ export function PanelsPage() {
             {loadState === 'ready' ? `共 ${panels.length} 个面板，集中查看连通性与节点同步状态。` : '管理 FireX 连接的 3x-ui 面板。'}
           </CardDescription>
           <CardAction>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={loadState === 'loading' || pendingAction !== null || discovering.size > 0}
+            <RefreshButton
+              loading={loadState === 'loading'}
+              disabled={pendingAction !== null || discovering.size > 0}
               onClick={() => void load()}
-            >
-              {loadState === 'loading' ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <RefreshCwIcon data-icon="inline-start" />
-              )}
-              {loadState === 'loading' ? '加载中…' : '刷新'}
-            </Button>
+            />
           </CardAction>
         </CardHeader>
         <CardContent className="px-0">
           {loadState === 'loading' ? (
-            <PanelsTableSkeleton />
+            <TableSkeleton
+              columns={[
+                { label: '名称', width: 'w-28' },
+                { label: '地址', className: 'hidden lg:table-cell', width: 'w-48' },
+                { label: '状态', width: 'w-14' },
+                { label: '入站', className: 'hidden md:table-cell', width: 'w-12' },
+                { label: 'Xray', className: 'hidden xl:table-cell', width: 'w-20' },
+                { label: '最近连通', className: 'hidden lg:table-cell', width: 'w-32' },
+                { width: 'w-24' },
+              ]}
+            />
           ) : loadState === 'error' ? (
             <div className="px-4">
-              <Alert variant="destructive">
-                <TriangleAlertIcon />
-                <AlertTitle>面板加载失败</AlertTitle>
-                <AlertDescription>{loadError}</AlertDescription>
-                <AlertAction>
-                  <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
-                    <RefreshCwIcon data-icon="inline-start" />
-                    重试
-                  </Button>
-                </AlertAction>
-              </Alert>
+              <LoadErrorAlert title="面板加载失败" message={loadError} onRetry={() => void load()} />
             </div>
           ) : panels.length === 0 ? (
             <Empty>
@@ -539,33 +528,3 @@ export function PanelsPage() {
   )
 }
 
-function PanelsTableSkeleton() {
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>名称</TableHead>
-          <TableHead className="hidden lg:table-cell">地址</TableHead>
-          <TableHead>状态</TableHead>
-          <TableHead className="hidden md:table-cell">入站</TableHead>
-          <TableHead className="hidden xl:table-cell">Xray</TableHead>
-          <TableHead className="hidden lg:table-cell">最近连通</TableHead>
-          <TableHead><span className="sr-only">操作</span></TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {Array.from({ length: 4 }).map((_, index) => (
-          <TableRow key={index}>
-            <TableCell><Skeleton className="h-4 w-28" /></TableCell>
-            <TableCell className="hidden lg:table-cell"><Skeleton className="h-4 w-48" /></TableCell>
-            <TableCell><Skeleton className="h-5 w-14" /></TableCell>
-            <TableCell className="hidden md:table-cell"><Skeleton className="h-4 w-12" /></TableCell>
-            <TableCell className="hidden xl:table-cell"><Skeleton className="h-4 w-20" /></TableCell>
-            <TableCell className="hidden lg:table-cell"><Skeleton className="h-4 w-32" /></TableCell>
-            <TableCell><Skeleton className="ml-auto h-7 w-24" /></TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  )
-}

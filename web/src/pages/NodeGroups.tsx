@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BoxesIcon, PlusIcon, RefreshCwIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
+import { BoxesIcon, PencilIcon, PlusIcon, RouteIcon, Trash2Icon, TriangleAlertIcon, XIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api } from '@/api'
 import type { Inbound, NodeGroup, NodeGroupTag } from '@/api'
+import { CodeText } from '@/components/code-display'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -41,11 +43,12 @@ import {
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { errorMessage } from '@/lib/format'
+import { inboundTitle } from '@/lib/inbound'
 import { reportSyncError } from '@/lib/sync'
 
 const GROUP_TYPES = [
@@ -164,12 +167,6 @@ export function NodeGroupsPage() {
       group.tags.some((tag) => tag.key === tagFilter.key && tag.value === tagFilter.value),
     )
   }, [groups, tagFilter])
-
-  const inboundName = useCallback(
-    (inbound: Inbound) =>
-      `${inbound.emoji ? `${inbound.emoji} ` : ''}${inbound.name || inbound.remoteRemark || inbound.inboundTag}`,
-    [],
-  )
 
   const openCreate = () => {
     setShowErrors(false)
@@ -304,7 +301,8 @@ export function NodeGroupsPage() {
           <AlertTitle>{unreachable} 个节点组没有被任何分流方案选中</AlertTitle>
           <AlertDescription>方案的可用节点组决定用户能用到什么，没被选中的分组不会出现在任何订阅里。</AlertDescription>
           <AlertAction>
-            <Button variant="outline" size="sm" onClick={() => (window.location.hash = '#/routing')}>
+            <Button variant="outline" size="sm" render={<a href="#/routing" />} nativeButton={false}>
+              <RouteIcon data-icon="inline-start" />
               去分流
             </Button>
           </AlertAction>
@@ -315,35 +313,29 @@ export function NodeGroupsPage() {
         <CardHeader>
           <CardTitle>分组列表</CardTitle>
           <CardDescription>
+            {loading || (loadError && groups.length === 0) ? '' : `${enabledGroups} 个启用。`}
             每个分组渲染成一个 mihomo 策略组；订阅只包含用户方案覆盖的成员，成员为空的分组会被自动省略。
           </CardDescription>
-          <CardAction className="flex items-center gap-2">
-            {!loading && <Badge variant="secondary">{enabledGroups} 个启用</Badge>}
-            <Button variant="ghost" size="icon-sm" aria-label="刷新分组列表" disabled={loading || refreshing} onClick={refresh}>
-              {refreshing ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
-            </Button>
+          <CardAction>
+            <RefreshButton loading={loading || refreshing} disabled={saving} onClick={() => void refresh()} />
           </CardAction>
         </CardHeader>
         <CardContent className="px-0">
           {loading ? (
-            <div className="flex flex-col gap-3 px-(--card-spacing)" aria-label="分组加载中">
-              <Skeleton className="h-9 w-full" />
-              <Skeleton className="h-12 w-full" />
-              <Skeleton className="h-12 w-full" />
-            </div>
+            <TableSkeleton
+              columns={[
+                { label: '分组', width: 'w-28' },
+                { label: '标签', className: 'hidden md:table-cell', width: 'w-24' },
+                { label: '类型', className: 'hidden lg:table-cell', width: 'w-16' },
+                { label: '入站', width: 'w-8' },
+                { label: '方案', className: 'hidden lg:table-cell', width: 'w-8' },
+                { label: '状态', width: 'w-14' },
+                { width: 'w-24' },
+              ]}
+            />
           ) : loadError && groups.length === 0 ? (
-            <div className="px-(--card-spacing)">
-              <Alert variant="destructive">
-                <TriangleAlertIcon />
-                <AlertTitle>无法加载分组</AlertTitle>
-                <AlertDescription>{loadError}</AlertDescription>
-                <AlertAction>
-                  <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing}>
-                    {refreshing && <Spinner data-icon="inline-start" />}
-                    重试
-                  </Button>
-                </AlertAction>
-              </Alert>
+            <div className="px-4">
+              <LoadErrorAlert title="分组加载失败" message={loadError} retrying={refreshing} onRetry={() => void refresh()} />
             </div>
           ) : groups.length === 0 ? (
             <Empty>
@@ -366,7 +358,7 @@ export function NodeGroupsPage() {
           ) : (
             <div className="flex flex-col gap-3">
               {loadError && (
-                <div className="px-(--card-spacing)">
+                <div className="px-4">
                   <Alert variant="warning">
                     <TriangleAlertIcon />
                     <AlertTitle>列表可能不是最新状态</AlertTitle>
@@ -375,29 +367,32 @@ export function NodeGroupsPage() {
                 </div>
               )}
               {tagIndex.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2 px-(--card-spacing)">
-                  <Button
-                    variant={tagFilter === null ? 'secondary' : 'ghost'}
+                <div className="px-4">
+                  <ToggleGroup
+                    aria-label="按标签筛选"
+                    variant="outline"
                     size="sm"
-                    onClick={() => setTagFilter(null)}
+                    className="flex-wrap"
+                    value={[tagFilter ? JSON.stringify([tagFilter.key, tagFilter.value]) : 'all']}
+                    onValueChange={(value) => {
+                      const next = value[0]
+                      if (!next || next === 'all') {
+                        setTagFilter(null)
+                        return
+                      }
+                      const [key, tagValue] = JSON.parse(next) as [string, string]
+                      setTagFilter({ key, value: tagValue })
+                    }}
                   >
-                    全部
-                  </Button>
-                  {tagIndex.map(([key, values]) =>
-                    values.map((value) => {
-                      const active = tagFilter?.key === key && tagFilter.value === value
-                      return (
-                        <Button
-                          key={`${key}:${value}`}
-                          variant={active ? 'secondary' : 'ghost'}
-                          size="sm"
-                          onClick={() => setTagFilter(active ? null : { key, value })}
-                        >
+                    <ToggleGroupItem value="all">全部</ToggleGroupItem>
+                    {tagIndex.map(([key, values]) =>
+                      values.map((value) => (
+                        <ToggleGroupItem key={`${key}:${value}`} value={JSON.stringify([key, value])}>
                           {key}: {value}
-                        </Button>
-                      )
-                    }),
-                  )}
+                        </ToggleGroupItem>
+                      )),
+                    )}
+                  </ToggleGroup>
                 </div>
               )}
               <Table>
@@ -419,11 +414,11 @@ export function NodeGroupsPage() {
                     <TableRow key={group.id}>
                       <TableCell>
                         <div className="flex flex-col gap-1">
-                          <strong>
+                          <span className="font-medium">
                             {group.emoji && `${group.emoji} `}
                             {group.name}
-                          </strong>
-                          {group.remark && <span className="text-muted-foreground">{group.remark}</span>}
+                          </span>
+                          {group.remark && <span className="text-xs text-muted-foreground">{group.remark}</span>}
                         </div>
                       </TableCell>
                       <TableCell className="hidden md:table-cell">
@@ -462,17 +457,26 @@ export function NodeGroupsPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <div className="flex justify-end gap-2">
-                          <Button variant="outline" size="sm" onClick={() => openEdit(group)}>
-                            编辑
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            aria-label={`编辑 ${group.name}`}
+                            onClick={() => openEdit(group)}
+                          >
+                            <PencilIcon data-icon="inline-start" />
+                            <span className="hidden sm:inline">编辑</span>
                           </Button>
                           <Button
-                            variant="destructive"
+                            type="button"
+                            variant="ghost"
                             size="sm"
-                            aria-label={`删除分组 ${group.name}`}
+                            aria-label={`删除 ${group.name}`}
                             onClick={() => setPendingDelete(group)}
                           >
-                            删除
+                            <Trash2Icon data-icon="inline-start" />
+                            <span className="hidden sm:inline">删除</span>
                           </Button>
                         </div>
                       </TableCell>
@@ -484,9 +488,11 @@ export function NodeGroupsPage() {
           )}
         </CardContent>
         <CardFooter className="flex-wrap justify-between gap-2">
-          <span className="text-muted-foreground">{loading ? '正在读取分组' : `共 ${groups.length} 个分组`}</span>
           <span className="text-muted-foreground">
-            {loading ? '—' : `覆盖 ${new Set(groups.flatMap((group) => group.inboundIds)).size} 个入站`}
+            {loading ? '正在读取分组' : loadError && groups.length === 0 ? '分组统计暂不可用' : `共 ${groups.length} 个分组`}
+          </span>
+          <span className="text-muted-foreground">
+            {loading || (loadError && groups.length === 0) ? '—' : `覆盖 ${new Set(groups.flatMap((group) => group.inboundIds)).size} 个入站`}
           </span>
         </CardFooter>
       </Card>
@@ -500,32 +506,34 @@ export function NodeGroupsPage() {
           }
         }}
       >
-        <DialogContent className="flex flex-col overflow-hidden p-0 sm:max-w-2xl">
-          <DialogHeader className="shrink-0 px-4 pt-4 pr-10">
-            <DialogTitle>{draft?.id ? '编辑节点组' : '新建节点组'}</DialogTitle>
-            <DialogDescription>分组名会直接作为客户端里的策略组名称显示。</DialogDescription>
-          </DialogHeader>
+        <DialogContent className="flex flex-col overflow-hidden sm:max-w-2xl">
           {draft && (
-            <form className="flex min-h-0 flex-col" noValidate onSubmit={save}>
-              <FieldGroup className="min-h-0 overflow-y-auto px-4 pt-1 pb-4">
-                <FieldGroup className="grid gap-4 sm:grid-cols-[6rem_1fr]">
-                  <Field>
+            <form className="contents" noValidate onSubmit={save}>
+              <DialogHeader className="shrink-0">
+                <DialogTitle>{draft.id ? '编辑节点组' : '新建节点组'}</DialogTitle>
+                <DialogDescription>分组名会直接作为客户端里的策略组名称显示。</DialogDescription>
+              </DialogHeader>
+              <FieldGroup className="-mx-4 min-h-0 overflow-y-auto px-4 py-1">
+                <FieldGroup className="sm:grid sm:grid-cols-[6rem_1fr]">
+                  <Field data-disabled={saving || undefined}>
                     <FieldLabel htmlFor="group-emoji">图标</FieldLabel>
                     <Input
                       id="group-emoji"
+                      disabled={saving}
                       placeholder="🇭🇰"
                       value={draft.emoji}
                       onChange={(event) => setDraft({ ...draft, emoji: event.target.value })}
                     />
                   </Field>
-                  <Field data-invalid={nameInvalid || commaInvalid}>
+                  <Field data-invalid={nameInvalid || commaInvalid || undefined} data-disabled={saving || undefined}>
                     <FieldLabel htmlFor="group-name">名称</FieldLabel>
                     <Input
                       id="group-name"
                       placeholder="香港 IEPL"
                       value={draft.name}
                       required
-                      aria-invalid={nameInvalid || commaInvalid}
+                      aria-invalid={nameInvalid || commaInvalid || undefined}
+                      disabled={saving}
                       onChange={(event) => setDraft({ ...draft, name: event.target.value })}
                     />
                     {nameInvalid && <FieldError>请输入分组名称。</FieldError>}
@@ -541,7 +549,8 @@ export function NodeGroupsPage() {
                       <div key={index} className="flex items-center gap-2">
                         <Input
                           aria-label={`标签 ${index + 1} 的键`}
-                          className="w-32"
+                          className="basis-2/5"
+                          disabled={saving}
                           list="firex-tag-keys"
                           placeholder="地区"
                           value={tag.key}
@@ -550,6 +559,7 @@ export function NodeGroupsPage() {
                         <Input
                           aria-label={`标签 ${index + 1} 的值`}
                           placeholder="香港"
+                          disabled={saving}
                           value={tag.value}
                           onChange={(event) => patchTag(index, { value: event.target.value })}
                         />
@@ -558,6 +568,7 @@ export function NodeGroupsPage() {
                           variant="ghost"
                           size="icon-sm"
                           aria-label={`删除标签 ${index + 1}`}
+                          disabled={saving}
                           onClick={() => setDraft({ ...draft, tags: draft.tags.filter((_, i) => i !== index) })}
                         >
                           <XIcon />
@@ -569,6 +580,7 @@ export function NodeGroupsPage() {
                         type="button"
                         variant="outline"
                         size="sm"
+                        disabled={saving}
                         onClick={() => setDraft({ ...draft, tags: [...draft.tags, { key: '', value: '' }] })}
                       >
                         <PlusIcon data-icon="inline-start" />
@@ -583,12 +595,13 @@ export function NodeGroupsPage() {
                   </datalist>
                 </FieldSet>
 
-                <FieldGroup className="grid gap-4 sm:grid-cols-3">
-                  <Field>
+                <FieldGroup className="sm:grid sm:grid-cols-3">
+                  <Field data-disabled={saving || undefined}>
                     <FieldLabel htmlFor="group-type">选择方式</FieldLabel>
                     <Select
                       items={GROUP_TYPES}
                       value={draft.type}
+                      disabled={saving}
                       onValueChange={(value) => setDraft({ ...draft, type: String(value) })}
                     >
                       <SelectTrigger id="group-type" className="w-full">
@@ -605,10 +618,11 @@ export function NodeGroupsPage() {
                       </SelectContent>
                     </Select>
                   </Field>
-                  <Field>
+                  <Field data-disabled={saving || undefined}>
                     <FieldLabel htmlFor="group-multiplier">倍率</FieldLabel>
                     <Input
                       id="group-multiplier"
+                      disabled={saving}
                       type="number"
                       min={0}
                       step="0.1"
@@ -617,10 +631,11 @@ export function NodeGroupsPage() {
                     />
                     <FieldDescription>仅作展示记录，不参与计费。</FieldDescription>
                   </Field>
-                  <Field>
+                  <Field data-disabled={saving || undefined}>
                     <FieldLabel htmlFor="group-sort">排序</FieldLabel>
                     <Input
                       id="group-sort"
+                      disabled={saving}
                       type="number"
                       value={draft.sortOrder}
                       onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })}
@@ -630,21 +645,23 @@ export function NodeGroupsPage() {
                 </FieldGroup>
 
                 {probeGroup && (
-                  <FieldGroup className="grid gap-4 sm:grid-cols-3">
-                    <Field className="sm:col-span-3">
+                  <FieldGroup className="sm:grid sm:grid-cols-3">
+                    <Field className="sm:col-span-3" data-disabled={saving || undefined}>
                       <FieldLabel htmlFor="group-test-url">测速地址</FieldLabel>
                       <Input
                         id="group-test-url"
+                        disabled={saving}
                         placeholder="https://www.gstatic.com/generate_204"
                         value={draft.testUrl}
                         onChange={(event) => setDraft({ ...draft, testUrl: event.target.value })}
                       />
                       <FieldDescription>留空则使用默认地址。</FieldDescription>
                     </Field>
-                    <Field>
+                    <Field data-disabled={saving || undefined}>
                       <FieldLabel htmlFor="group-interval">测速间隔 (秒)</FieldLabel>
                       <Input
                         id="group-interval"
+                        disabled={saving}
                         type="number"
                         min={0}
                         value={draft.interval}
@@ -652,10 +669,11 @@ export function NodeGroupsPage() {
                       />
                     </Field>
                     {draft.type === 'url-test' && (
-                      <Field>
+                      <Field data-disabled={saving || undefined}>
                         <FieldLabel htmlFor="group-tolerance">容差 (毫秒)</FieldLabel>
                         <Input
                           id="group-tolerance"
+                          disabled={saving}
                           type="number"
                           min={0}
                           value={draft.tolerance}
@@ -693,6 +711,7 @@ export function NodeGroupsPage() {
                                   id={`group-panel-${panel}`}
                                   checked={allSelected}
                                   indeterminate={selectedCount > 0 && !allSelected}
+                                  disabled={saving}
                                   onCheckedChange={() => togglePanel(group)}
                                 />
                                 <FieldLabel htmlFor={`group-panel-${panel}`}>
@@ -708,13 +727,14 @@ export function NodeGroupsPage() {
                                     <Checkbox
                                       id={`group-inbound-${inbound.id}`}
                                       checked={draft.inboundIds.includes(inbound.id)}
+                                      disabled={saving}
                                       onCheckedChange={() => toggleInbound(inbound.id)}
                                     />
                                     <FieldLabel htmlFor={`group-inbound-${inbound.id}`}>
-                                      <span>{inboundName(inbound)}</span>
-                                      <span className="text-muted-foreground">
+                                      <span>{inboundTitle(inbound)}</span>
+                                      <CodeText>
                                         {inbound.inboundTag || inbound.protocol}:{inbound.port}
-                                      </span>
+                                      </CodeText>
                                     </FieldLabel>
                                   </Field>
                                 ))}
@@ -727,26 +747,28 @@ export function NodeGroupsPage() {
                   </ScrollArea>
                 </FieldSet>
 
-                <Field orientation="horizontal">
+                <Field orientation="horizontal" data-disabled={saving || undefined}>
                   <FieldLabel htmlFor="group-enabled">启用分组</FieldLabel>
                   <Switch
                     id="group-enabled"
+                    disabled={saving}
                     checked={draft.enabled}
                     onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
                   />
                 </Field>
 
-                <Field>
+                <Field data-disabled={saving || undefined}>
                   <FieldLabel htmlFor="group-remark">备注</FieldLabel>
                   <Input
                     id="group-remark"
+                    disabled={saving}
                     value={draft.remark}
                     onChange={(event) => setDraft({ ...draft, remark: event.target.value })}
                   />
                 </Field>
               </FieldGroup>
 
-              <DialogFooter className="mx-0 mb-0 shrink-0">
+              <DialogFooter className="shrink-0">
                 <Button type="button" variant="outline" disabled={saving} onClick={() => setDraft(null)}>
                   取消
                 </Button>

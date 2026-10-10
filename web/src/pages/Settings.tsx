@@ -3,17 +3,16 @@ import { toast } from 'sonner'
 import {
   FileCode2Icon,
   InfoIcon,
-  RefreshCwIcon,
   RotateCcwIcon,
   SaveIcon,
   ShieldCheckIcon,
-  TriangleAlertIcon,
 } from 'lucide-react'
 
 import { ApiError, api } from '@/api'
-import { CodeTextarea } from '@/components/code-display'
+import { CodeText, CodeTextarea } from '@/components/code-display'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { confirmUnsavedNavigation, useUnsavedGuard } from '@/hooks/use-unsaved-guard'
+import { FieldsSkeleton, LoadErrorAlert } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -91,7 +90,7 @@ export function SettingsPage() {
 
       const refreshed = await load()
       if (refreshed) toast.success('模板已保存')
-      else toast.warning('模板已保存，但刷新最新设置失败，请重新加载。')
+      else toast.warning('模板已保存，但刷新最新设置失败，请重新加载')
     } finally {
       setSaving(false)
     }
@@ -111,7 +110,7 @@ export function SettingsPage() {
 
       const refreshed = await load()
       if (refreshed) toast.success('已恢复内置默认模板')
-      else toast.warning('已恢复内置默认模板，但刷新最新设置失败，请重新加载。')
+      else toast.warning('已恢复内置默认模板，但刷新最新设置失败，请重新加载')
     } finally {
       setRestoring(false)
     }
@@ -138,24 +137,24 @@ export function SettingsPage() {
 
   if (!tpl) {
     return (
-      <div className="flex w-full max-w-5xl flex-col gap-6">
+      <div className="flex flex-col gap-6">
         <PageHeader title="设置" description="管理订阅模板与管理员账号安全" />
         {loadError ? (
-          <Alert variant="destructive">
-            <TriangleAlertIcon />
-            <AlertTitle>无法加载设置</AlertTitle>
-            <AlertDescription className="flex flex-col items-start gap-3">
-              <p>{loadError}</p>
-              <Button variant="outline" size="sm" disabled={loading} onClick={() => void load()}>
-                {loading ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
-                {loading ? '重试中…' : '重新加载'}
-              </Button>
-            </AlertDescription>
-          </Alert>
+          <LoadErrorAlert title="无法加载设置" message={loadError} retrying={loading} onRetry={() => void load()} />
         ) : (
-          <div aria-busy="true" aria-label="正在加载设置">
-            <Skeleton className="h-96 w-full" />
-          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>Clash 订阅模板</CardTitle>
+              <CardDescription>
+                <Skeleton className="h-4 w-72 max-w-full" />
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <Skeleton className="h-20 w-full" />
+              <FieldsSkeleton fields={1} />
+              <Skeleton className="h-72 w-full" />
+            </CardContent>
+          </Card>
         )}
       </div>
     )
@@ -165,23 +164,18 @@ export function SettingsPage() {
   const templateBusy = loading || saving || restoring
 
   return (
-    <div className="flex w-full max-w-5xl flex-col gap-6">
+    <div className="flex flex-col gap-6">
       <PageHeader title="设置" description="管理订阅模板与管理员账号安全" />
 
       {loadError && (
-        <Alert variant="destructive">
-          <TriangleAlertIcon />
-          <AlertTitle>最新设置加载失败</AlertTitle>
-          <AlertDescription className="flex flex-col items-start gap-3">
-            <p>{loadError}</p>
-            <Button variant="outline" size="sm" disabled={templateBusy} onClick={() => {
-              if (confirmUnsavedNavigation()) void load()
-            }}>
-              {loading ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
-              {loading ? '重试中…' : '重新加载'}
-            </Button>
-          </AlertDescription>
-        </Alert>
+        <LoadErrorAlert
+          title="最新设置加载失败"
+          message={loadError}
+          retrying={loading}
+          onRetry={templateBusy ? undefined : () => {
+            if (confirmUnsavedNavigation()) void load()
+          }}
+        />
       )}
 
       <Tabs defaultValue="template" className="flex flex-col gap-4">
@@ -217,10 +211,10 @@ export function SettingsPage() {
                   <AlertTitle>模板只管基础配置</AlertTitle>
                   <AlertDescription>
                     <p>
-                      <code>proxies</code>、<code>proxy-groups</code> 和 <code>rules</code> 永远由
+                      <CodeText>proxies</CodeText>、<CodeText>proxy-groups</CodeText> 和 <CodeText>rules</CodeText> 永远由
                       「分流」页的矩阵按用户的分流方案生成，写在模板里的同名内容会被覆盖。
                     </p>
-                    <p className="mt-2">
+                    <p>
                       成员为空的策略组会被自动移除，指向它的规则会改写到还存在的组上，所以配额用尽的用户拿到的
                       仍然是一份能加载的配置。
                     </p>
@@ -268,13 +262,13 @@ export function SettingsPage() {
 
         <TabsContent value="security">
           <form noValidate aria-busy={passwordBusy} onSubmit={changePassword}>
-            <Card className="max-w-xl">
+            <Card>
               <CardHeader>
                 <CardTitle>修改管理员密码</CardTitle>
                 <CardDescription>密码修改后，所有已登录会话都会失效并需要重新登录。</CardDescription>
               </CardHeader>
               <CardContent>
-                <FieldGroup>
+                <FieldGroup className="max-w-md">
                   <Field data-invalid={currentInvalid || undefined}>
                     <FieldLabel htmlFor="pw-current">当前密码</FieldLabel>
                     <Input

@@ -3,13 +3,14 @@ import { InfoIcon, RefreshCwIcon, SaveIcon, TriangleAlertIcon } from 'lucide-rea
 import { toast } from 'sonner'
 
 import { ApiError, api, type ServerConfig, type ServerConfigResponse } from '@/api'
+import { CodeText } from '@/components/code-display'
+import { FieldsSkeleton, LoadErrorAlert } from '@/components/load-state'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { confirmUnsavedNavigation, useUnsavedGuard } from '@/hooks/use-unsaved-guard'
@@ -112,18 +113,21 @@ export function ServerConfigEditor() {
           <CardTitle>服务端配置</CardTitle>
           <CardDescription>
             编辑配置文件，保存后需重启 FireX 服务生效。
-            {saved && <span className="block break-all">文件：{saved.path}</span>}
+            {saved && <span className="block break-all">文件：<CodeText>{saved.path}</CodeText></span>}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-6">
           {loadError && (
-            <Alert variant="destructive">
-              <TriangleAlertIcon />
-              <AlertTitle>无法加载最新配置</AlertTitle>
-              <AlertDescription>{loadError}</AlertDescription>
-            </Alert>
+            <LoadErrorAlert
+              title="无法加载最新配置"
+              message={loadError}
+              retrying={loading}
+              onRetry={() => {
+                if (confirmUnsavedNavigation()) void load()
+              }}
+            />
           )}
-          {!draft && loading && <Skeleton className="h-64 w-full" />}
+          {!draft && loading && <FieldsSkeleton fields={6} />}
           {draft && saved && (
             <>
               <Alert variant={saved.restartRequired ? 'warning' : 'default'}>
@@ -239,7 +243,7 @@ export function ServerConfigEditor() {
             if (confirmUnsavedNavigation()) void load()
           }}>
             {loading ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
-            重新加载配置
+            {loading ? '加载中…' : '重新加载配置'}
           </Button>
           {saved && <p role="status" className="text-sm text-muted-foreground">{dirty ? '有未保存的更改' : saved.restartRequired ? '已保存，等待重启' : '与当前运行配置一致'}</p>}
         </CardFooter>

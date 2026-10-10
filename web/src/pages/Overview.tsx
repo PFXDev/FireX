@@ -5,6 +5,7 @@ import {
   ArrowRightIcon,
   Clock3Icon,
   LayersIcon,
+  PlusIcon,
   RefreshCwIcon,
   ServerIcon,
   ServerOffIcon,
@@ -15,8 +16,9 @@ import {
 import { api } from '@/api'
 import type { Overview } from '@/api'
 import { CodeText } from '@/components/code-display'
+import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
-import { PanelStatusBadge } from '@/components/status-badge'
+import { PanelStatusBadge, StatusBadge } from '@/components/status-badge'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -151,22 +153,12 @@ export function OverviewPage() {
     return (
       <div className="flex flex-col gap-6">
         <PageHeader title="总览" description="核心健康状态、资源可用性与累计用量" />
-        <Alert variant="destructive">
-          <TriangleAlertIcon />
-          <AlertTitle>暂时无法加载总览</AlertTitle>
-          <AlertDescription>{loadError ?? '请检查网络连接后重试。'}</AlertDescription>
-          <AlertAction>
-            <Button
-              variant="outline"
-              size="xs"
-              disabled={initialLoading}
-              onClick={() => void refresh('initial')}
-            >
-              <RefreshCwIcon data-icon="inline-start" />
-              重试
-            </Button>
-          </AlertAction>
-        </Alert>
+        <LoadErrorAlert
+          title="暂时无法加载总览"
+          message={loadError ?? '请检查网络连接后重试'}
+          retrying={initialLoading}
+          onRetry={() => void refresh('initial')}
+        />
       </div>
     )
   }
@@ -184,7 +176,7 @@ export function OverviewPage() {
         <Badge variant="outline" aria-live="polite">
           {refreshing ? <Spinner data-icon="inline-start" /> : <Clock3Icon data-icon="inline-start" />}
           {refreshing
-            ? '正在刷新'
+            ? '刷新中…'
             : lastUpdated
               ? `更新于 ${formatRefreshTime(lastUpdated)}`
               : '等待刷新'}
@@ -203,12 +195,12 @@ export function OverviewPage() {
           <AlertAction>
             <Button
               variant="outline"
-              size="xs"
+              size="sm"
               disabled={refreshing}
               onClick={() => void refresh('background')}
             >
-              <RefreshCwIcon data-icon="inline-start" />
-              再试一次
+              {refreshing ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
+              {refreshing ? '重试中…' : '重试'}
             </Button>
           </AlertAction>
         </Alert>
@@ -235,7 +227,7 @@ export function OverviewPage() {
           <AlertAction>
             <Button
               variant="outline"
-              size="xs"
+              size="sm"
               render={<a href={data.failedSyncs > 0 ? '#/users' : '#/panels'} />}
               nativeButton={false}
             >
@@ -252,18 +244,14 @@ export function OverviewPage() {
             <CardTitle>面板</CardTitle>
             <CardDescription>控制平面连通状态</CardDescription>
             <CardAction>
-              <Badge
-                variant={
-                  counts.panels === 0 ? 'outline' : onlinePanels === counts.panels ? 'success' : 'destructive'
-                }
-              >
+              <StatusBadge tone={counts.panels === 0 ? 'idle' : onlinePanels === counts.panels ? 'good' : 'bad'}>
                 <ServerIcon data-icon="inline-start" />
                 {counts.panels === 0
                   ? '尚未配置'
                   : onlinePanels === counts.panels
                     ? '全部在线'
                     : `${counts.panels - onlinePanels} 个异常`}
-              </Badge>
+              </StatusBadge>
             </CardAction>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -283,18 +271,14 @@ export function OverviewPage() {
             <CardTitle>入站</CardTitle>
             <CardDescription>可用节点与失联情况</CardDescription>
             <CardAction>
-              <Badge
-                variant={
-                  counts.inbounds === 0 ? 'outline' : counts.missingInbounds > 0 ? 'destructive' : 'success'
-                }
-              >
+              <StatusBadge tone={counts.inbounds === 0 ? 'idle' : counts.missingInbounds > 0 ? 'bad' : 'good'}>
                 <LayersIcon data-icon="inline-start" />
                 {counts.inbounds === 0
                   ? '尚未发现'
                   : counts.missingInbounds > 0
                     ? `${counts.missingInbounds} 个失联`
                     : '状态正常'}
-              </Badge>
+              </StatusBadge>
             </CardAction>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -365,14 +349,12 @@ export function OverviewPage() {
       <Card>
         <CardHeader>
           <CardTitle>面板健康</CardTitle>
-          <CardDescription>每 15 秒自动刷新，快速定位不可达面板。</CardDescription>
+          <CardDescription>共 {data.panels.length} 个面板，每 15 秒自动刷新，快速定位不可达面板。</CardDescription>
           <CardAction>
-            <Badge variant={data.panels.length === 0 ? 'outline' : 'secondary'}>
-              {data.panels.length} 个面板
-            </Badge>
+            <RefreshButton loading={refreshing} onClick={() => void refresh('background')} />
           </CardAction>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-0">
           {data.panels.length === 0 ? (
             <Empty>
               <EmptyHeader>
@@ -384,8 +366,8 @@ export function OverviewPage() {
               </EmptyHeader>
               <EmptyContent>
                 <Button render={<a href="#/panels" />} nativeButton={false}>
+                  <PlusIcon data-icon="inline-start" />
                   添加面板
-                  <ArrowRightIcon data-icon="inline-end" />
                 </Button>
               </EmptyContent>
             </Empty>
@@ -466,13 +448,18 @@ function OverviewLoading() {
             <Skeleton className="h-4 w-48" />
           </CardDescription>
           <CardAction>
-            <Skeleton className="h-5 w-16" />
+            <Skeleton className="h-7 w-16" />
           </CardAction>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {Array.from({ length: 4 }, (_, index) => (
-            <Skeleton key={index} className="h-10 w-full" />
-          ))}
+        <CardContent className="px-0">
+          <TableSkeleton
+            columns={[
+              { label: '名称', width: 'w-28' },
+              { label: '状态', width: 'w-14' },
+              { label: '最近连通', className: 'hidden md:table-cell', width: 'w-32' },
+              { label: '最近错误', className: 'hidden lg:table-cell', width: 'w-48' },
+            ]}
+          />
         </CardContent>
       </Card>
     </div>
