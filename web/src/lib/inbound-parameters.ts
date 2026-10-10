@@ -11,3 +11,8 @@ export function concealed(value: unknown, key = ''): unknown {
   if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, concealed(item, name)]))
   return value
 }
+
+/** Array indices must not lose a sensitive parent field such as TLS key[]. */
+export function secretParameter(value: unknown, path: string): boolean {
+  return path.split('.').some((key) => concealed(value, key) === '••••••••')
+}

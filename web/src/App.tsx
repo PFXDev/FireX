@@ -6,9 +6,11 @@ import {
   ChevronsUpDownIcon,
   CircleAlertIcon,
   CpuIcon,
+  FileCogIcon,
   FlameIcon,
   GaugeIcon,
   LayersIcon,
+  LayoutTemplateIcon,
   LogOutIcon,
   MoonIcon,
   ServerIcon,
@@ -23,6 +25,13 @@ import { ApiError, FIREX_UNAUTHORIZED_EVENT, api } from '@/api'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb'
 import {
   Card,
   CardContent,
@@ -68,6 +77,8 @@ import { confirmUnsavedNavigation } from '@/hooks/use-unsaved-guard'
 import { OverviewPage } from '@/pages/Overview'
 import { PanelsPage } from '@/pages/Panels'
 import { InboundsPage } from '@/pages/Inbounds'
+import { InboundConfigsPage } from '@/pages/InboundConfigs'
+import { InboundTemplatesPage } from '@/pages/InboundTemplates'
 import { NodeGroupsPage } from '@/pages/NodeGroups'
 import { PlansPage } from '@/pages/Plans'
 import { RoutingPage } from '@/pages/Routing'
@@ -79,6 +90,8 @@ const ROUTES = [
   { key: 'overview', label: '总览', group: '工作台', icon: GaugeIcon },
   { key: 'panels', label: '面板', group: '资源管理', icon: ServerIcon },
   { key: 'inbounds', label: '入站', group: '资源管理', icon: LayersIcon },
+  { key: 'inbound-configs', label: '入站配置', group: '资源管理', icon: FileCogIcon },
+  { key: 'inbound-templates', label: '入站模板', group: '资源管理', icon: LayoutTemplateIcon },
   { key: 'node-groups', label: '节点组', group: '资源管理', icon: BoxesIcon },
   { key: 'plans', label: '套餐', group: '资源管理', icon: TicketIcon },
   { key: 'users', label: '用户', group: '资源管理', icon: UsersIcon },
@@ -92,7 +105,7 @@ const ROUTE_GROUPS = ['工作台', '资源管理', '运维配置'] as const
 type RouteKey = (typeof ROUTES)[number]['key']
 
 function currentRoute(): RouteKey {
-  const hash = window.location.hash.replace('#/', '')
+  const hash = window.location.hash.replace('#/', '').split('?')[0]
   return (ROUTES.find((route) => route.key === hash)?.key ?? 'overview') as RouteKey
 }
 
@@ -176,13 +189,15 @@ function Shell() {
         <header className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2 border-b bg-background/85 px-4 backdrop-blur-md md:px-6">
           <SidebarTrigger className="-ml-1" aria-label="切换侧边栏" />
           <Separator orientation="vertical" className="mr-1 h-4" />
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="hidden text-sm text-muted-foreground sm:inline">{activeRoute.group}</span>
-            <span className="hidden text-muted-foreground sm:inline" aria-hidden="true">
-              /
-            </span>
-            <span className="truncate text-sm font-medium">{activeRoute.label}</span>
-          </div>
+          <Breadcrumb className="min-w-0">
+            <BreadcrumbList className="flex-nowrap">
+              <BreadcrumbItem className="hidden sm:inline-flex">{activeRoute.group}</BreadcrumbItem>
+              <BreadcrumbSeparator className="hidden sm:inline-flex" />
+              <BreadcrumbItem className="min-w-0">
+                <BreadcrumbPage className="truncate">{activeRoute.label}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
           <div className="ml-auto flex items-center gap-1">
             <ThemeToggle />
           </div>
@@ -344,7 +359,7 @@ function ThemeToggle() {
           />
         }
       >
-        {dark ? <SunIcon data-icon="inline-start" /> : <MoonIcon data-icon="inline-start" />}
+        {dark ? <SunIcon /> : <MoonIcon />}
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
@@ -357,6 +372,10 @@ function Page({ route }: { route: RouteKey }) {
       return <PanelsPage />
     case 'inbounds':
       return <InboundsPage />
+    case 'inbound-configs':
+      return <InboundConfigsPage />
+    case 'inbound-templates':
+      return <InboundTemplatesPage />
     case 'node-groups':
       return <NodeGroupsPage />
     case 'plans':

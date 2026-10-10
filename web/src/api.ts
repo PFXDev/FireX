@@ -134,6 +134,24 @@ export interface Inbound {
   missing: boolean
   /** How many node groups hold it. Zero means it reaches nobody. */
   groupCount: number
+  /** Empty when FireX does not manage this inbound's panel configuration. */
+  configState: ConfigState
+}
+
+export type ConfigState = '' | 'synced' | 'pending' | 'drifted' | 'missing'
+
+export interface InboundDeployment {
+  id: number
+  inboundId: number
+  templateId: number
+  revision: number
+  panelId: number
+  remoteId: number
+  mode: 'update' | 'create' | 'rebind'
+  status: string
+  error: string
+  createdAt: number
+  hasBackup?: boolean
 }
 
 export interface InboundDetail {

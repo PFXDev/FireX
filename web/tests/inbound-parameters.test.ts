@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { concealed } from '../src/lib/inbound-parameters.ts'
+import { concealed, secretParameter } from '../src/lib/inbound-parameters.ts'
 
 test('hidden parameters and copied JSON omit nested VLESS and transport secrets', () => {
   const parameters = {
@@ -25,4 +25,12 @@ test('non-secret decryption values remain readable', () => {
   for (const decryption of ['none', '', null]) {
     assert.deepEqual(concealed({ settings: { decryption } }), { settings: { decryption } })
   }
+})
+
+
+test('TLS key arrays and nested credentials remain concealed in field editors', () => {
+  assert.equal(secretParameter('PEM private material', 'streamSettings.tlsSettings.certificates.0.key.0'), true)
+  assert.equal(secretParameter('abc', 'streamSettings.custom.auth.passwords.0'), true)
+  assert.equal(secretParameter('example.com', 'streamSettings.realitySettings.serverNames.0'), false)
+  assert.equal(secretParameter('none', 'settings.decryption'), false)
 })

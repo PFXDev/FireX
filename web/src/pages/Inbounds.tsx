@@ -1,13 +1,14 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { BoxesIcon, LayersIcon, ListTreeIcon, PencilIcon, RefreshCwIcon, ServerIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react'
+import { BoxesIcon, FileCogIcon, LayersIcon, ListTreeIcon, PencilIcon, ServerIcon, Trash2Icon } from 'lucide-react'
 
 import { api } from '@/api'
 import type { Inbound } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { InboundDetails } from '@/components/inbound-details'
 import { PageHeader } from '@/components/page-header'
-import { StatusBadge } from '@/components/status-badge'
+import { ConfigStateBadge, StatusBadge } from '@/components/status-badge'
+import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -33,11 +34,11 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { errorMessage } from '@/lib/format'
+import { inboundLabel, inboundTitle } from '@/lib/inbound'
 import { reportSyncError } from '@/lib/sync'
 
 type Draft = {
@@ -56,10 +57,6 @@ type LoadState = 'loading' | 'ready' | 'error'
 type PendingAction = 'bulk-enable' | 'bulk-disable' | 'save' | 'remove'
 
 const visionLabels = { preserve: '保留现有流控', on: '开启 Vision', off: '关闭 Vision' }
-
-function label(inbound: Inbound): string {
-  return inbound.name || inbound.remoteRemark || inbound.inboundTag
-}
 
 export function InboundsPage() {
   const [inbounds, setInbounds] = useState<Inbound[]>([])
@@ -194,7 +191,8 @@ export function InboundsPage() {
             用户能用到哪些入站只由分流方案里的节点组决定，不在任何分组里的入站不会出现在任何订阅中。
           </AlertDescription>
           <AlertAction>
-            <Button variant="outline" size="sm" onClick={() => (window.location.hash = '#/node-groups')}>
+            <Button variant="outline" size="sm" render={<a href="#/node-groups" />} nativeButton={false}>
+              <BoxesIcon data-icon="inline-start" />
               去分组
             </Button>
           </AlertAction>
@@ -253,34 +251,26 @@ export function InboundsPage() {
             {loadState === 'ready' ? `共 ${inbounds.length} 个入站。` : '查看所有面板发现的入站。'}
           </CardDescription>
           <CardAction>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={loadState === 'loading' || pendingAction !== null}
-              onClick={() => void load()}
-            >
-              {loadState === 'loading' ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
-              {loadState === 'loading' ? '加载中…' : '刷新'}
-            </Button>
+            <RefreshButton loading={loadState === 'loading'} disabled={pendingAction !== null} onClick={() => void load()} />
           </CardAction>
         </CardHeader>
         <CardContent className="px-0">
           {loadState === 'loading' ? (
-            <InboundsTableSkeleton />
+            <TableSkeleton
+              columns={[
+                { label: '', className: 'w-10', width: 'w-4' },
+                { label: '名称', width: 'w-32' },
+                { label: '面板 / 入站', className: 'hidden lg:table-cell', width: 'w-28' },
+                { label: '协议', className: 'hidden md:table-cell', width: 'w-16' },
+                { label: '端口', className: 'hidden xl:table-cell', width: 'w-12' },
+                { label: '所属分组', className: 'hidden lg:table-cell', width: 'w-8' },
+                { label: '状态', width: 'w-14' },
+                { width: 'w-16' },
+              ]}
+            />
           ) : loadState === 'error' ? (
             <div className="px-4">
-              <Alert variant="destructive">
-                <TriangleAlertIcon />
-                <AlertTitle>入站加载失败</AlertTitle>
-                <AlertDescription>{loadError}</AlertDescription>
-                <AlertAction>
-                  <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
-                    <RefreshCwIcon data-icon="inline-start" />
-                    重试
-                  </Button>
-                </AlertAction>
-              </Alert>
+              <LoadErrorAlert title="入站加载失败" message={loadError} onRetry={() => void load()} />
             </div>
           ) : inbounds.length === 0 ? (
             <Empty>
@@ -292,7 +282,7 @@ export function InboundsPage() {
                 <EmptyDescription>先添加面板，FireX 会自动拉取它的入站。</EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
-                <Button type="button" onClick={() => (window.location.hash = '#/panels')}>
+                <Button render={<a href="#/panels" />} nativeButton={false}>
                   <ServerIcon data-icon="inline-start" />
                   前往面板
                 </Button>
@@ -331,23 +321,22 @@ export function InboundsPage() {
                       <Checkbox
                         checked={selected.has(inbound.id)}
                         disabled={isBulkPending}
-                        aria-label={`选择 ${label(inbound)}`}
+                        aria-label={`选择 ${inboundLabel(inbound)}`}
                         onCheckedChange={() => toggle(inbound.id)}
                       />
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <button type="button" className="text-left font-medium underline-offset-4 hover:underline focus-visible:underline focus-visible:outline-none" onClick={() => setDetailID(inbound.id)}>
-                          {inbound.emoji && `${inbound.emoji} `}
-                          {label(inbound)}
-                        </button>
+                        <Button variant="link" className="h-auto justify-start p-0 text-left whitespace-normal" onClick={() => setDetailID(inbound.id)}>
+                          {inboundTitle(inbound)}
+                        </Button>
                         {!inbound.name && (
                           <span className="hidden text-xs text-muted-foreground 2xl:inline">沿用面板备注</span>
                         )}
                       </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5 md:hidden">
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1 md:hidden">
                         <span className="text-xs text-muted-foreground">{[inbound.network, inbound.security].filter(Boolean).join(' · ').toUpperCase()}</span>
-                        {inbound.vision && <Badge variant={inbound.visionSupported ? 'secondary' : 'destructive'}>Vision</Badge>}
+                        {inbound.vision && <StatusBadge tone={inbound.visionSupported ? 'idle' : 'bad'}>Vision</StatusBadge>}
                         {inbound.vision === null && <Badge variant="outline">保留现有流控</Badge>}
                       </div>
                     </TableCell>
@@ -358,7 +347,7 @@ export function InboundsPage() {
                       <div className="flex flex-col items-start gap-1.5">
                         <div className="flex flex-wrap gap-1">
                           <Badge variant="outline">{inbound.protocol.toUpperCase()}</Badge>
-                          {inbound.vision && <Badge variant={inbound.visionSupported ? 'secondary' : 'destructive'}>Vision{!inbound.visionSupported && ' · 不兼容'}</Badge>}
+                          {inbound.vision && <StatusBadge tone={inbound.visionSupported ? 'idle' : 'bad'}>Vision{!inbound.visionSupported && ' · 不兼容'}</StatusBadge>}
                           {inbound.vision === null && <Badge variant="outline">保留现有流控</Badge>}
                         </div>
                         <span className="text-xs text-muted-foreground">
@@ -380,8 +369,12 @@ export function InboundsPage() {
                       <InboundStatus inbound={inbound} />
                     </TableCell>
                     <TableCell>
-                      <div className="flex justify-end gap-1">
-                        <Button type="button" variant="ghost" size="sm" aria-label={`查看 ${label(inbound)} 的完整参数`} onClick={() => setDetailID(inbound.id)}>
+                      <div className="flex flex-wrap justify-end gap-1">
+                        <Button variant="ghost" size="sm" aria-label={`管理 ${inboundLabel(inbound)} 的面板配置`} render={<a href={`#/inbound-configs?id=${inbound.id}`} />} nativeButton={false}>
+                          <FileCogIcon data-icon="inline-start" />
+                          <span className="hidden sm:inline">配置</span>
+                        </Button>
+                        <Button type="button" variant="ghost" size="sm" aria-label={`查看 ${inboundLabel(inbound)} 的完整参数`} onClick={() => setDetailID(inbound.id)}>
                           <ListTreeIcon data-icon="inline-start" />
                           <span className="hidden sm:inline">参数</span>
                         </Button>
@@ -389,7 +382,7 @@ export function InboundsPage() {
                           type="button"
                           variant="outline"
                           size="sm"
-                          aria-label={`编辑 ${label(inbound)}`}
+                          aria-label={`编辑 ${inboundLabel(inbound)}`}
                           disabled={pendingAction !== null}
                           onClick={() => edit(inbound)}
                         >
@@ -401,7 +394,7 @@ export function InboundsPage() {
                             type="button"
                             variant="ghost"
                             size="sm"
-                            aria-label={`移除 ${label(inbound)}`}
+                            aria-label={`移除 ${inboundLabel(inbound)}`}
                             disabled={pendingAction !== null}
                             onClick={() => setPendingDelete(inbound)}
                           >
@@ -437,11 +430,11 @@ export function InboundsPage() {
               <DialogHeader className="shrink-0">
                 <DialogTitle>编辑入站</DialogTitle>
                 <DialogDescription>
-                  {editingInbound ? `${label(editingInbound)} · ${editingInbound.panelName}` : '入站设置'}。设置保存后生效，重新同步面板会保留。
+                  {editingInbound ? `${inboundLabel(editingInbound)} · ${editingInbound.panelName}` : '入站设置'}。设置保存后生效，重新同步面板会保留。
                 </DialogDescription>
               </DialogHeader>
               <FieldGroup className="-mx-4 min-h-0 overflow-y-auto px-4 py-1">
-                <Field>
+                <Field data-disabled={pendingAction === 'save' || undefined}>
                   <FieldLabel htmlFor="inbound-vision">Vision 流控</FieldLabel>
                   <Select
                     items={visionLabels}
@@ -470,29 +463,32 @@ export function InboundsPage() {
                         : editingInbound?.visionReason || '请先同步面板参数'}
                   </FieldDescription>
                 </Field>
-                <FieldGroup className="sm:grid sm:grid-cols-[1fr_120px]">
-                  <Field>
+                <FieldGroup className="sm:grid sm:grid-cols-[minmax(0,1fr)_8rem]">
+                  <Field data-disabled={pendingAction === 'save' || undefined}>
                     <FieldLabel htmlFor="inbound-name">显示名称</FieldLabel>
                     <Input
                       id="inbound-name"
+                      disabled={pendingAction === 'save'}
                       value={draft.name}
                       onChange={(event) => setDraft({ ...draft, name: event.target.value })}
                     />
                     <FieldDescription>留空则沿用面板上的入站备注</FieldDescription>
                   </Field>
-                  <Field>
+                  <Field data-disabled={pendingAction === 'save' || undefined}>
                     <FieldLabel htmlFor="inbound-emoji">Emoji</FieldLabel>
                     <Input
                       id="inbound-emoji"
+                      disabled={pendingAction === 'save'}
                       value={draft.emoji}
                       onChange={(event) => setDraft({ ...draft, emoji: event.target.value })}
                     />
                   </Field>
                 </FieldGroup>
-                <Field>
+                <Field data-disabled={pendingAction === 'save' || undefined}>
                   <FieldLabel htmlFor="inbound-sort">排序</FieldLabel>
                   <Input
                     id="inbound-sort"
+                    disabled={pendingAction === 'save'}
                     type="number"
                     step={1}
                     value={draft.sortOrder}
@@ -500,11 +496,12 @@ export function InboundsPage() {
                   />
                   <FieldDescription>数字小的排在前面，决定客户端里代理的先后顺序</FieldDescription>
                 </Field>
-                <FieldGroup className="sm:grid sm:grid-cols-[1fr_120px]">
-                  <Field>
+                <FieldGroup className="sm:grid sm:grid-cols-[minmax(0,1fr)_8rem]">
+                  <Field data-disabled={pendingAction === 'save' || undefined}>
                     <FieldLabel htmlFor="inbound-public-address">公网地址</FieldLabel>
                     <Input
                       id="inbound-public-address"
+                      disabled={pendingAction === 'save'}
                       placeholder="沿用面板地址"
                       value={draft.publicAddress}
                       onChange={(event) => setDraft({ ...draft, publicAddress: event.target.value })}
@@ -513,10 +510,11 @@ export function InboundsPage() {
                       客户端实际连接的地址和端口。入站藏在回环端口、由 443 上的 SNI 分流或中转接入时填这里；留空或 0 沿用面板给出的值。
                     </FieldDescription>
                   </Field>
-                  <Field>
+                  <Field data-disabled={pendingAction === 'save' || undefined}>
                     <FieldLabel htmlFor="inbound-public-port">公网端口</FieldLabel>
                     <Input
                       id="inbound-public-port"
+                      disabled={pendingAction === 'save'}
                       type="number"
                       min={0}
                       max={65535}
@@ -527,18 +525,20 @@ export function InboundsPage() {
                     />
                   </Field>
                 </FieldGroup>
-                <Field orientation="horizontal">
+                <Field orientation="horizontal" data-disabled={pendingAction === 'save' || undefined}>
                   <FieldLabel htmlFor="inbound-enabled">启用（停用后从所有订阅中移除）</FieldLabel>
                   <Switch
                     id="inbound-enabled"
+                    disabled={pendingAction === 'save'}
                     checked={draft.enabled}
                     onCheckedChange={(value) => setDraft({ ...draft, enabled: value })}
                   />
                 </Field>
-                <Field orientation="horizontal">
+                <Field orientation="horizontal" data-disabled={pendingAction === 'save' || undefined}>
                   <FieldLabel htmlFor="inbound-udp">允许 UDP</FieldLabel>
                   <Switch
                     id="inbound-udp"
+                    disabled={pendingAction === 'save'}
                     checked={draft.udp}
                     onCheckedChange={(value) => setDraft({ ...draft, udp: value })}
                   />
@@ -564,66 +564,13 @@ export function InboundsPage() {
         open={pendingDelete !== null}
         onOpenChange={(open) => !open && setPendingDelete(null)}
         title="移除已失联的入站？"
-        description={`「${pendingDelete ? label(pendingDelete) : ''}」在面板上已经消失，移除后它在各节点组里的成员关系也会一并删除。`}
+        description={`「${pendingDelete ? inboundLabel(pendingDelete) : ''}」在面板上已经消失，移除后它在各节点组里的成员关系也会一并删除。`}
         confirmLabel="移除"
         onConfirm={async () => {
           if (pendingDelete) await removeMissing(pendingDelete)
         }}
       />
     </div>
-  )
-}
-
-function InboundsTableSkeleton() {
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead className="w-10">
-            <span className="sr-only">选择</span>
-          </TableHead>
-          <TableHead>名称</TableHead>
-          <TableHead className="hidden lg:table-cell">面板 / 入站</TableHead>
-          <TableHead className="hidden md:table-cell">协议</TableHead>
-          <TableHead className="hidden xl:table-cell">端口</TableHead>
-          <TableHead className="hidden lg:table-cell">所属分组</TableHead>
-          <TableHead>状态</TableHead>
-          <TableHead>
-            <span className="sr-only">操作</span>
-          </TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {Array.from({ length: 4 }).map((_, index) => (
-          <TableRow key={index}>
-            <TableCell>
-              <Skeleton className="size-4" />
-            </TableCell>
-            <TableCell>
-              <Skeleton className="h-4 w-32" />
-            </TableCell>
-            <TableCell className="hidden lg:table-cell">
-              <Skeleton className="h-4 w-28" />
-            </TableCell>
-            <TableCell className="hidden md:table-cell">
-              <Skeleton className="h-5 w-16" />
-            </TableCell>
-            <TableCell className="hidden xl:table-cell">
-              <Skeleton className="h-4 w-12" />
-            </TableCell>
-            <TableCell className="hidden lg:table-cell">
-              <Skeleton className="h-4 w-8" />
-            </TableCell>
-            <TableCell>
-              <Skeleton className="h-5 w-14" />
-            </TableCell>
-            <TableCell>
-              <Skeleton className="ml-auto h-7 w-16" />
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
   )
 }
 
@@ -642,8 +589,11 @@ function EndpointCell({ inbound }: { inbound: Inbound }) {
 }
 
 function InboundStatus({ inbound }: { inbound: Inbound }) {
-  if (inbound.missing) return <StatusBadge tone="bad">已失联</StatusBadge>
-  if (!inbound.remoteEnabled) return <StatusBadge tone="warn">面板已禁用</StatusBadge>
-  if (inbound.enabled) return <StatusBadge tone="good">启用</StatusBadge>
-  return <StatusBadge tone="idle">停用</StatusBadge>
+  // Only problems with a managed configuration are worth a second badge here.
+  const config = inbound.configState === 'pending' || inbound.configState === 'drifted' ? <ConfigStateBadge state={inbound.configState} /> : null
+  let status = <StatusBadge tone="idle">停用</StatusBadge>
+  if (inbound.missing) status = <StatusBadge tone="bad">已失联</StatusBadge>
+  else if (!inbound.remoteEnabled) status = <StatusBadge tone="warn">面板已禁用</StatusBadge>
+  else if (inbound.enabled) status = <StatusBadge tone="good">启用</StatusBadge>
+  return config ? <div className="flex flex-wrap gap-1">{status}{config}</div> : status
 }
