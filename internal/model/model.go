@@ -402,6 +402,51 @@ type Setting struct {
 	Value string `json:"value"`
 }
 
+// InboundConfig is the panel configuration FireX owns for one inbound. It
+// excludes client accounts, counters and panel identity. Discovery never
+// changes it; only an explicit deployment writes it to the panel, so a panel
+// whose database was overwritten can be restored from it.
+type InboundConfig struct {
+	InboundID uint   `json:"inboundId" gorm:"primaryKey;autoIncrement:false"`
+	Config    string `json:"-"`
+	Revision  uint   `json:"revision" gorm:"not null"`
+	// Applied is the panel's readback after the last verified deployment of
+	// AppliedRevision. A later discovery that differs from it is drift.
+	Applied         string `json:"-"`
+	AppliedRevision uint   `json:"appliedRevision"`
+	CreatedAt       int64  `json:"createdAt" gorm:"autoCreateTime:milli"`
+	UpdatedAt       int64  `json:"updatedAt" gorm:"autoUpdateTime:milli"`
+}
+
+// InboundTemplate holds parameters shared between nodes, such as a REALITY
+// setup. Node-specific listen, port, PROXY and fallback routes are supplied
+// when an inbound is created from it; the result is then independent.
+type InboundTemplate struct {
+	ID        uint   `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name      string `json:"name" gorm:"not null"`
+	Config    string `json:"-"`
+	Revision  uint   `json:"revision" gorm:"not null"`
+	CreatedAt int64  `json:"createdAt" gorm:"autoCreateTime:milli"`
+	UpdatedAt int64  `json:"updatedAt" gorm:"autoUpdateTime:milli"`
+}
+
+// InboundDeployment records the panel configuration before a write, even if
+// the write fails or its outcome cannot be verified. It never holds clients.
+type InboundDeployment struct {
+	ID            uint   `json:"id" gorm:"primaryKey;autoIncrement"`
+	InboundID     uint   `json:"inboundId" gorm:"index"`
+	TemplateID    uint   `json:"templateId"`
+	Revision      uint   `json:"revision"`
+	PanelID       uint   `json:"panelId"`
+	RemoteID      int    `json:"remoteId"`
+	Mode          string `json:"mode"`
+	Status        string `json:"status"`
+	Error         string `json:"error"`
+	BeforeConfig  string `json:"-"`
+	DesiredConfig string `json:"-"`
+	CreatedAt     int64  `json:"createdAt" gorm:"autoCreateTime:milli"`
+}
+
 // AllModels is the AutoMigrate list.
 func AllModels() []any {
 	return []any{
@@ -410,5 +455,6 @@ func AllModels() []any {
 		&Policy{}, &Rule{},
 		&Profile{}, &ProfileNodeGroup{}, &Egress{}, &EgressMember{},
 		&Plan{}, &User{}, &UserPanel{}, &Setting{},
+		&InboundConfig{}, &InboundTemplate{}, &InboundDeployment{},
 	}
 }

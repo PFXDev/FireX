@@ -26,6 +26,7 @@ type Inbound struct {
 	StreamSettings string
 	Sniffing       string
 	DisableFlow    bool
+	Extra          map[string]any
 }
 
 type Client struct {
@@ -54,7 +55,8 @@ type Panel struct {
 	Token  string
 	Server *httptest.Server
 	// FailNext makes the next matching request fail, for error-path tests.
-	FailNext map[string]bool
+	FailNext           map[string]bool
+	KeepEnableOnUpdate bool
 }
 
 func New(token string, inbounds ...Inbound) *Panel {
@@ -182,6 +184,27 @@ func (p *Panel) handle(w http.ResponseWriter, r *http.Request) {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		writeJSON(w, http.StatusOK, envelope{Success: true, Obj: p.inboundPayload()})
+	case path == "/inbounds/add", strings.HasPrefix(path, "/inbounds/update/"):
+		p.writeInbound(w, r, path)
+	case strings.HasPrefix(path, "/inbounds/setEnable/"):
+		var body struct {
+			Enable bool `json:"enable"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, 200, envelope{Msg: err.Error()})
+			return
+		}
+		id, _ := strconv.Atoi(strings.TrimPrefix(path, "/inbounds/setEnable/"))
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		for i := range p.inbounds {
+			if p.inbounds[i].ID == id {
+				p.inbounds[i].Enable = body.Enable
+				writeJSON(w, 200, envelope{Success: true})
+				return
+			}
+		}
+		writeJSON(w, 200, envelope{Msg: "record not found"})
 	case path == "/clients/add":
 		p.addClient(w, r)
 	case strings.HasPrefix(path, "/clients/update/"):
@@ -229,7 +252,11 @@ func (p *Panel) inboundPayload() []map[string]any {
 		if sniffing == "" {
 			sniffing = `{"enabled":false}`
 		}
-		out = append(out, map[string]any{
+		payload := map[string]any{}
+		for key, value := range ib.Extra {
+			payload[key] = value
+		}
+		for key, value := range map[string]any{
 			"id": ib.ID, "port": ib.Port, "protocol": ib.Protocol,
 			"remark": ib.Remark, "tag": ib.Tag, "enable": ib.Enable,
 			"settings":       json.RawMessage(settings),
@@ -237,9 +264,65 @@ func (p *Panel) inboundPayload() []map[string]any {
 			"sniffing":       json.RawMessage(sniffing),
 			"listen":         ib.Listen, "disableFlow": ib.DisableFlow,
 			"clientStats": stats,
-		})
+		} {
+			payload[key] = value
+		}
+		out = append(out, payload)
 	}
 	return out
+}
+
+func (p *Panel) writeInbound(w http.ResponseWriter, r *http.Request, path string) {
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, 200, envelope{Msg: err.Error()})
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	id := 0
+	if strings.HasPrefix(path, "/inbounds/update/") {
+		id, _ = strconv.Atoi(strings.TrimPrefix(path, "/inbounds/update/"))
+	}
+	index := -1
+	for i, inbound := range p.inbounds {
+		if inbound.ID == id {
+			index = i
+		}
+	}
+	if id != 0 && index < 0 {
+		writeJSON(w, 200, envelope{Msg: "record not found"})
+		return
+	}
+	if id == 0 {
+		id = 1
+		for _, inbound := range p.inbounds {
+			if inbound.ID >= id {
+				id = inbound.ID + 1
+			}
+		}
+	}
+	ib := Inbound{ID: id, Extra: body}
+	ib.Port = int(body["port"].(float64))
+	ib.Protocol, _ = body["protocol"].(string)
+	ib.Remark, _ = body["remark"].(string)
+	ib.Tag, _ = body["tag"].(string)
+	ib.Listen, _ = body["listen"].(string)
+	ib.Enable, _ = body["enable"].(bool)
+	if index >= 0 && p.KeepEnableOnUpdate {
+		ib.Enable = p.inbounds[index].Enable
+	}
+	ib.DisableFlow, _ = body["disableFlow"].(bool)
+	for key, dest := range map[string]*string{"settings": &ib.Settings, "streamSettings": &ib.StreamSettings, "sniffing": &ib.Sniffing} {
+		raw, _ := json.Marshal(body[key])
+		*dest = string(raw)
+	}
+	if index >= 0 {
+		p.inbounds[index] = ib
+	} else {
+		p.inbounds = append(p.inbounds, ib)
+	}
+	writeJSON(w, 200, envelope{Success: true, Obj: map[string]any{"id": id}})
 }
 
 func (p *Panel) addClient(w http.ResponseWriter, r *http.Request) {

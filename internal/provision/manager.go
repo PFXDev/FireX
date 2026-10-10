@@ -34,8 +34,9 @@ const ClientGroup = "firex"
 type Manager struct {
 	db *store.DB
 
-	mu      sync.Mutex
-	clients map[uint]*cachedClient
+	mu          sync.Mutex
+	clients     map[uint]*cachedClient
+	panelWrites map[uint]*sync.Mutex
 
 	// inFlight counts panel-facing passes in progress. FireX keeps no job
 	// table to recover from, so instead of resuming interrupted work the
@@ -49,7 +50,22 @@ type cachedClient struct {
 }
 
 func NewManager(db *store.DB) *Manager {
-	return &Manager{db: db, clients: map[uint]*cachedClient{}}
+	return &Manager{db: db, clients: map[uint]*cachedClient{}, panelWrites: map[uint]*sync.Mutex{}}
+}
+
+// PanelWrite serializes inbound deployment, discovery and user reconciliation
+// on one panel, and keeps the updater from restarting the process meanwhile.
+func (m *Manager) PanelWrite(panelID uint) func() {
+	done := m.busy()
+	m.mu.Lock()
+	lock := m.panelWrites[panelID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		m.panelWrites[panelID] = lock
+	}
+	m.mu.Unlock()
+	lock.Lock()
+	return func() { lock.Unlock(); done() }
 }
 
 // busy marks a panel-facing pass as running; the returned func ends it. Calls
@@ -93,7 +109,9 @@ func EmailFor(u *model.User) string { return u.Username + EmailSuffix }
 // that vanished are flagged Missing rather than deleted so group membership and
 // the admin's labels survive a panel outage.
 func (m *Manager) DiscoverPanel(ctx context.Context, p *model.Panel) error {
-	defer m.busy()()
+	// A deployment that creates an inbound binds it before discovery may see
+	// it, so discovery never adds a second local row for the same inbound.
+	defer m.PanelWrite(p.ID)()
 
 	client := m.ClientFor(p)
 	status, err := client.Status(ctx)
@@ -115,33 +133,11 @@ func (m *Manager) DiscoverPanel(ctx context.Context, p *model.Panel) error {
 		var row model.Inbound
 		err := m.db.Where("panel_id = ? AND remote_id = ?", p.ID, ib.ID).First(&row).Error
 		if store.IsNotFound(err) {
-			row = model.Inbound{
-				PanelID:   p.ID,
-				RemoteID:  ib.ID,
-				Name:      ib.Remark,
-				SortOrder: 100,
-				UDP:       true,
-				Vision:    new(bool),
-				// A newly discovered inbound stays out of every subscription
-				// until an admin reviews it and puts it in a node group.
-				Enabled:   false,
-				CreatedAt: now,
-			}
+			row = NewInbound(p.ID, &ib, now)
 		} else if err != nil {
 			return fmt.Errorf("load inbound: %w", err)
 		}
-		row.InboundTag = ib.Tag
-		row.Protocol = ib.Protocol
-		row.Port = ib.Port
-		row.RemoteRemark = ib.Remark
-		row.RemoteEnabled = ib.Enable
-		row.Listen = ib.Listen
-		row.Network, row.Security = ib.Transport()
-		row.DisableFlow = ib.DisableFlow
-		row.Config = ib.Configuration()
-		row.Missing = false
-		row.LastSeenAt = now
-		row.UpdatedAt = now
+		ApplyDiscovered(&row, &ib, now)
 		if err := m.db.Save(&row).Error; err != nil {
 			return fmt.Errorf("save inbound: %w", err)
 		}
@@ -161,6 +157,41 @@ func (m *Manager) DiscoverPanel(ctx context.Context, p *model.Panel) error {
 	p.XrayVersion = status.Xray.Version
 	p.UpdatedAt = now
 	return m.db.Model(p).Select("status", "last_error", "last_seen_at", "xray_version", "updated_at").Updates(p).Error
+}
+
+// NewInbound is the local row for an inbound first seen on a panel. It stays
+// out of every subscription until an admin reviews it and puts it in a node
+// group.
+func NewInbound(panelID uint, ib *panel.Inbound, now int64) model.Inbound {
+	row := model.Inbound{
+		PanelID:   panelID,
+		Name:      ib.Remark,
+		SortOrder: 100,
+		UDP:       true,
+		Vision:    new(bool),
+		Enabled:   false,
+		CreatedAt: now,
+	}
+	ApplyDiscovered(&row, ib, now)
+	return row
+}
+
+// ApplyDiscovered copies the panel's view of an inbound onto its local row.
+// Admin-owned fields such as name, grouping and the public endpoint are kept.
+func ApplyDiscovered(row *model.Inbound, ib *panel.Inbound, now int64) {
+	row.RemoteID = ib.ID
+	row.InboundTag = ib.Tag
+	row.Protocol = ib.Protocol
+	row.Port = ib.Port
+	row.RemoteRemark = ib.Remark
+	row.RemoteEnabled = ib.Enable
+	row.Listen = ib.Listen
+	row.Network, row.Security = ib.Transport()
+	row.DisableFlow = ib.DisableFlow
+	row.Config = ib.Configuration()
+	row.Missing = false
+	row.LastSeenAt = now
+	row.UpdatedAt = now
 }
 
 func (m *Manager) markPanelOffline(p *model.Panel, cause error) {
@@ -346,6 +377,7 @@ func (m *Manager) ReconcileUser(ctx context.Context, u *model.User) error {
 }
 
 func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.Panel, want desiredClient, wanted bool) error {
+	defer m.PanelWrite(p.ID)()
 	email := EmailFor(u)
 	record := model.UserPanel{UserID: u.ID, PanelID: p.ID, Email: email}
 	_ = m.db.Where("user_id = ? AND panel_id = ?", u.ID, p.ID).First(&record).Error

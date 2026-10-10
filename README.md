@@ -197,6 +197,43 @@ revision returns `409`, invalid values return `400` and failed writes return
 The mihomo template, routing matrix, panels, plans and users live in the database
 and continue to take effect immediately when edited from the UI.
 
+## Managed inbound configurations
+
+**Inbound configurations** lets FireX own an inbound's complete panel
+configuration, without clients, counters or panel IDs. **Take over** saves the last
+discovered configuration. Discovery then only compares the panel with it. The
+inbound shows **drifted** when the panel was changed outside FireX, **pending** after
+an edit, and **missing** when the panel no longer has it.
+
+**Preview and deploy** writes the owned configuration back after showing the diff.
+It updates the inbound and keeps its clients and counters. It recreates a missing
+inbound. If an overwritten panel database renumbered the inbound, it can rebind to
+the new copy. The FireX inbound keeps its identity, node groups and users either way.
+Each write is sent once and read back. A stale preview is rejected. Before every
+write, FireX saves the panel's configuration so it can be loaded and deployed
+again. FireX's client address and port stay on the inbound and are never touched
+by a deployment.
+
+**Inbound templates** hold the parameters nodes share, such as a REALITY setup with
+its keys, target and fallback limits. **Save as template** drops listen, port, tag,
+PROXY and fallback routes. **Create inbound from template** fills in one node's
+values, creates the panel inbound and takes it over. Like any new inbound it stays
+disabled and ungrouped until reviewed. Later template edits do not change inbounds
+created from it.
+
+```
+GET    /api/inbounds/:id/config            # owned parameters, state, deployment history
+POST   /api/inbounds/:id/config            # take over: current config, or { deploymentId } backup
+PUT    /api/inbounds/:id/config            # revision + parameters, or revision + deploymentId
+DELETE /api/inbounds/:id/config            # stop managing; the panel is untouched
+POST   /api/inbounds/:id/config/preview    # revision, optional rebindInboundId
+POST   /api/inbounds/:id/config/deploy     # same + targetRevision from the preview
+GET/POST /api/inbound-templates            # POST: name + inboundId or parameters
+GET/PUT/DELETE /api/inbound-templates/:id
+POST   /api/inbound-templates/:id/instantiate  # revision, panelId, listen, port, remark,
+                                               # acceptProxyProtocol, publicAddress, publicPort
+```
+
 ## Updates
 
 FireX updates itself from its own GitHub releases. The **System** page shows the

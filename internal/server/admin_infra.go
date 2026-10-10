@@ -257,6 +257,8 @@ type inboundRow struct {
 	GroupCount      int64  `json:"groupCount"`
 	VisionSupported bool   `json:"visionSupported"`
 	VisionReason    string `json:"visionReason"`
+	// ConfigState is empty for an inbound FireX does not manage.
+	ConfigState string `json:"configState"`
 }
 
 func inboundVisionReason(n model.Inbound) string {
@@ -315,10 +317,17 @@ func (s *Server) listInbounds(c *gin.Context) {
 		counts[row.InboundID] = row.N
 	}
 
+	var configs []model.InboundConfig
+	s.db.Find(&configs)
+	managed := map[uint]*model.InboundConfig{}
+	for i := range configs {
+		managed[configs[i].InboundID] = &configs[i]
+	}
+
 	out := make([]inboundRow, 0, len(inbounds))
 	for _, n := range inbounds {
 		reason := inboundVisionReason(n)
-		out = append(out, inboundRow{Inbound: n, PanelName: names[n.PanelID], GroupCount: counts[n.ID], VisionSupported: reason == "", VisionReason: reason})
+		out = append(out, inboundRow{Inbound: n, PanelName: names[n.PanelID], GroupCount: counts[n.ID], VisionSupported: reason == "", VisionReason: reason, ConfigState: configState(n, managed[n.ID])})
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -470,6 +479,7 @@ func (s *Server) deleteInbound(c *gin.Context) {
 	}
 	plans := routing.PlansUsingInbound(s.db, inbound.ID)
 	s.db.Where("inbound_id = ?", inbound.ID).Delete(&model.NodeGroupInbound{})
+	s.db.Where("inbound_id = ?", inbound.ID).Delete(&model.InboundConfig{})
 	if err := s.db.Delete(&model.Inbound{}, inbound.ID).Error; err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
