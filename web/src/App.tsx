@@ -1,37 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
-import { ThemeProvider, useTheme } from 'next-themes'
-import { toast } from 'sonner'
-import {
-  BoxesIcon,
-  ChevronsUpDownIcon,
-  CircleAlertIcon,
-  CpuIcon,
-  FileCogIcon,
-  FlameIcon,
-  GaugeIcon,
-  LayersIcon,
-  LayoutTemplateIcon,
-  LogOutIcon,
-  MoonIcon,
-  ServerIcon,
-  SettingsIcon,
-  SplitIcon,
-  SunIcon,
-  TicketIcon,
-  UsersIcon,
-} from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ThemeProvider } from 'next-themes'
+import { CircleAlertIcon, FlameIcon } from 'lucide-react'
 
 import { ApiError, FIREX_UNAUTHORIZED_EVENT, api } from '@/api'
+import { AppSidebar } from '@/components/app-sidebar'
+import { SiteHeader } from '@/components/site-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb'
 import {
   Card,
   CardContent,
@@ -40,40 +15,14 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarHeader,
-  SidebarInset,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarProvider,
-  SidebarRail,
-  SidebarTrigger,
-  useSidebar,
-} from '@/components/ui/sidebar'
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { Spinner } from '@/components/ui/spinner'
 import { Toaster } from '@/components/ui/sonner'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useHashRoute } from '@/hooks/use-hash-route'
 import { errorMessage } from '@/lib/format'
-import { confirmUnsavedNavigation } from '@/hooks/use-unsaved-guard'
+import type { RouteKey } from '@/lib/navigation'
 import { OverviewPage } from '@/pages/Overview'
 import { PanelsPage } from '@/pages/Panels'
 import { InboundsPage } from '@/pages/Inbounds'
@@ -86,27 +35,9 @@ import { UsersPage } from '@/pages/Users'
 import { SettingsPage } from '@/pages/Settings'
 import { SystemPage } from '@/pages/System'
 
-const ROUTES = [
-  { key: 'overview', label: '总览', group: '工作台', icon: GaugeIcon },
-  { key: 'panels', label: '面板', group: '资源管理', icon: ServerIcon },
-  { key: 'inbounds', label: '入站', group: '资源管理', icon: LayersIcon },
-  { key: 'inbound-configs', label: '入站配置', group: '资源管理', icon: FileCogIcon },
-  { key: 'inbound-templates', label: '入站模板', group: '资源管理', icon: LayoutTemplateIcon },
-  { key: 'node-groups', label: '节点组', group: '资源管理', icon: BoxesIcon },
-  { key: 'plans', label: '套餐', group: '资源管理', icon: TicketIcon },
-  { key: 'users', label: '用户', group: '资源管理', icon: UsersIcon },
-  { key: 'routing', label: '分流', group: '运维配置', icon: SplitIcon },
-  { key: 'settings', label: '设置', group: '运维配置', icon: SettingsIcon },
-  { key: 'system', label: '系统', group: '运维配置', icon: CpuIcon },
-] as const
-
-const ROUTE_GROUPS = ['工作台', '资源管理', '运维配置'] as const
-
-type RouteKey = (typeof ROUTES)[number]['key']
-
-function currentRoute(): RouteKey {
-  const hash = window.location.hash.replace('#/', '').split('?')[0]
-  return (ROUTES.find((route) => route.key === hash)?.key ?? 'overview') as RouteKey
+/** Restores the collapsed state that the sidebar persists in its cookie. */
+function sidebarDefaultOpen() {
+  return !document.cookie.split('; ').includes('sidebar_state=false')
 }
 
 export function App() {
@@ -121,24 +52,14 @@ export function App() {
 function Shell() {
   const [username, setUsername] = useState<string | null>(null)
   const [checking, setChecking] = useState(true)
-  const [route, setRoute] = useState<RouteKey>(currentRoute)
+  const route = useHashRoute()
+  const insetRef = useRef<HTMLElement>(null)
 
+  // Each page starts at its top; the inset scrolls on desktop, the window on mobile.
   useEffect(() => {
-    let acceptedUrl = window.location.href
-    let acceptedRoute = currentRoute()
-    const onHash = () => {
-      const nextRoute = currentRoute()
-      if (nextRoute !== acceptedRoute && !confirmUnsavedNavigation()) {
-        window.history.replaceState(window.history.state, '', acceptedUrl)
-        return
-      }
-      acceptedUrl = window.location.href
-      acceptedRoute = nextRoute
-      setRoute(nextRoute)
-    }
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [])
+    insetRef.current?.scrollTo(0, 0)
+    window.scrollTo(0, 0)
+  }, [route])
 
   const check = useCallback(async () => {
     try {
@@ -180,189 +101,21 @@ function Shell() {
 
   if (!username) return <Login onSignedIn={check} />
 
-  const activeRoute = ROUTES.find((item) => item.key === route) ?? ROUTES[0]
-
   return (
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={sidebarDefaultOpen()}>
       <AppSidebar route={route} username={username} onSignedOut={() => setUsername(null)} />
-      <SidebarInset>
-        <header className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2 border-b bg-background/85 px-4 backdrop-blur-md md:px-6">
-          <SidebarTrigger className="-ml-1" aria-label="切换侧边栏" />
-          <Separator orientation="vertical" className="mr-1 h-4" />
-          <Breadcrumb className="min-w-0">
-            <BreadcrumbList className="flex-nowrap">
-              <BreadcrumbItem className="hidden sm:inline-flex">{activeRoute.group}</BreadcrumbItem>
-              <BreadcrumbSeparator className="hidden sm:inline-flex" />
-              <BreadcrumbItem className="min-w-0">
-                <BreadcrumbPage className="truncate">{activeRoute.label}</BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-          <div className="ml-auto flex items-center gap-1">
-            <ThemeToggle />
-          </div>
-        </header>
+      {/* On desktop the inset panel is its own scroll container, so the sticky
+          header stays inside the rounded frame instead of riding over its margin. */}
+      <SidebarInset
+        ref={insetRef}
+        className="md:h-[calc(100svh-1rem)] md:overflow-y-auto md:border md:border-sidebar-border"
+      >
+        <SiteHeader route={route} />
         <div className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-6 p-4 md:p-6 lg:p-8">
           <Page route={route} />
         </div>
       </SidebarInset>
     </SidebarProvider>
-  )
-}
-
-function AppSidebar({
-  route,
-  username,
-  onSignedOut,
-}: {
-  route: RouteKey
-  username: string
-  onSignedOut: () => void
-}) {
-  const { isMobile, setOpenMobile } = useSidebar()
-  const closeMobile = () => {
-    if (isMobile) setOpenMobile(false)
-  }
-
-  return (
-    <Sidebar collapsible="icon">
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              size="lg"
-              render={
-                <a
-                  href="#/overview"
-                  aria-current={route === 'overview' ? 'page' : undefined}
-                  onClick={closeMobile}
-                />
-              }
-            >
-              <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-brand text-brand-foreground">
-                <FlameIcon />
-              </div>
-              <div className="grid flex-1 text-left leading-tight">
-                <span className="truncate font-heading font-semibold">FireX</span>
-                <span className="truncate text-xs text-sidebar-foreground/70">3X-UI 控制平面</span>
-              </div>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
-      <SidebarContent>
-        <nav aria-label="主导航">
-          {ROUTE_GROUPS.map((group) => (
-            <SidebarGroup key={group}>
-              <SidebarGroupLabel>{group}</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {ROUTES.filter((item) => item.group === group).map((item) => (
-                    <SidebarMenuItem key={item.key}>
-                      <SidebarMenuButton
-                        isActive={route === item.key}
-                        tooltip={item.label}
-                        render={
-                          <a
-                            href={`#/${item.key}`}
-                            aria-current={route === item.key ? 'page' : undefined}
-                            onClick={closeMobile}
-                          />
-                        }
-                      >
-                        <item.icon />
-                        <span>{item.label}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          ))}
-        </nav>
-      </SidebarContent>
-      <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <NavUser username={username} onSignedOut={onSignedOut} />
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
-  )
-}
-
-function NavUser({ username, onSignedOut }: { username: string; onSignedOut: () => void }) {
-  const { isMobile, setOpenMobile } = useSidebar()
-
-  const signOut = async () => {
-    if (!confirmUnsavedNavigation()) return
-    try {
-      await api.post('/auth/logout')
-      onSignedOut()
-    } catch (err) {
-      toast.error(errorMessage(err, '退出登录失败'))
-    }
-  }
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger render={<SidebarMenuButton size="lg" />}>
-        <Avatar size="sm">
-          <AvatarFallback>{username.slice(0, 2).toUpperCase()}</AvatarFallback>
-        </Avatar>
-        <div className="grid flex-1 text-left leading-tight">
-          <span className="truncate font-medium">{username}</span>
-          <span className="truncate text-xs text-sidebar-foreground/70">管理员</span>
-        </div>
-        <ChevronsUpDownIcon className="ml-auto" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side={isMobile ? 'bottom' : 'right'} align="end" className="min-w-52">
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>{username}</DropdownMenuLabel>
-          <DropdownMenuItem
-            onClick={() => {
-              window.location.hash = '#/settings'
-              if (isMobile) setOpenMobile(false)
-            }}
-          >
-            <SettingsIcon />
-            设置
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup>
-          <DropdownMenuItem variant="destructive" onClick={() => void signOut()}>
-            <LogOutIcon />
-            退出登录
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-function ThemeToggle() {
-  const { resolvedTheme, setTheme } = useTheme()
-  const dark = resolvedTheme !== 'light'
-  const label = dark ? '切换到浅色主题' : '切换到深色主题'
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={label}
-            onClick={() => setTheme(dark ? 'light' : 'dark')}
-          />
-        }
-      >
-        {dark ? <SunIcon /> : <MoonIcon />}
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
   )
 }
 
