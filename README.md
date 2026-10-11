@@ -56,7 +56,8 @@ to a panel.
 Provisioning state is tracked per (user, panel) because 3x-ui keys a client and
 its traffic counters by a panel-unique email. FireX writes clients as
 `<username>@FireX` so its own clients are always distinguishable from ones you
-created by hand.
+created by hand. Clients left over from the earlier `<username>@firex` suffix are
+renamed in place on the next sync.
 
 ## Requirements
 

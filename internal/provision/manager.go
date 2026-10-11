@@ -403,10 +403,18 @@ func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.
 	}
 	membership := panel.InboundMembership(inbounds)
 	actual, exists := membership[strings.ToLower(email)]
+	// Clients created before the suffix became @FireX are still stored as
+	// @firex. Address them by the stored spelling until the flow sync below
+	// renames them, and keep the record pointing at it if that sync fails.
+	remote := email
+	if exists {
+		remote = panel.StoredEmail(inbounds, email)
+		record.Email = remote
+	}
 
 	if !wanted || len(want.InboundIDs) == 0 {
 		if exists {
-			if err := client.DeleteClient(ctx, email); err != nil {
+			if err := client.DeleteClient(ctx, remote); err != nil {
 				return fail(fmt.Errorf("panel %s: delete client: %w", p.Name, err))
 			}
 		}
@@ -418,7 +426,7 @@ func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.
 	// an unrelated inbound the user's plan no longer allows.
 	attach, detach := diffInts(want.InboundIDs, actual)
 	if exists && len(detach) > 0 {
-		if err := client.DetachClient(ctx, email, detach); err != nil {
+		if err := client.DetachClient(ctx, remote, detach); err != nil {
 			return fail(fmt.Errorf("panel %s: detach: %w", p.Name, err))
 		}
 	}
@@ -434,7 +442,7 @@ func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.
 		}
 	}
 	desiredHash := want.hash()
-	forceUpdate := exists && record.DesiredHash != desiredHash
+	forceUpdate := exists && (record.DesiredHash != desiredHash || remote != email)
 	// Resolve preserved flows before attaching: a new attachment must start
 	// without flow, not inherit an unrelated inbound's canonical client flow.
 	liveFlows := inboundFlows(inbounds, email)
@@ -455,7 +463,7 @@ func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.
 		refresh = true
 	} else {
 		if len(attach) > 0 {
-			if err := client.AttachClient(ctx, email, attach); err != nil {
+			if err := client.AttachClient(ctx, remote, attach); err != nil {
 				return fail(fmt.Errorf("panel %s: attach: %w", p.Name, err))
 			}
 			refresh, forceUpdate = true, true
@@ -467,10 +475,11 @@ func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.
 			return fail(fmt.Errorf("panel %s: read attached clients: %w", p.Name, err))
 		}
 	}
-	if err := syncClientFlows(ctx, client, email, want, inbounds, forceUpdate); err != nil {
+	if err := syncClientFlows(ctx, client, remote, want, inbounds, forceUpdate); err != nil {
 		return fail(fmt.Errorf("panel %s: %w", p.Name, err))
 	}
 
+	record.Email = email
 	record.InboundIDs = joinInts(want.InboundIDs)
 	record.DesiredHash = desiredHash
 	record.State = model.SyncStateSynced
@@ -479,7 +488,11 @@ func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.
 	return m.db.Save(&record).Error
 }
 
-func syncClientFlows(ctx context.Context, client *panel.Client, email string, want desiredClient, inbounds []panel.Inbound, force bool) error {
+// syncClientFlows addresses the client as remote, its spelling on the panel.
+// The update body carries the canonical email, so the first write also renames
+// a legacy client and later writes must use the new spelling.
+func syncClientFlows(ctx context.Context, client *panel.Client, remote string, want desiredClient, inbounds []panel.Inbound, force bool) error {
+	email := want.Client.Email
 	actual := inboundFlows(inbounds, email)
 	groups := map[string][]int{}
 	for _, id := range want.InboundIDs {
@@ -502,9 +515,10 @@ func syncClientFlows(ctx context.Context, client *panel.Client, email string, wa
 		if ids := groups[flow]; len(ids) > 0 {
 			cl := want.Client
 			cl.Flow = flow
-			if err := client.UpdateClientInbounds(ctx, email, cl, ids); err != nil {
+			if err := client.UpdateClientInbounds(ctx, remote, cl, ids); err != nil {
 				return fmt.Errorf("update client flow on inbounds %v: %w", ids, err)
 			}
+			remote = email
 		}
 	}
 	if len(groups) == 0 {
@@ -515,6 +529,9 @@ func syncClientFlows(ctx context.Context, client *panel.Client, email string, wa
 	verified, err := client.Inbounds(ctx)
 	if err != nil {
 		return fmt.Errorf("verify client flow: %w", err)
+	}
+	if stored := panel.StoredEmail(verified, email); stored != email {
+		return fmt.Errorf("panel did not rename client %q to %q", stored, email)
 	}
 	actual = inboundFlows(verified, email)
 	for _, id := range want.InboundIDs {

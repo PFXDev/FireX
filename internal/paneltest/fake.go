@@ -137,6 +137,33 @@ func (p *Panel) SetClientFlow(email string, inboundID int, flow string) {
 	p.flows[strings.ToLower(email)][inboundID] = flow
 }
 
+// SeedClient places a client on the panel as if something other than FireX
+// had created it, keeping the email exactly as given.
+func (p *Panel) SeedClient(c Client, inboundIDs ...int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	key := strings.ToLower(c.Email)
+	p.clients[key] = &c
+	p.members[key] = map[int]bool{}
+	p.flows[key] = map[int]string{}
+	for _, id := range inboundIDs {
+		p.members[key][id] = true
+		p.flows[key][id] = c.Flow
+	}
+}
+
+// lookup finds a client by the email in a request path. Like 3x-ui it treats
+// emails as unique regardless of case but only finds the stored spelling.
+// Callers hold mu.
+func (p *Panel) lookup(email string) (string, *Client) {
+	key := strings.ToLower(email)
+	c, ok := p.clients[key]
+	if !ok || c.Email != email {
+		return key, nil
+	}
+	return key, c
+}
+
 // AddInbound simulates an admin creating an inbound on the panel.
 func (p *Panel) AddInbound(ib Inbound) {
 	p.mu.Lock()
@@ -358,13 +385,15 @@ func (p *Panel) updateClient(w http.ResponseWriter, r *http.Request, email strin
 		writeJSON(w, http.StatusOK, envelope{Success: false, Msg: err.Error()})
 		return
 	}
-	key := strings.ToLower(email)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	c, ok := p.clients[key]
-	if !ok {
+	key, c := p.lookup(email)
+	if c == nil {
 		writeJSON(w, http.StatusOK, envelope{Success: false, Msg: "record not found"})
 		return
+	}
+	if incoming.Email != "" {
+		c.Email = incoming.Email
 	}
 	c.ID = incoming.ID
 	c.Enable = incoming.Enable
@@ -387,10 +416,10 @@ func (p *Panel) updateClient(w http.ResponseWriter, r *http.Request, email strin
 }
 
 func (p *Panel) deleteClient(w http.ResponseWriter, email string) {
-	key := strings.ToLower(email)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if _, ok := p.clients[key]; !ok {
+	key, c := p.lookup(email)
+	if c == nil {
 		writeJSON(w, http.StatusOK, envelope{Success: false, Msg: "record not found"})
 		return
 	}
@@ -401,10 +430,9 @@ func (p *Panel) deleteClient(w http.ResponseWriter, email string) {
 }
 
 func (p *Panel) resetTraffic(w http.ResponseWriter, email string) {
-	key := strings.ToLower(email)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if c, ok := p.clients[key]; ok {
+	if _, c := p.lookup(email); c != nil {
 		c.Up, c.Down = 0, 0
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true})
@@ -421,14 +449,14 @@ func (p *Panel) attachDetach(w http.ResponseWriter, r *http.Request, path string
 		writeJSON(w, http.StatusOK, envelope{Success: false, Msg: err.Error()})
 		return
 	}
-	key := strings.ToLower(email)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	set, ok := p.members[key]
-	if !ok {
+	key, c := p.lookup(email)
+	if c == nil {
 		writeJSON(w, http.StatusOK, envelope{Success: false, Msg: "record not found"})
 		return
 	}
+	set := p.members[key]
 	for _, id := range body.InboundIDs {
 		if action == "attach" {
 			set[id] = true
@@ -444,11 +472,10 @@ func (p *Panel) attachDetach(w http.ResponseWriter, r *http.Request, path string
 // clientLinks emits one reality vless link per attached inbound, matching the
 // shape a real panel produces.
 func (p *Panel) clientLinks(w http.ResponseWriter, email string) {
-	key := strings.ToLower(email)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	c, ok := p.clients[key]
-	if !ok {
+	key, c := p.lookup(email)
+	if c == nil {
 		writeJSON(w, http.StatusOK, envelope{Success: false, Msg: "record not found"})
 		return
 	}

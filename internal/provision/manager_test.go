@@ -483,3 +483,75 @@ func TestDiffInts(t *testing.T) {
 		t.Errorf("extra = %v, want [3]", extra)
 	}
 }
+
+// Clients created under the old @firex suffix must be renamed in place, not
+// duplicated or left unreachable: 3x-ui matches emails case-insensitively when
+// checking for duplicates but finds path-keyed clients only by exact spelling.
+func TestReconcileRenamesLegacyLowercaseEmail(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if err := f.mgr.DiscoverPanel(ctx, f.panel); err != nil {
+		t.Fatalf("DiscoverPanel() error = %v", err)
+	}
+	inboundIDs := f.enableInbounds(t)
+	u := f.newUser(t, f.newPlan(t, inboundIDs).ID)
+	f.fake.SeedClient(paneltest.Client{Email: "alice@firex", ID: "uuid-alice", Enable: true}, 1)
+
+	// A failed rename must leave the record on the spelling the panel still
+	// holds, so panel removal and traffic resets keep reaching the client.
+	f.fake.FailNext["/clients/update/alice@firex"] = true
+	if err := f.mgr.ReconcileUser(ctx, u); err == nil {
+		t.Fatal("ReconcileUser() error = nil, want the induced rename failure")
+	}
+	var rec model.UserPanel
+	f.db.First(&rec, "user_id = ?", u.ID)
+	if rec.State != model.SyncStateFailed || rec.Email != "alice@firex" {
+		t.Errorf("record after failed rename = %+v", rec)
+	}
+
+	if err := f.mgr.ReconcileUser(ctx, u); err != nil {
+		t.Fatalf("ReconcileUser() error = %v", err)
+	}
+	client := f.fake.Client(EmailFor(u))
+	if client == nil || client.Email != "alice@FireX" {
+		t.Fatalf("client = %+v, want it renamed to alice@FireX", client)
+	}
+	if got := f.fake.Members(EmailFor(u)); len(got) != 2 {
+		t.Errorf("members = %v, want both inbounds", got)
+	}
+	f.db.First(&rec, "user_id = ?", u.ID)
+	if rec.State != model.SyncStateSynced || rec.Email != "alice@FireX" {
+		t.Errorf("record = %+v", rec)
+	}
+
+	f.fake.ResetCalls()
+	if err := f.mgr.ReconcileUser(ctx, u); err != nil {
+		t.Fatalf("ReconcileUser() error = %v", err)
+	}
+	for _, call := range f.fake.Calls() {
+		if strings.HasPrefix(call, "POST ") {
+			t.Errorf("reconcile after rename wrote to panel: %s", call)
+		}
+	}
+}
+
+func TestReconcileRemovesLegacyLowercaseEmail(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if err := f.mgr.DiscoverPanel(ctx, f.panel); err != nil {
+		t.Fatalf("DiscoverPanel() error = %v", err)
+	}
+	f.enableInbounds(t)
+	u := f.newUser(t, 0)
+	f.fake.SeedClient(paneltest.Client{Email: "alice@firex", ID: "uuid-alice", Enable: true}, 1)
+	if err := f.db.Create(&model.UserPanel{UserID: u.ID, PanelID: f.panel.ID, Email: "alice@FireX"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.mgr.ReconcileUser(ctx, u); err != nil {
+		t.Fatalf("ReconcileUser() error = %v", err)
+	}
+	if c := f.fake.Client("alice@firex"); c != nil {
+		t.Errorf("legacy client survived removal: %+v", c)
+	}
+}

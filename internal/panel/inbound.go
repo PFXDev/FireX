@@ -20,6 +20,20 @@ func InboundMembership(inbounds []Inbound) map[string][]int {
 	return out
 }
 
+// StoredEmail returns the spelling the panel stored for email, or "" when no
+// inbound holds it. 3x-ui looks clients up by exact email on every path-keyed
+// route, so a case-insensitive match alone is not enough to address one.
+func StoredEmail(inbounds []Inbound, email string) string {
+	for _, ib := range inbounds {
+		for _, stored := range settingsClientEmails(ib.Settings) {
+			if strings.EqualFold(stored, email) {
+				return stored
+			}
+		}
+	}
+	return ""
+}
+
 func settingsClientEmails(settings string) []string {
 	if strings.TrimSpace(settings) == "" {
 		return nil
