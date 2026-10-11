@@ -81,3 +81,17 @@ func TestUpdateClientInboundsSendsFilterAndExplicitEmptyFlow(t *testing.T) {
 		t.Fatal("an empty inbound filter must not become a panel-wide update")
 	}
 }
+
+func TestShareAddressOnlyReadsCustomStrategy(t *testing.T) {
+	for config, want := range map[string]string{
+		`{"shareAddrStrategy":"custom","shareAddr":" edge.example.com "}`: "edge.example.com",
+		`{"shareAddrStrategy":"node","shareAddr":"stale.example.com"}`:    "",
+		`{"shareAddrStrategy":"listen"}`:                                  "",
+		`{"shareAddr":"edge.example.com"}`:                                "",
+		``:                                                                "",
+	} {
+		if got := ShareAddress(config); got != want {
+			t.Errorf("ShareAddress(%s) = %q, want %q", config, got, want)
+		}
+	}
+}

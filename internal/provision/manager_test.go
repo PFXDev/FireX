@@ -174,6 +174,43 @@ func TestDiscoverPreservesAdminFieldsAndFlagsMissing(t *testing.T) {
 	}
 }
 
+func TestDiscoverFollowsPanelShareAddress(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	share := func(addr string) map[string]any {
+		return map[string]any{"shareAddrStrategy": "custom", "shareAddr": addr}
+	}
+	f.fake.RemoveInbound(1)
+	f.fake.AddInbound(paneltest.Inbound{ID: 1, Port: 443, Protocol: "vless", Enable: true, Extra: share("old.example.com")})
+	f.fake.RemoveInbound(2)
+	f.fake.AddInbound(paneltest.Inbound{ID: 2, Port: 8443, Protocol: "vless", Enable: true, Extra: share("old.example.com")})
+	if err := f.mgr.DiscoverPanel(ctx, f.panel); err != nil {
+		t.Fatalf("DiscoverPanel() error = %v", err)
+	}
+	var copied, override model.Inbound
+	f.db.First(&copied, "remote_id = ?", 1)
+	f.db.First(&override, "remote_id = ?", 2)
+	copied.PublicAddress = "old.example.com"
+	override.PublicAddress = "relay.example.com"
+	f.db.Save(&copied)
+	f.db.Save(&override)
+
+	f.fake.RemoveInbound(1)
+	f.fake.AddInbound(paneltest.Inbound{ID: 1, Port: 443, Protocol: "vless", Enable: true, Extra: share("new.example.com")})
+	if err := f.mgr.DiscoverPanel(ctx, f.panel); err != nil {
+		t.Fatalf("DiscoverPanel() error = %v", err)
+	}
+	f.db.First(&copied, copied.ID)
+	f.db.First(&override, override.ID)
+	// A copy of the panel's old address must not keep pinning subscriptions.
+	if copied.PublicAddress != "" {
+		t.Errorf("copied address kept after panel moved: %q", copied.PublicAddress)
+	}
+	if override.PublicAddress != "relay.example.com" {
+		t.Errorf("deliberate override lost: %q", override.PublicAddress)
+	}
+}
+
 func TestDiscoverMarksPanelOffline(t *testing.T) {
 	f := newFixture(t)
 	f.fake.Close()

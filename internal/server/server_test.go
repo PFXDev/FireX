@@ -811,6 +811,15 @@ func TestInboundPublicEndpointIsValidatedAndServed(t *testing.T) {
 		t.Errorf("subscription does not carry the public endpoint:\n%s", decoded)
 	}
 
+	// Repeating the panel's own address stores nothing, so the inbound keeps
+	// following the panel when its address changes.
+	h.db.Model(&saved).Update("config", `{"shareAddrStrategy":"custom","shareAddr":"panel.example.com"}`)
+	h.mustDo(http.MethodPut, path, map[string]any{"publicAddress": "panel.example.com"})
+	h.db.First(&saved, inbound.ID)
+	if saved.PublicAddress != "" {
+		t.Fatalf("panel address stored as override: %q", saved.PublicAddress)
+	}
+
 	// An IPv6 literal is a valid address and must come out bracketed.
 	h.mustDo(http.MethodPut, path, map[string]any{"publicAddress": "2001:db8::1"})
 	_, raw = h.do(http.MethodGet, "/sub/"+u.SubToken+"?target=base64", nil)

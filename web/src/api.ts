@@ -131,6 +131,8 @@ export interface Inbound {
   /** Endpoint clients dial when it differs from what the panel advertises. Empty / 0 keep the panel's. */
   publicAddress: string
   publicPort: number
+  /** Address the panel stores for its share links. Empty when the panel derives it. */
+  shareAddress: string
   missing: boolean
   /** How many node groups hold it. Zero means it reaches nobody. */
   groupCount: number

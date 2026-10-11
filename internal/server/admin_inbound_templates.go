@@ -221,6 +221,11 @@ func (s *Server) instantiateInboundTemplate(c *gin.Context) {
 		return
 	}
 	desired := panel.WithNode(template, req.NodeEnvironment)
+	// The address belongs on the panel so later edits there reach every
+	// subscription; FireX only keeps it when the panel cannot store it.
+	if req.PublicAddress != "" {
+		desired["shareAddrStrategy"], desired["shareAddr"] = "custom", req.PublicAddress
+	}
 	if err := panel.ValidateConfiguration(desired); err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
@@ -257,7 +262,10 @@ func (s *Server) runInstantiate(row model.InboundTemplate, target model.Panel, d
 		var inboundID uint
 		err := s.db.Transaction(func(tx *gorm.DB) error {
 			inbound := provision.NewInbound(target.ID, found, provision.NowMs())
-			inbound.PublicAddress, inbound.PublicPort = req.PublicAddress, req.PublicPort
+			inbound.PublicPort = req.PublicPort
+			if panel.ShareAddress(inbound.Config) != req.PublicAddress {
+				inbound.PublicAddress = req.PublicAddress
+			}
 			if err := tx.Create(&inbound).Error; err != nil {
 				return err
 			}

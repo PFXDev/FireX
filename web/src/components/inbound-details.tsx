@@ -117,7 +117,7 @@ export function InboundDetails({ inbound, onClose, onEdit, onRefresh }: Props) {
         <Separator />
         <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-4">
           <dl className="grid grid-cols-2 gap-x-6 gap-y-4">
-            <Summary label="客户端地址" value={inbound?.publicAddress || '沿用面板分享地址'} />
+            <Summary label="客户端地址" value={inbound?.publicAddress || (inbound?.shareAddress ? `${inbound.shareAddress}（面板）` : '沿用面板分享地址')} />
             <Summary label="客户端端口" value={String(inbound?.publicPort || inbound?.port || '—')} />
             <Summary label="监听地址" value={`${inbound?.listen || '所有地址'} : ${inbound?.port ?? '—'}`} />
             <Summary label="参数同步于" value={detail?.lastSeenAt ? formatTime(detail.lastSeenAt) : '尚未同步'} />

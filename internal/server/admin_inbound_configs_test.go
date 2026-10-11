@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/PFXDev/FireX/internal/model"
+	"github.com/PFXDev/FireX/internal/panel"
 	"github.com/PFXDev/FireX/internal/paneltest"
 	"github.com/PFXDev/FireX/internal/provision"
 )
@@ -383,8 +384,12 @@ func TestTemplateCreatesManagedInboundPerNode(t *testing.T) {
 	h.db.First(&inbound, record.InboundID)
 	var links int64
 	h.db.Model(&model.NodeGroupInbound{}).Where("inbound_id = ?", inbound.ID).Count(&links)
-	if inbound.Enabled || links != 0 || inbound.Port != 9443 || inbound.PublicAddress != "proxy.example.com" || inbound.PublicPort != 443 {
+	// The address lives on the panel so later panel edits reach subscriptions.
+	if inbound.Enabled || links != 0 || inbound.Port != 9443 || inbound.PublicAddress != "" || inbound.PublicPort != 443 {
 		t.Fatalf("new inbound: %+v", inbound)
+	}
+	if panel.ShareAddress(inbound.Config) != "proxy.example.com" {
+		t.Fatalf("share address not written to panel: %s", inbound.Config)
 	}
 	if !strings.Contains(inbound.Config, `"acceptProxyProtocol":true`) {
 		t.Fatal("PROXY setting not applied")

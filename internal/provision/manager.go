@@ -188,7 +188,14 @@ func ApplyDiscovered(row *model.Inbound, ib *panel.Inbound, now int64) {
 	row.Listen = ib.Listen
 	row.Network, row.Security = ib.Transport()
 	row.DisableFlow = ib.DisableFlow
+	previous := panel.ShareAddress(row.Config)
 	row.Config = ib.Configuration()
+	// A public address equal to what the panel advertises is a copy, not an
+	// override. Drop it so links follow the panel when its address moves
+	// instead of pinning the old host.
+	if addr := row.PublicAddress; addr != "" && (addr == previous || addr == panel.ShareAddress(row.Config)) {
+		row.PublicAddress = ""
+	}
 	row.Missing = false
 	row.LastSeenAt = now
 	row.UpdatedAt = now

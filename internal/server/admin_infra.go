@@ -259,6 +259,9 @@ type inboundRow struct {
 	VisionReason    string `json:"visionReason"`
 	// ConfigState is empty for an inbound FireX does not manage.
 	ConfigState string `json:"configState"`
+	// ShareAddress is the host the panel advertises, used when PublicAddress
+	// is empty. Empty when the panel derives it rather than storing one.
+	ShareAddress string `json:"shareAddress"`
 }
 
 func inboundVisionReason(n model.Inbound) string {
@@ -327,7 +330,7 @@ func (s *Server) listInbounds(c *gin.Context) {
 	out := make([]inboundRow, 0, len(inbounds))
 	for _, n := range inbounds {
 		reason := inboundVisionReason(n)
-		out = append(out, inboundRow{Inbound: n, PanelName: names[n.PanelID], GroupCount: counts[n.ID], VisionSupported: reason == "", VisionReason: reason, ConfigState: configState(n, managed[n.ID])})
+		out = append(out, inboundRow{Inbound: n, PanelName: names[n.PanelID], GroupCount: counts[n.ID], VisionSupported: reason == "", VisionReason: reason, ConfigState: configState(n, managed[n.ID]), ShareAddress: panel.ShareAddress(n.Config)})
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -400,6 +403,11 @@ func (s *Server) updateInbound(c *gin.Context) {
 		if !validPublicAddress(addr) {
 			failMsg(c, http.StatusBadRequest, "publicAddress must be a hostname or IP address")
 			return
+		}
+		// Repeating the panel's address would pin it here after the panel
+		// moves; empty already follows the panel.
+		if addr == panel.ShareAddress(inbound.Config) {
+			addr = ""
 		}
 		inbound.PublicAddress = addr
 	}

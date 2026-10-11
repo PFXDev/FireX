@@ -502,12 +502,12 @@ export function InboundsPage() {
                     <Input
                       id="inbound-public-address"
                       disabled={pendingAction === 'save'}
-                      placeholder="沿用面板地址"
+                      placeholder={editingInbound?.shareAddress || '沿用面板地址'}
                       value={draft.publicAddress}
                       onChange={(event) => setDraft({ ...draft, publicAddress: event.target.value })}
                     />
                     <FieldDescription>
-                      客户端实际连接的地址和端口。入站藏在回环端口、由 443 上的 SNI 分流或中转接入时填这里；留空或 0 沿用面板给出的值。
+                      客户端实际连接的地址和端口。入站藏在回环端口、由 443 上的 SNI 分流或中转接入时填这里；留空或 0 沿用面板给出的值，面板改地址后订阅会跟着变。
                     </FieldDescription>
                   </Field>
                   <Field data-disabled={pendingAction === 'save' || undefined}>

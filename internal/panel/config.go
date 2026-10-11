@@ -68,6 +68,21 @@ func (i *Inbound) Configuration() string {
 	return string(data)
 }
 
+// ShareAddress is the host the panel puts in share links when an admin set
+// one explicitly. 3x-ui's other strategies derive the host from the node,
+// the listen address or the request, none of which FireX can see, so they
+// report "" and the panel's own link stays authoritative.
+func ShareAddress(config string) string {
+	var share struct {
+		Strategy string `json:"shareAddrStrategy"`
+		Addr     string `json:"shareAddr"`
+	}
+	if json.Unmarshal([]byte(config), &share) != nil || share.Strategy != "custom" {
+		return ""
+	}
+	return strings.TrimSpace(share.Addr)
+}
+
 // ClientFlows reads the actual per-inbound values, rather than the panel's
 // canonical client record which can only represent one flow.
 func (i *Inbound) ClientFlows() map[string]string {
