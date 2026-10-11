@@ -262,7 +262,7 @@ export function InboundsPage() {
                 { label: '名称', width: 'w-32' },
                 { label: '面板 / 入站', className: 'hidden lg:table-cell', width: 'w-28' },
                 { label: '协议', className: 'hidden md:table-cell', width: 'w-16' },
-                { label: '端口', className: 'hidden xl:table-cell', width: 'w-12' },
+                { label: '地址', className: 'hidden xl:table-cell', width: 'w-28' },
                 { label: '所属分组', className: 'hidden lg:table-cell', width: 'w-8' },
                 { label: '状态', width: 'w-14' },
                 { width: 'w-16' },
@@ -306,7 +306,7 @@ export function InboundsPage() {
                   <TableHead>名称</TableHead>
                   <TableHead className="hidden lg:table-cell">面板 / 入站</TableHead>
                   <TableHead className="hidden md:table-cell">协议</TableHead>
-                  <TableHead className="hidden xl:table-cell">端口</TableHead>
+                  <TableHead className="hidden xl:table-cell">地址</TableHead>
                   <TableHead className="hidden lg:table-cell">所属分组</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>
@@ -574,16 +574,27 @@ export function InboundsPage() {
   )
 }
 
-/** The port column: the panel's port, or the public endpoint when one overrides it. */
+/** host:port as it appears in a link; IPv6 literals need brackets. */
+function hostPort(host: string, port: number): string {
+  return host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`
+}
+
+/**
+ * The address column: where clients connect. A FireX override wins over the
+ * panel's share address; the panel's own endpoint is shown beneath it.
+ */
 function EndpointCell({ inbound }: { inbound: Inbound }) {
-  if (!inbound.publicAddress && !inbound.publicPort) return <>{inbound.port}</>
+  const panelEndpoint = inbound.shareAddress ? hostPort(inbound.shareAddress, inbound.port) : String(inbound.port)
+  if (!inbound.publicAddress && !inbound.publicPort) {
+    return <span className="block max-w-56 truncate" title={panelEndpoint}>{panelEndpoint}</span>
+  }
+  const host = inbound.publicAddress || inbound.shareAddress
   const port = inbound.publicPort || inbound.port
+  const endpoint = host ? hostPort(host, port) : String(port)
   return (
-    <span className="flex flex-col leading-tight">
-      <span className="text-foreground">
-        {inbound.publicAddress ? `${inbound.publicAddress}:${port}` : port}
-      </span>
-      <span className="text-xs">面板 {inbound.port}</span>
+    <span className="flex max-w-56 flex-col leading-tight">
+      <span className="truncate text-foreground" title={endpoint}>{endpoint}</span>
+      <span className="truncate text-xs" title={panelEndpoint}>面板 {panelEndpoint}</span>
     </span>
   )
 }
