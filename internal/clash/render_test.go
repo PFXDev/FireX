@@ -272,11 +272,32 @@ func TestProxyEntryWebSocketHeaders(t *testing.T) {
 	}
 }
 
+func TestProxyEntryXHTTP(t *testing.T) {
+	raw := "vless://u@cdn.example:2053?type=xhttp&security=tls&sni=cdn.example&alpn=h2%2Chttp%2F1.1&fp=chrome&path=%2Fp&host=cdn.example&mode=packet-up#N"
+	o, ok := ProxyEntry(mustParse(t, raw))
+	if !ok {
+		t.Fatal("ProxyEntry() rejected an xhttp proxy")
+	}
+	if network, _ := o.Get("network"); network != "xhttp" {
+		t.Errorf("network = %v, want xhttp", network)
+	}
+	if _, has := o.Get("flow"); has {
+		t.Error("xhttp proxy carries a flow")
+	}
+	opts, _ := o.Get("xhttp-opts")
+	want := map[string]string{"path": "/p", "host": "cdn.example", "mode": "packet-up"}
+	for key, value := range want {
+		if got, _ := opts.(*Ordered).Get(key); got != value {
+			t.Errorf("xhttp-opts.%s = %v, want %s", key, got, value)
+		}
+	}
+}
+
 func TestProxyEntryUnsupportedTransport(t *testing.T) {
-	// mihomo has no xhttp transport; emitting the proxy anyway would produce a
-	// config that fails to load rather than one node short.
-	if _, ok := ProxyEntry(mustParse(t, "vless://u@h.example:443?type=xhttp&security=tls#N")); ok {
-		t.Error("ProxyEntry() accepted an xhttp proxy")
+	// Emitting a transport mihomo cannot load would break the whole profile
+	// rather than leave it one node short.
+	if _, ok := ProxyEntry(mustParse(t, "vless://u@h.example:443?type=kcp&security=tls#N")); ok {
+		t.Error("ProxyEntry() accepted a kcp proxy")
 	}
 }
 

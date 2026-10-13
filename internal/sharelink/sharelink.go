@@ -25,10 +25,11 @@ type Proxy struct {
 	AlterID  int
 	Flow     string
 
-	Network         string // tcp | ws | grpc | h2 | http
+	Network         string // tcp | ws | grpc | h2 | http | httpupgrade | xhttp
 	Path            string
 	Host            string
 	GRPCServiceName string
+	XHTTPMode       string // auto | packet-up | stream-up | stream-one
 
 	TLS           bool
 	SNI           string
@@ -365,6 +366,10 @@ func applyTransport(p *Proxy, q url.Values) {
 	case "http":
 		p.Path = firstNonEmpty(q.Get("path"), "/")
 		p.Host = q.Get("host")
+	case "xhttp":
+		p.Path = firstNonEmpty(q.Get("path"), "/")
+		p.Host = q.Get("host")
+		p.XHTTPMode = q.Get("mode")
 	}
 }
 

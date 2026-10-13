@@ -162,14 +162,24 @@ func applyTransport(o *Ordered, p *sharelink.Proxy) {
 		}
 		opts.Set("path", []string{orDefault(p.Path, "/")})
 		o.Set("http-opts", opts)
+	case "xhttp":
+		opts := NewOrdered()
+		opts.Set("path", orDefault(p.Path, "/"))
+		if p.Host != "" {
+			opts.Set("host", p.Host)
+		}
+		if p.XHTTPMode != "" {
+			opts.Set("mode", p.XHTTPMode)
+		}
+		o.Set("xhttp-opts", opts)
 	}
 }
 
-// clashNetwork reports whether mihomo can carry this transport. xhttp and any
-// unknown transport have no mapping.
+// clashNetwork reports whether mihomo can carry this transport. Any unknown
+// transport has no mapping.
 func clashNetwork(network string) bool {
 	switch network {
-	case "", "tcp", "ws", "grpc", "h2", "http", "httpupgrade":
+	case "", "tcp", "ws", "grpc", "h2", "http", "httpupgrade", "xhttp":
 		return true
 	default:
 		return false
