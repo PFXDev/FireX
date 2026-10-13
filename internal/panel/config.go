@@ -83,6 +83,22 @@ func ShareAddress(config string) string {
 	return strings.TrimSpace(share.Addr)
 }
 
+// XHTTPMode is the server-side XHTTP mode in a discovered configuration,
+// lowercased. Empty means auto, or that the inbound is not XHTTP at all.
+func XHTTPMode(config string) string {
+	var c struct {
+		StreamSettings struct {
+			XHTTPSettings struct {
+				Mode string `json:"mode"`
+			} `json:"xhttpSettings"`
+		} `json:"streamSettings"`
+	}
+	if json.Unmarshal([]byte(config), &c) != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(c.StreamSettings.XHTTPSettings.Mode))
+}
+
 // ClientFlows reads the actual per-inbound values, rather than the panel's
 // canonical client record which can only represent one flow.
 func (i *Inbound) ClientFlows() map[string]string {

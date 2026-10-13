@@ -82,6 +82,9 @@ type Inbound struct {
 	// Nil preserves each existing client's flow when upgrading from a version
 	// without this setting. Discovery explicitly disables Vision for new rows.
 	Vision *bool `json:"vision"`
+	// XHTTPTuning renders an auto-mode XHTTP inbound for mihomo as stream-up
+	// with connection reuse. Other inbounds and share links ignore it.
+	XHTTPTuning bool `json:"xhttpTuning" gorm:"default:true"`
 
 	// PublicAddress and PublicPort are the endpoint clients actually dial when
 	// it differs from what the panel advertises. A panel only knows where xray

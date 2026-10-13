@@ -122,6 +122,10 @@ export interface Inbound {
   vision: boolean | null
   visionSupported: boolean
   visionReason: string
+  /** Render auto-mode XHTTP for mihomo as stream-up with connection reuse. */
+  xhttpTuning: boolean
+  /** Server-side XHTTP mode; empty is auto or not XHTTP. */
+  xhttpMode: string
   lastSeenAt: number
   name: string
   emoji: string

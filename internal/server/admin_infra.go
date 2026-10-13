@@ -262,6 +262,8 @@ type inboundRow struct {
 	// ShareAddress is the host the panel advertises, used when PublicAddress
 	// is empty. Empty when the panel derives it rather than storing one.
 	ShareAddress string `json:"shareAddress"`
+	// XHTTPMode is the server's XHTTP mode; empty is auto or not XHTTP.
+	XHTTPMode string `json:"xhttpMode"`
 }
 
 func inboundVisionReason(n model.Inbound) string {
@@ -330,7 +332,7 @@ func (s *Server) listInbounds(c *gin.Context) {
 	out := make([]inboundRow, 0, len(inbounds))
 	for _, n := range inbounds {
 		reason := inboundVisionReason(n)
-		out = append(out, inboundRow{Inbound: n, PanelName: names[n.PanelID], GroupCount: counts[n.ID], VisionSupported: reason == "", VisionReason: reason, ConfigState: configState(n, managed[n.ID]), ShareAddress: panel.ShareAddress(n.Config)})
+		out = append(out, inboundRow{Inbound: n, PanelName: names[n.PanelID], GroupCount: counts[n.ID], VisionSupported: reason == "", VisionReason: reason, ConfigState: configState(n, managed[n.ID]), ShareAddress: panel.ShareAddress(n.Config), XHTTPMode: panel.XHTTPMode(n.Config)})
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -342,6 +344,8 @@ type inboundRequest struct {
 	Enabled   *bool  `json:"enabled"`
 	UDP       *bool  `json:"udp"`
 	Vision    *bool  `json:"vision"`
+	// XHTTPTuning only changes how auto-mode XHTTP inbounds render for mihomo.
+	XHTTPTuning *bool `json:"xhttpTuning"`
 	// PublicAddress and PublicPort override the endpoint the panel advertises.
 	// Absent leaves the stored value; an empty string or zero clears it.
 	PublicAddress *string `json:"publicAddress"`
@@ -388,6 +392,9 @@ func (s *Server) updateInbound(c *gin.Context) {
 	}
 	if req.UDP != nil {
 		inbound.UDP = *req.UDP
+	}
+	if req.XHTTPTuning != nil {
+		inbound.XHTTPTuning = *req.XHTTPTuning
 	}
 	if req.Vision != nil {
 		if *req.Vision {

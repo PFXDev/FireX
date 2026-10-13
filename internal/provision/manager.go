@@ -164,13 +164,14 @@ func (m *Manager) DiscoverPanel(ctx context.Context, p *model.Panel) error {
 // group.
 func NewInbound(panelID uint, ib *panel.Inbound, now int64) model.Inbound {
 	row := model.Inbound{
-		PanelID:   panelID,
-		Name:      ib.Remark,
-		SortOrder: 100,
-		UDP:       true,
-		Vision:    new(bool),
-		Enabled:   false,
-		CreatedAt: now,
+		PanelID:     panelID,
+		Name:        ib.Remark,
+		SortOrder:   100,
+		UDP:         true,
+		Vision:      new(bool),
+		XHTTPTuning: true,
+		Enabled:     false,
+		CreatedAt:   now,
 	}
 	ApplyDiscovered(&row, ib, now)
 	return row

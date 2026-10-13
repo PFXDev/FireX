@@ -175,6 +175,45 @@ func applyTransport(o *Ordered, p *sharelink.Proxy) {
 	}
 }
 
+// TuneXHTTP renders an auto-mode XHTTP proxy as stream-up with connection
+// reuse, reporting whether it did. mihomo's auto settles on packet-up, whose
+// uploads Cloudflare buffers request by request, and mihomo reuses nothing
+// unless told to. stream-up needs h2 under TLS or REALITY and, behind
+// Cloudflare, the zone's gRPC switch.
+func TuneXHTTP(o *Ordered, p *sharelink.Proxy) bool {
+	if p.Network != "xhttp" || (p.XHTTPMode != "" && p.XHTTPMode != "auto") || !p.TLS {
+		return false
+	}
+	if len(p.ALPN) > 0 && !containsFold(p.ALPN, "h2") {
+		return false
+	}
+	raw, ok := o.Get("xhttp-opts")
+	if !ok {
+		return false
+	}
+	opts, ok := raw.(*Ordered)
+	if !ok {
+		return false
+	}
+	opts.Set("mode", "stream-up")
+	// Xray's XMUX defaults; mihomo has none of its own.
+	opts.Set("reuse-settings", NewOrdered().
+		Set("max-concurrency", "16-32").
+		Set("c-max-reuse-times", "0").
+		Set("h-max-request-times", "600-900").
+		Set("h-max-reusable-secs", "1800-3000"))
+	return true
+}
+
+func containsFold(values []string, want string) bool {
+	for _, v := range values {
+		if strings.EqualFold(strings.TrimSpace(v), want) {
+			return true
+		}
+	}
+	return false
+}
+
 // clashNetwork reports whether mihomo can carry this transport. Any unknown
 // transport has no mapping.
 func clashNetwork(network string) bool {

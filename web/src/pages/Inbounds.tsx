@@ -31,7 +31,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { Field, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from '@/components/ui/field'
+import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
@@ -49,6 +49,7 @@ type Draft = {
   enabled: boolean
   udp: boolean
   vision: boolean | null
+  xhttpTuning: boolean
   publicAddress: string
   publicPort: number
 }
@@ -75,7 +76,8 @@ export function InboundsPage() {
     setDraft({
       id: inbound.id, name: inbound.name, emoji: inbound.emoji,
       sortOrder: inbound.sortOrder, enabled: inbound.enabled, udp: inbound.udp,
-      vision: inbound.vision, publicAddress: inbound.publicAddress, publicPort: inbound.publicPort,
+      vision: inbound.vision, xhttpTuning: inbound.xhttpTuning,
+      publicAddress: inbound.publicAddress, publicPort: inbound.publicPort,
     })
   }
 
@@ -543,6 +545,24 @@ export function InboundsPage() {
                     onCheckedChange={(value) => setDraft({ ...draft, udp: value })}
                   />
                 </Field>
+                {editingInbound?.network === 'xhttp' && (
+                  <Field orientation="horizontal" data-disabled={pendingAction === 'save' || undefined}>
+                    <FieldContent>
+                      <FieldLabel htmlFor="inbound-xhttp-tuning">XHTTP 客户端优化</FieldLabel>
+                      <FieldDescription>
+                        {isAutoXHTTP(editingInbound.xhttpMode)
+                          ? 'mihomo 订阅改用 stream-up 并复用连接，上传和延迟明显好于 auto；经 Cloudflare 时需在 CF 打开 gRPC。分享链接不受影响。'
+                          : `服务端 mode 为 ${editingInbound.xhttpMode}，此项只对 auto 模式生效。`}
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id="inbound-xhttp-tuning"
+                      disabled={pendingAction === 'save'}
+                      checked={draft.xhttpTuning}
+                      onCheckedChange={(value) => setDraft({ ...draft, xhttpTuning: value })}
+                    />
+                  </Field>
+                )}
               </FieldGroup>
               <DialogFooter className="shrink-0">
                 <Button type="button" variant="outline" disabled={pendingAction === 'save'} onClick={() => setDraft(null)}>
@@ -572,6 +592,10 @@ export function InboundsPage() {
       />
     </div>
   )
+}
+
+function isAutoXHTTP(mode: string): boolean {
+  return mode === '' || mode === 'auto'
 }
 
 /** host:port as it appears in a link; IPv6 literals need brackets. */

@@ -293,6 +293,52 @@ func TestProxyEntryXHTTP(t *testing.T) {
 	}
 }
 
+func TestTuneXHTTP(t *testing.T) {
+	const base = "vless://u@cdn.example:8443?type=xhttp&security=tls&sni=cdn.example&path=%2Fp"
+	cases := []struct {
+		name  string
+		query string
+		tuned bool
+	}{
+		{"auto", "&mode=auto&alpn=h2%2Chttp%2F1.1", true},
+		{"mode omitted", "", true},
+		{"explicit packet-up", "&mode=packet-up", false},
+		{"explicit stream-one", "&mode=stream-one", false},
+		{"http/1.1 only", "&mode=auto&alpn=http%2F1.1", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := mustParse(t, base+tc.query+"#N")
+			o, ok := ProxyEntry(p)
+			if !ok {
+				t.Fatal("ProxyEntry() rejected an xhttp proxy")
+			}
+			wantMode, hadMode := p.XHTTPMode, p.XHTTPMode != ""
+			if got := TuneXHTTP(o, p); got != tc.tuned {
+				t.Fatalf("TuneXHTTP() = %v, want %v", got, tc.tuned)
+			}
+			opts, _ := o.Get("xhttp-opts")
+			mode, gotMode := opts.(*Ordered).Get("mode")
+			_, reuse := opts.(*Ordered).Get("reuse-settings")
+			if tc.tuned {
+				if mode != "stream-up" || !reuse {
+					t.Errorf("tuned xhttp-opts mode = %v, reuse-settings = %v", mode, reuse)
+				}
+				return
+			}
+			if reuse || gotMode != hadMode || (hadMode && mode != wantMode) {
+				t.Errorf("untuned xhttp-opts changed: mode = %v, reuse-settings = %v", mode, reuse)
+			}
+		})
+	}
+
+	plain := mustParse(t, "vless://u@h.example:80?type=xhttp&security=none&path=%2Fp&mode=auto#N")
+	o, _ := ProxyEntry(plain)
+	if TuneXHTTP(o, plain) {
+		t.Error("TuneXHTTP() tuned a proxy without TLS, where stream-up has no h2")
+	}
+}
+
 func TestProxyEntryUnsupportedTransport(t *testing.T) {
 	// Emitting a transport mihomo cannot load would break the whole profile
 	// rather than leave it one node short.

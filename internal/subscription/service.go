@@ -207,6 +207,9 @@ func matchPanel(inbounds []model.Inbound, links []string, usedNames map[string]b
 
 		entry := Entry{Inbound: inbound, Name: name, Link: sharelink.Rename(raw, name)}
 		if rendered, ok := clash.ProxyEntry(proxy); ok {
+			if inbound.XHTTPTuning {
+				clash.TuneXHTTP(rendered, proxy)
+			}
 			entry.Clash = rendered
 		} else {
 			warnings = append(warnings, fmt.Sprintf("%s: no mihomo equivalent for %s/%s", name, proxy.Type, proxy.Network))
