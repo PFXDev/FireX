@@ -5,6 +5,7 @@ import {
   ArrowUpIcon,
   ChevronDownIcon,
   EyeIcon,
+  FileTextIcon,
   LayoutTemplateIcon,
   ListTreeIcon,
   PencilIcon,
@@ -27,8 +28,9 @@ import type {
   Profile,
   RoutingMatrix,
   RoutingPreset,
+  RuleSet,
 } from "@/api";
-import { CodeBlock } from "@/components/code-display";
+import { CodeBlock, CodeTextarea } from "@/components/code-display";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
   LoadErrorAlert,
@@ -113,16 +115,19 @@ import {
 import { useUnsavedGuard } from "@/hooks/use-unsaved-guard";
 import { errorMessage } from "@/lib/format";
 import { reportSyncError } from "@/lib/sync";
+import {
+  dropRuleSetReferences,
+  renameRuleSetReferences,
+  routingDocument,
+  RULE_SET_TYPE,
+  ruleSetLineCount,
+  ruleSetUsers,
+  type RoutingRow as Row,
+} from "@/lib/routing-matrix";
 import { cn } from "@/lib/utils";
 
 /** profileId 0 addresses the default column every profile falls back to. */
 const DEFAULT_COLUMN = 0;
-
-/** One matrix row: a policy plus the egress it takes in each column. */
-type Row = {
-  policy: Policy;
-  cells: Map<number, Egress>;
-};
 
 type ProfileDraft = {
   id?: number;
@@ -158,6 +163,7 @@ function move<T>(list: T[], index: number, delta: number): T[] {
 
 export function RoutingPage() {
   const [rows, setRows] = useState<Row[]>([]);
+  const [ruleSets, setRuleSets] = useState<RuleSet[]>([]);
   const [options, setOptions] = useState<RoutingMatrix["options"] | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [groups, setGroups] = useState<NodeGroup[]>([]);
@@ -172,9 +178,14 @@ export function RoutingPage() {
   const [matrixScrolled, setMatrixScrolled] = useState(false);
 
   const [policyEditor, setPolicyEditor] = useState<number | null>(null);
+  const [ruleSetEditor, setRuleSetEditor] = useState<number | null>(null);
+  const [pendingRuleSetDelete, setPendingRuleSetDelete] = useState<
+    number | null
+  >(null);
   const [cellEditor, setCellEditor] = useState<{
     row: number;
     profileId: number;
+    draft: Egress | null;
   } | null>(null);
   const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
   const [pendingProfileDelete, setPendingProfileDelete] =
@@ -213,6 +224,7 @@ export function RoutingPage() {
           cells: byIndex.get(index) ?? new Map(),
         })),
       );
+      setRuleSets(matrix.ruleSets ?? []);
       setOptions(matrix.options);
       setNeedsReview(matrix.needsReview);
       setProfiles(nextProfiles);
@@ -262,15 +274,7 @@ export function RoutingPage() {
     setPreviewing(false);
     setPreview(null);
     try {
-      await api.put("/routing", {
-        policies: rows.map((row) => row.policy),
-        egresses: rows.flatMap((row, index) =>
-          [...row.cells.values()].map((egress) => ({
-            ...egress,
-            policyIndex: index,
-          })),
-        ),
-      });
+      await api.put("/routing", routingDocument(rows, ruleSets));
       setDirty(false);
       toast.success("分流已保存");
       if (!(await load())) toast.warning("分流已保存，但刷新失败，请重新加载");
@@ -371,11 +375,22 @@ export function RoutingPage() {
     const next = rows.map((row, i) => {
       if (i !== rowIndex) return row;
       const cells = new Map(row.cells);
-      if (egress) cells.set(profileId, egress);
+      if (egress) cells.set(profileId, { ...egress, profileId });
       else cells.delete(profileId);
       return { ...row, cells };
     });
     patchRows(next);
+  };
+
+  const openCellEditor = (row: number, profileId: number) => {
+    const own = rows[row].cells.get(profileId);
+    setCellEditor({
+      row,
+      profileId,
+      draft: own
+        ? { ...own, members: own.members.map((member) => ({ ...member })) }
+        : null,
+    });
   };
 
   const addPolicy = () => {
@@ -452,6 +467,35 @@ export function RoutingPage() {
         ),
       }));
     patchRows(stripped);
+  };
+
+  const addRuleSet = () => {
+    let name = "新规则集";
+    for (let i = 2; ruleSets.some((set) => set.name === name); i++)
+      name = `新规则集 ${i}`;
+    setRuleSets([...ruleSets, { id: 0, name, payload: "", remark: "" }]);
+    setDirty(true);
+    setRuleSetEditor(ruleSets.length);
+  };
+
+  const patchRuleSet = (index: number, values: Partial<RuleSet>) => {
+    setRuleSets(
+      ruleSets.map((set, i) => (i === index ? { ...set, ...values } : set)),
+    );
+    setDirty(true);
+  };
+
+  /** RULE-SET rules name a set by bare name, so the draft rows follow a rename. */
+  const renameRuleSet = (index: number, name: string) => {
+    const previous = ruleSets[index].name;
+    patchRuleSet(index, { name });
+    setRows(renameRuleSetReferences(rows, previous, name));
+  };
+
+  const removeRuleSet = (index: number) => {
+    const gone = ruleSets[index].name;
+    setRuleSets(ruleSets.filter((_, i) => i !== index));
+    patchRows(dropRuleSetReferences(rows, gone));
   };
 
   const saveProfile = async () => {
@@ -585,9 +629,6 @@ export function RoutingPage() {
   }
 
   const editingRow = policyEditor !== null ? rows[policyEditor] : null;
-  const editingCell = cellEditor
-    ? effective(rows[cellEditor.row], cellEditor.profileId)
-    : null;
 
   return (
     <div className="flex flex-col gap-6" aria-busy={saving} inert={saving}>
@@ -903,7 +944,7 @@ export function RoutingPage() {
                       false,
                     )}
                     onClick={() =>
-                      setCellEditor({ row: index, profileId: DEFAULT_COLUMN })
+                      openCellEditor(index, DEFAULT_COLUMN)
                     }
                   />
 
@@ -917,7 +958,7 @@ export function RoutingPage() {
                         !row.cells.has(profile.id),
                       )}
                       onClick={() =>
-                        setCellEditor({ row: index, profileId: profile.id })
+                        openCellEditor(index, profile.id)
                       }
                     />
                   ))}
@@ -957,6 +998,108 @@ export function RoutingPage() {
               ))}
             </TableBody>
           </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>规则集</CardTitle>
+          <CardDescription>
+            长的域名清单放在这里，策略里用一条「RULE-SET,规则集名称」引用。客户端每 6 小时自动拉取最新内容，套用预设也不会覆盖已有的同名规则集。和矩阵一起保存。
+          </CardDescription>
+          <CardAction>
+            <Button variant="outline" size="sm" onClick={addRuleSet}>
+              <PlusIcon data-icon="inline-start" />
+              新建规则集
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="px-0">
+          {ruleSets.length === 0 ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <FileTextIcon />
+                </EmptyMedia>
+                <EmptyTitle>还没有规则集</EmptyTitle>
+                <EmptyDescription>
+                  规则不多时直接写在策略里就够了；清单很长或经常增删时再建一个规则集。
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>规则集</TableHead>
+                  <TableHead>规则数</TableHead>
+                  <TableHead className="hidden md:table-cell">
+                    引用它的策略
+                  </TableHead>
+                  <TableHead>
+                    <span className="sr-only">操作</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {ruleSets.map((set, index) => {
+                  const users = ruleSetUsers(rows, set.name);
+                  return (
+                    <TableRow key={set.id || `new-${index}`}>
+                      <TableCell className="min-w-40 max-w-80 whitespace-normal [overflow-wrap:anywhere]">
+                        <div className="flex flex-col gap-1">
+                          <span className="font-medium">{set.name}</span>
+                          {set.remark && (
+                            <span className="text-xs text-muted-foreground">
+                              {set.remark}
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="tabular-nums">
+                        {ruleSetLineCount(set.payload)}
+                      </TableCell>
+                      <TableCell className="hidden whitespace-normal md:table-cell">
+                        {users.length === 0 ? (
+                          <StatusBadge tone="idle">未被引用</StatusBadge>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {users.map((name) => (
+                              <Badge key={name} variant="secondary">
+                                {name}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            aria-label={`编辑规则集 ${set.name}`}
+                            onClick={() => setRuleSetEditor(index)}
+                          >
+                            <PencilIcon data-icon="inline-start" />
+                            <span className="hidden sm:inline">编辑</span>
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label={`删除规则集 ${set.name}`}
+                            onClick={() => setPendingRuleSetDelete(index)}
+                          >
+                            <Trash2Icon data-icon="inline-start" />
+                            <span className="hidden sm:inline">删除</span>
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           )}
         </CardContent>
       </Card>
@@ -1056,9 +1199,44 @@ export function RoutingPage() {
         </CardContent>
       </Card>
 
+      <RuleSetDialog
+        set={ruleSetEditor !== null ? (ruleSets[ruleSetEditor] ?? null) : null}
+        nameTaken={(name) =>
+          ruleSets.some((set, i) => i !== ruleSetEditor && set.name === name)
+        }
+        onClose={() => setRuleSetEditor(null)}
+        onChange={(values) => {
+          if (ruleSetEditor !== null) patchRuleSet(ruleSetEditor, values);
+        }}
+        onRename={(name) => {
+          if (ruleSetEditor !== null) renameRuleSet(ruleSetEditor, name);
+        }}
+      />
+
+      <ConfirmDialog
+        open={pendingRuleSetDelete !== null}
+        onOpenChange={(open) => !open && setPendingRuleSetDelete(null)}
+        title={`删除规则集「${pendingRuleSetDelete !== null ? (ruleSets[pendingRuleSetDelete]?.name ?? "") : ""}」？`}
+        description={(() => {
+          const users =
+            pendingRuleSetDelete !== null && ruleSets[pendingRuleSetDelete]
+              ? ruleSetUsers(rows, ruleSets[pendingRuleSetDelete].name)
+              : [];
+          return users.length > 0
+            ? `「${users.join("」「")}」里引用它的 RULE-SET 规则会一并移除，这些流量会落到后面的规则。保存后才会真正生效。`
+            : "保存后才会真正生效。";
+        })()}
+        confirmLabel="删除规则集"
+        onConfirm={async () => {
+          if (pendingRuleSetDelete !== null) removeRuleSet(pendingRuleSetDelete);
+          setPendingRuleSetDelete(null);
+        }}
+      />
+
       <PolicyDialog
         row={editingRow}
         options={options}
+        ruleSetNames={ruleSets.map((set) => set.name)}
         onClose={() => setPolicyEditor(null)}
         onChange={(policy) => {
           if (policyEditor === null) return;
@@ -1092,12 +1270,12 @@ export function RoutingPage() {
         policyName={cellEditor ? rows[cellEditor.row].policy.name : ""}
         isFinal={cellEditor ? rows[cellEditor.row].policy.isFinal : false}
         isDefaultColumn={cellEditor?.profileId === DEFAULT_COLUMN}
-        own={
-          cellEditor
-            ? (rows[cellEditor.row].cells.get(cellEditor.profileId) ?? null)
+        own={cellEditor?.draft ?? null}
+        inherited={
+          cellEditor && cellEditor.profileId !== DEFAULT_COLUMN
+            ? (rows[cellEditor.row].cells.get(DEFAULT_COLUMN) ?? null)
             : null
         }
-        inherited={editingCell?.inherited ? editingCell.egress : null}
         options={options}
         groups={groups}
         policies={rows.map((row) => row.policy)}
@@ -1105,8 +1283,12 @@ export function RoutingPage() {
         memberMissing={memberMissing}
         onClose={() => setCellEditor(null)}
         onChange={(egress) => {
+          setCellEditor((editor) => editor ? { ...editor, draft: egress } : null);
+        }}
+        onConfirm={() => {
           if (!cellEditor) return;
-          setCell(cellEditor.row, cellEditor.profileId, egress);
+          setCell(cellEditor.row, cellEditor.profileId, cellEditor.draft);
+          setCellEditor(null);
         }}
       />
 
@@ -1247,9 +1429,94 @@ function CellButton({
   );
 }
 
+function RuleSetDialog({
+  set,
+  nameTaken,
+  onClose,
+  onChange,
+  onRename,
+}: {
+  set: RuleSet | null;
+  nameTaken: (name: string) => boolean;
+  onClose: () => void;
+  onChange: (values: Partial<RuleSet>) => void;
+  onRename: (name: string) => void;
+}) {
+  const name = set?.name.trim() ?? "";
+  const nameError = !set
+    ? ""
+    : !name
+      ? "请输入规则集名称。"
+      : name.includes(",")
+        ? "名称不能包含英文逗号。"
+        : nameTaken(name)
+          ? "已有同名的规则集。"
+          : "";
+  return (
+    <Dialog open={set !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="flex flex-col sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>编辑规则集</DialogTitle>
+          <DialogDescription>
+            客户端按 mihomo rule-provider 拉取这份清单。命中后走哪个出口，由引用它的策略决定。
+          </DialogDescription>
+        </DialogHeader>
+        {set && (
+          <FieldGroup className="min-w-0">
+            <Field data-invalid={nameError ? true : undefined}>
+              <FieldLabel htmlFor="rule-set-name">名称</FieldLabel>
+              <Input
+                id="rule-set-name"
+                value={set.name}
+                aria-invalid={nameError ? true : undefined}
+                onChange={(event) => onRename(event.target.value)}
+              />
+              {nameError ? (
+                <FieldError>{nameError}</FieldError>
+              ) : (
+                <FieldDescription>
+                  策略里写「RULE-SET,{name}」引用它。改名时引用它的规则会跟着改。
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="rule-set-payload">
+                规则（{ruleSetLineCount(set.payload)} 条）
+              </FieldLabel>
+              <CodeTextarea
+                id="rule-set-payload"
+                rows={14}
+                className="max-h-[50dvh] min-h-48"
+                placeholder={"# Hugging Face\nGEOSITE,huggingface\nDOMAIN-SUFFIX,githubusercontent.com"}
+                value={set.payload}
+                onChange={(event) => onChange({ payload: event.target.value })}
+              />
+              <FieldDescription>
+                每行一条「类型,内容」，不写策略名；IP 类规则可在末尾加 ,no-resolve。# 开头的行是注释。不能再嵌套 RULE-SET。保存时会逐行检查。
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="rule-set-remark">备注</FieldLabel>
+              <Input
+                id="rule-set-remark"
+                value={set.remark}
+                onChange={(event) => onChange({ remark: event.target.value })}
+              />
+            </Field>
+          </FieldGroup>
+        )}
+        <DialogFooter>
+          <Button onClick={onClose}>完成</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PolicyDialog({
   row,
   options,
+  ruleSetNames,
   onClose,
   onChange,
   onRename,
@@ -1257,6 +1524,7 @@ function PolicyDialog({
 }: {
   row: Row | null;
   options: RoutingMatrix["options"];
+  ruleSetNames: string[];
   onClose: () => void;
   onChange: (policy: Policy) => void;
   onRename: (name: string) => void;
@@ -1275,7 +1543,7 @@ function PolicyDialog({
       open={policy !== undefined}
       onOpenChange={(open) => !open && onClose()}
     >
-      <DialogContent className="sm:max-w-3xl">
+      <DialogContent className="flex flex-col sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>编辑分流策略</DialogTitle>
           <DialogDescription>
@@ -1283,7 +1551,7 @@ function PolicyDialog({
           </DialogDescription>
         </DialogHeader>
         {policy && (
-          <FieldGroup>
+          <FieldGroup className="min-w-0 shrink-0">
             <FieldGroup className="grid gap-4 sm:grid-cols-[6rem_1fr]">
               <Field>
                 <FieldLabel htmlFor="policy-icon">图标</FieldLabel>
@@ -1337,19 +1605,24 @@ function PolicyDialog({
               </Field>
             </FieldGroup>
 
-            <FieldSet>
+            <FieldSet className="min-w-0">
               <FieldLegend variant="label">
                 规则清单（{policy.rules.length} 条）
               </FieldLegend>
               <FieldDescription>
-                自上而下匹配。关掉开关的规则会保留但不下发。清单为空也没关系——那就是个纯粹给用户手切的选择器。
+                自上而下匹配。关掉开关的规则会保留但不下发。清单为空也没关系——那就是个纯粹给用户手切的选择器。长清单可以放进规则集，用 RULE-SET 引用。
               </FieldDescription>
-              <ScrollArea className="max-h-72 rounded-lg border">
+              <datalist id="policy-rule-set-names">
+                {ruleSetNames.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+              <ScrollArea className="h-72 max-h-[40dvh] min-w-0 rounded-lg border">
                 <div className="flex flex-col gap-2 p-3">
                   {policy.rules.map((rule, index) => (
                     <div
                       key={index}
-                      className="flex flex-wrap items-center gap-2"
+                      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[auto_11rem_minmax(0,1fr)_auto_auto]"
                       data-disabled={rule.disabled || undefined}
                     >
                       <Switch
@@ -1380,7 +1653,7 @@ function PolicyDialog({
                         }
                       >
                         <SelectTrigger
-                          className="w-44"
+                          className="col-span-2 w-full min-w-0 sm:col-span-1"
                           aria-label={`规则 ${index + 1} 的匹配类型`}
                         >
                           <SelectValue />
@@ -1397,11 +1670,20 @@ function PolicyDialog({
                       </Select>
                       <Input
                         className={cn(
-                          "flex-1",
+                          "col-span-3 sm:col-span-1",
                           rule.disabled && "line-through opacity-60",
                         )}
                         aria-label={`规则 ${index + 1} 的内容`}
-                        placeholder="例如 openai"
+                        placeholder={
+                          rule.type === RULE_SET_TYPE
+                            ? "规则集名称"
+                            : "例如 openai"
+                        }
+                        list={
+                          rule.type === RULE_SET_TYPE
+                            ? "policy-rule-set-names"
+                            : undefined
+                        }
                         aria-invalid={!rule.value.trim() || undefined}
                         value={rule.value}
                         onChange={(event) =>
@@ -1417,7 +1699,7 @@ function PolicyDialog({
                       />
                       <Field
                         orientation="horizontal"
-                        className="w-auto"
+                        className="col-span-2 w-auto sm:col-span-1"
                         data-disabled={
                           !options.noResolveTypes[rule.type] || undefined
                         }
@@ -1448,47 +1730,49 @@ function PolicyDialog({
                           no-resolve
                         </FieldLabel>
                       </Field>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`上移规则 ${index + 1}`}
-                        disabled={index === 0}
-                        onClick={() =>
-                          onChange({
-                            ...policy,
-                            rules: move(policy.rules, index, -1),
-                          })
-                        }
-                      >
-                        <ArrowUpIcon />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`下移规则 ${index + 1}`}
-                        disabled={index === policy.rules.length - 1}
-                        onClick={() =>
-                          onChange({
-                            ...policy,
-                            rules: move(policy.rules, index, 1),
-                          })
-                        }
-                      >
-                        <ArrowDownIcon />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`删除规则 ${index + 1}`}
-                        onClick={() =>
-                          onChange({
-                            ...policy,
-                            rules: policy.rules.filter((_, i) => i !== index),
-                          })
-                        }
-                      >
-                        <Trash2Icon />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`上移规则 ${index + 1}`}
+                          disabled={index === 0}
+                          onClick={() =>
+                            onChange({
+                              ...policy,
+                              rules: move(policy.rules, index, -1),
+                            })
+                          }
+                        >
+                          <ArrowUpIcon />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`下移规则 ${index + 1}`}
+                          disabled={index === policy.rules.length - 1}
+                          onClick={() =>
+                            onChange({
+                              ...policy,
+                              rules: move(policy.rules, index, 1),
+                            })
+                          }
+                        >
+                          <ArrowDownIcon />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`删除规则 ${index + 1}`}
+                          onClick={() =>
+                            onChange({
+                              ...policy,
+                              rules: policy.rules.filter((_, i) => i !== index),
+                            })
+                          }
+                        >
+                          <Trash2Icon />
+                        </Button>
+                      </div>
                     </div>
                   ))}
                   <div>
@@ -1553,6 +1837,7 @@ function EgressDialog({
   memberMissing,
   onClose,
   onChange,
+  onConfirm,
 }: {
   open: boolean;
   policyName: string;
@@ -1569,6 +1854,7 @@ function EgressDialog({
   memberMissing: (member: EgressMember) => boolean;
   onClose: () => void;
   onChange: (egress: Egress | null) => void;
+  onConfirm: () => void;
 }) {
   const mode: "inherit" | "custom" | "hidden" =
     own === null ? "inherit" : own.hidden ? "hidden" : "custom";
@@ -1825,7 +2111,8 @@ function EgressDialog({
         </FieldGroup>
 
         <DialogFooter>
-          <Button onClick={onClose}>完成</Button>
+          <Button variant="outline" onClick={onClose}>取消</Button>
+          <Button onClick={onConfirm}>确认</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

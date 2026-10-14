@@ -4,12 +4,14 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/PFXDev/FireX/internal/model"
+	"github.com/PFXDev/FireX/internal/routing"
 	"github.com/PFXDev/FireX/internal/subscription"
 )
 
@@ -63,7 +65,7 @@ func (s *Server) handleSubscription(c *gin.Context) {
 	c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(filename))
 
 	if target == targetMihomo {
-		yaml, err := s.subs.Clash(result)
+		yaml, err := s.subs.Clash(result, s.subBase(c))
 		if err != nil {
 			c.String(http.StatusInternalServerError, "template render failed: %v", err)
 			return
@@ -73,6 +75,39 @@ func (s *Server) handleSubscription(c *gin.Context) {
 		return
 	}
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(subscription.Base64(result)))
+}
+
+// handleRuleSet serves one rule set as the plain-text classical payload a
+// mihomo rule-provider reads. Any subscription token may fetch any set: the
+// lists are shared by every profile, and the token only keeps them off the
+// open internet.
+func (s *Server) handleRuleSet(c *gin.Context) {
+	var count int64
+	if err := s.db.Model(&model.User{}).Where("sub_token = ?", c.Param("token")).Count(&count).Error; err != nil || count == 0 {
+		c.String(http.StatusNotFound, "not found")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.String(http.StatusNotFound, "not found")
+		return
+	}
+	var set model.RuleSet
+	if err := s.db.First(&set, id).Error; err != nil {
+		c.String(http.StatusNotFound, "not found")
+		return
+	}
+	lines, err := routing.RuleSetLines(set.Payload)
+	if err != nil {
+		c.String(http.StatusInternalServerError, "rule set invalid: %v", err)
+		return
+	}
+	body := strings.Join(lines, "\n")
+	if body != "" {
+		body += "\n"
+	}
+	c.Header("Cache-Control", "no-store")
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(body))
 }
 
 func detectTarget(userAgent string) string {

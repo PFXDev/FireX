@@ -123,27 +123,28 @@ type cell struct {
 // Compile renders the whole matrix down to one profile's proxy-groups and rule
 // lines. References that no longer resolve — a node group the profile does not
 // grant, a policy that is hidden here — are dropped rather than emitted, and
-// any group left empty is pruned by clash.Render.
-func Compile(db *store.DB, profileID uint, proxies []Proxy) (clash.Input, error) {
+// any group left empty is pruned by clash.Render. Every rule set the rules
+// reference is emitted as a rule-provider served from ruleSetURL.
+func Compile(db *store.DB, profileID uint, proxies []Proxy, ruleSetURL RuleSetURL) (clash.Input, error) {
 	groups, err := Groups(db, profileID)
 	if err != nil {
 		return clash.Input{}, err
 	}
-	return compile(db, profileID, groups, proxies)
+	return compile(db, profileID, groups, proxies, ruleSetURL)
 }
 
 // CompileDefault renders the default column over every enabled node group, so
 // the preview can show what the defaults look like before a profile narrows
 // them. No user is ever served this.
-func CompileDefault(db *store.DB, proxies []Proxy) (clash.Input, error) {
+func CompileDefault(db *store.DB, proxies []Proxy, ruleSetURL RuleSetURL) (clash.Input, error) {
 	groups, err := AllGroups(db)
 	if err != nil {
 		return clash.Input{}, err
 	}
-	return compile(db, model.DefaultProfileID, groups, proxies)
+	return compile(db, model.DefaultProfileID, groups, proxies, ruleSetURL)
 }
 
-func compile(db *store.DB, profileID uint, groups []model.NodeGroup, proxies []Proxy) (clash.Input, error) {
+func compile(db *store.DB, profileID uint, groups []model.NodeGroup, proxies []Proxy, ruleSetURL RuleSetURL) (clash.Input, error) {
 	in := clash.Input{Proxies: make([]clash.Proxy, 0, len(proxies))}
 	proxyNames := make([]string, 0, len(proxies))
 	nameByInbound := make(map[uint]string, len(proxies))
@@ -276,7 +277,8 @@ func compile(db *store.DB, profileID uint, groups []model.NodeGroup, proxies []P
 	}
 
 	in.Rules = compileRules(cells)
-	return in, nil
+	in.RuleProviders, err = ruleProviders(db, cells, ruleSetURL)
+	return in, err
 }
 
 // compileRules walks the policies in order, emitting each one's rules against

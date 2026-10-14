@@ -439,7 +439,7 @@ func (s *Server) previewSubscription(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	yaml, renderErr := s.subs.Clash(result)
+	yaml, renderErr := s.subs.Clash(result, s.subBase(c))
 
 	type entryView struct {
 		Name     string `json:"name"`

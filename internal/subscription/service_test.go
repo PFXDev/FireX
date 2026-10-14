@@ -141,7 +141,7 @@ func TestClashOutputRendersNodeGroupsAndPolicies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	out, err := f.svc.Clash(result)
+	out, err := f.svc.Clash(result, "https://sub.example.com")
 	if err != nil {
 		t.Fatalf("Clash() error = %v", err)
 	}
@@ -204,7 +204,7 @@ func TestClashOutputHonoursProfileWhitelist(t *testing.T) {
 	if len(result.Entries) != 1 {
 		t.Fatalf("entries = %d, want only the whitelisted group's inbound", len(result.Entries))
 	}
-	out, err := f.svc.Clash(result)
+	out, err := f.svc.Clash(result, "https://sub.example.com")
 	if err != nil {
 		t.Fatalf("Clash() error = %v", err)
 	}
@@ -266,7 +266,7 @@ func TestBuildReportsPanelFailureWithoutLosingOtherPanels(t *testing.T) {
 		t.Fatalf("warnings = %v, want the panel failure recorded", result.Warnings)
 	}
 	// Rendering must still produce a loadable profile, not an error page.
-	out, err := f.svc.Clash(result)
+	out, err := f.svc.Clash(result, "https://sub.example.com")
 	if err != nil {
 		t.Fatalf("Clash() error = %v", err)
 	}
@@ -319,7 +319,7 @@ func TestClashHonoursPerInboundUdpToggle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	out, err := f.svc.Clash(result)
+	out, err := f.svc.Clash(result, "https://sub.example.com")
 	if err != nil {
 		t.Fatalf("Clash() error = %v", err)
 	}
@@ -397,7 +397,7 @@ func TestPublicEndpointOverridesPanelEndpoint(t *testing.T) {
 		t.Errorf("link = %q, the other inbound must keep the panel's endpoint", result.Entries[1].Link)
 	}
 
-	out, err := f.svc.Clash(result)
+	out, err := f.svc.Clash(result, "https://sub.example.com")
 	if err != nil {
 		t.Fatalf("Clash() error = %v", err)
 	}

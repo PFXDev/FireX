@@ -25,6 +25,11 @@ const schemaVersion = 2
 // cleared the first time the matrix is saved.
 const SettingRoutingReview = "routing.review"
 
+// SettingClashTemplate holds the admin-editable mihomo template. It lives here
+// rather than with the renderer so routing validation can read the
+// rule-providers a template declares.
+const SettingClashTemplate = "clash.template"
+
 // Legacy setting keys, read once during migration and then dropped.
 const (
 	legacyKeyRouting = "clash.routing"

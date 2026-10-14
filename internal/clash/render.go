@@ -33,6 +33,14 @@ type Group struct {
 	Hidden    bool
 }
 
+// RuleProvider is a rule set the client fetches over HTTP as classical rule
+// lines in plain text.
+type RuleProvider struct {
+	Name     string
+	URL      string
+	Interval int
+}
+
 type Input struct {
 	Proxies []Proxy
 	// Groups is the whole proxy-group list in emit order: the policies a client
@@ -40,6 +48,9 @@ type Input struct {
 	Groups []Group
 	// Rules are complete mihomo rule lines, the trailing MATCH included.
 	Rules []string
+	// RuleProviders are merged into the template's own rule-providers; on a
+	// name clash the generated entry wins.
+	RuleProviders []RuleProvider
 }
 
 // GroupTypes are the mihomo proxy-group types FireX generates.
@@ -54,23 +65,9 @@ const (
 
 // Render substitutes the user's config into the template and returns YAML.
 func Render(template string, in Input) (string, error) {
-	if strings.TrimSpace(template) == "" {
-		template = DefaultTemplate
-	}
-	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(template), &doc); err != nil {
-		return "", fmt.Errorf("clash: parse template: %w", err)
-	}
-	if len(doc.Content) == 0 {
-		return "", fmt.Errorf("clash: empty template")
-	}
-	value, err := nodeToValue(doc.Content[0])
+	root, err := parseTemplate(template)
 	if err != nil {
-		return "", fmt.Errorf("clash: parse template: %w", err)
-	}
-	root, ok := value.(*Ordered)
-	if !ok {
-		return "", fmt.Errorf("clash: template root must be a mapping")
+		return "", err
 	}
 	// Templates carried over from the token era may still hold a `firex:` block
 	// that tuned the generated region groups. It means nothing now and mihomo
@@ -99,12 +96,70 @@ func Render(template string, in Input) (string, error) {
 	}
 	root.Set("rules", rules)
 	rewriteRules(root, surviving(groups), firstGroupName(groups))
+	setRuleProviders(root, in.RuleProviders)
 
 	out, err := yaml.Marshal(root)
 	if err != nil {
 		return "", fmt.Errorf("clash: encode: %w", err)
 	}
 	return string(out), nil
+}
+
+// TemplateRuleProviders lists the rule-provider names a template declares
+// itself, so a RULE-SET rule naming one is not mistaken for a dangling one.
+func TemplateRuleProviders(template string) ([]string, error) {
+	root, err := parseTemplate(template)
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := root.Get("rule-providers")
+	providers, ok := raw.(*Ordered)
+	if !ok {
+		return nil, nil
+	}
+	return append([]string(nil), providers.Keys()...), nil
+}
+
+func parseTemplate(template string) (*Ordered, error) {
+	if strings.TrimSpace(template) == "" {
+		template = DefaultTemplate
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(template), &doc); err != nil {
+		return nil, fmt.Errorf("clash: parse template: %w", err)
+	}
+	if len(doc.Content) == 0 {
+		return nil, fmt.Errorf("clash: empty template")
+	}
+	value, err := nodeToValue(doc.Content[0])
+	if err != nil {
+		return nil, fmt.Errorf("clash: parse template: %w", err)
+	}
+	root, ok := value.(*Ordered)
+	if !ok {
+		return nil, fmt.Errorf("clash: template root must be a mapping")
+	}
+	return root, nil
+}
+
+func setRuleProviders(root *Ordered, providers []RuleProvider) {
+	if len(providers) == 0 {
+		return
+	}
+	raw, _ := root.Get("rule-providers")
+	merged, ok := raw.(*Ordered)
+	if !ok {
+		merged = NewOrdered()
+	}
+	for _, p := range providers {
+		merged.Set(p.Name, NewOrdered().
+			Set("type", "http").
+			Set("behavior", "classical").
+			Set("format", "text").
+			Set("url", p.URL).
+			Set("interval", p.Interval))
+	}
+	root.Set("rule-providers", merged)
 }
 
 // forceFakeIP pins a template's DNS to fake-ip. The stock routing leans on it:

@@ -19,10 +19,12 @@ var RuleTypes = []string{
 }
 
 // NoResolveTypes are the matchers where `no-resolve` is meaningful: it tells
-// mihomo not to resolve a domain just to test an IP rule against it.
+// mihomo not to resolve a domain just to test an IP rule against it. On a
+// RULE-SET it covers the IP rules inside the set.
 var NoResolveTypes = map[string]bool{
 	"GEOIP": true, "IP-CIDR": true, "IP-CIDR6": true,
 	"IP-SUFFIX": true, "IP-ASN": true, "SRC-IP-CIDR": true,
+	RuleSetType: true,
 }
 
 // MemberKinds are the egress member kinds the editor offers.
@@ -111,6 +113,10 @@ func Validate(db *store.DB) error {
 	for i := range groups {
 		groupNames[groups[i].Name] = true
 	}
+	ruleSets, err := validateRuleSets(db)
+	if err != nil {
+		return err
+	}
 	var rules []model.Rule
 	if err := db.Find(&rules).Error; err != nil {
 		return err
@@ -125,6 +131,10 @@ func Validate(db *store.DB) error {
 		}
 		if strings.Contains(value, ",") {
 			return fmt.Errorf("%s 规则的内容「%s」不能包含英文逗号", rule.Type, value)
+		}
+		// mihomo refuses to load a config whose rule names a missing provider.
+		if rule.Type == RuleSetType && !rule.Disabled && !ruleSets[value] {
+			return fmt.Errorf("RULE-SET 规则引用了不存在的规则集「%s」", value)
 		}
 	}
 

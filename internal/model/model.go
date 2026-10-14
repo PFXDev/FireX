@@ -229,6 +229,24 @@ type Rule struct {
 	Disabled  bool   `json:"disabled"`
 }
 
+// RuleSet is a named rule list FireX serves to clients as a mihomo
+// rule-provider. A policy uses it through a RULE-SET rule naming it, so a long
+// host list stays out of the matrix and survives a preset swap, and clients
+// pick up edits on the provider's own refresh rather than the next
+// subscription fetch.
+type RuleSet struct {
+	ID   uint   `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name string `json:"name" gorm:"uniqueIndex;not null"`
+	// Payload is classical rule lines without a target, one per line, such as
+	// DOMAIN-SUFFIX,hf.co. Blank lines and # comments are kept for the editor
+	// and stripped when served.
+	Payload string `json:"payload"`
+	Remark  string `json:"remark"`
+
+	CreatedAt int64 `json:"createdAt" gorm:"autoCreateTime:milli"`
+	UpdatedAt int64 `json:"updatedAt" gorm:"autoUpdateTime:milli"`
+}
+
 // Profile is one tier's routing: the node groups its users may reach, plus the
 // column of Egress overrides that differ from the defaults. Several plans may
 // share one profile — monthly and yearly VIP differ in price, not in routing.
@@ -461,7 +479,7 @@ func AllModels() []any {
 	return []any{
 		&Admin{}, &Session{}, &Panel{}, &Inbound{},
 		&NodeGroup{}, &NodeGroupTag{}, &NodeGroupInbound{},
-		&Policy{}, &Rule{},
+		&Policy{}, &Rule{}, &RuleSet{},
 		&Profile{}, &ProfileNodeGroup{}, &Egress{}, &EgressMember{},
 		&Plan{}, &User{}, &UserPanel{}, &Setting{},
 		&InboundConfig{}, &InboundTemplate{}, &InboundDeployment{},

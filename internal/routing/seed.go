@@ -29,6 +29,12 @@ type seedPolicy struct {
 	rules   []seedRule
 }
 
+type seedRuleSet struct {
+	name    string
+	remark  string
+	payload string
+}
+
 func policyRef(name string) seedMember  { return seedMember{model.MemberPolicy, name} }
 func builtinRef(name string) seedMember { return seedMember{model.MemberBuiltin, name} }
 
@@ -45,11 +51,14 @@ type Preset struct {
 	Name        string
 	Description string
 	policies    []seedPolicy
+	// ruleSets are created only when no set of the same name exists, so
+	// reapplying a preset never discards an edited list.
+	ruleSets []seedRuleSet
 }
 
 // Presets lists the built-in layouts, the stock one first. Rules lean on the
-// built-in GEOSITE/GEOIP databases so a client needs no external rule-provider
-// fetch to come up.
+// built-in GEOSITE/GEOIP databases so a client needs no third-party
+// rule-provider to come up; the only rule sets are ones FireX serves itself.
 //
 // One order serves both rule precedence and the client's group list, so the
 // manual switches lead, ad blocking comes before anything that could send the
@@ -62,8 +71,9 @@ var Presets = []Preset{
 	{
 		Key:         "standard",
 		Name:        "标准",
-		Description: "OpenAI、Claude 与其他 AI 分开，另有电报、国外媒体、苹果服务；全球直连可切到 IPv6 优先。",
+		Description: "独立分流 AI、电报、媒体、谷歌和 Steam；海外大流量下载用可编辑的规则集单独选代理，游戏 CDN 默认直连。",
 		policies:    standardPolicies,
+		ruleSets:    []seedRuleSet{bulkDownloadSet},
 	},
 	{
 		Key:         "lite",
@@ -105,6 +115,66 @@ var (
 		members: []seedMember{allGroupsRef, policyRef("节点选择")},
 		rules:   []seedRule{{matcher: "GEOSITE", value: "anthropic"}},
 	}
+	// Keep this after the AI and media rows: Google's list also includes
+	// Gemini and YouTube, which should retain their dedicated egresses.
+	googleServices = seedPolicy{
+		name: "谷歌服务", icon: "🔎",
+		members: []seedMember{policyRef("节点选择"), policyRef("自动选择"), allGroupsRef},
+		rules: []seedRule{
+			{matcher: "GEOSITE", value: "google"},
+			{matcher: "GEOIP", value: "google", noResolve: true},
+		},
+	}
+	// Large downloads from blocked or slow overseas sources get their own
+	// switch, so they can ride a high-bandwidth or cheap exit. The host list
+	// is a rule set rather than rows here: it changes far more often than the
+	// layout and must survive a preset swap. It precedes OpenAI, AI and
+	// Google because their lists overlap it.
+	bulkDownloads = seedPolicy{
+		name: "大流量下载", icon: "📥",
+		members: []seedMember{policyRef("节点选择"), allGroupsRef},
+		rules:   []seedRule{{matcher: RuleSetType, value: bulkDownloadSet.name}},
+	}
+	// Upstream GEOSITE lists come first; explicit hosts only fill what no
+	// list scopes narrowly enough. GEOSITE,github would also take the main
+	// site, Copilot and npm.
+	bulkDownloadSet = seedRuleSet{
+		name:   "大流量下载",
+		remark: "被墙或海外直连很慢的大文件下载源",
+		payload: `# Hugging Face 模型与数据集
+GEOSITE,huggingface
+# GitHub Release、Raw 文件与源码包
+DOMAIN-SUFFIX,githubusercontent.com
+DOMAIN,codeload.github.com
+# Google Drive 下载
+DOMAIN,drive.usercontent.google.com
+DOMAIN-REGEX,^doc-[^.]+-docs\.googleusercontent\.com$
+# MEGA
+GEOSITE,mega
+# ChatGPT 客户端安装包
+DOMAIN,persistent.oaistatic.com
+# Debian / Ubuntu 官方 APT 源，Arch 官方源与 AUR
+GEOSITE,debian
+GEOSITE,ubuntu
+GEOSITE,archlinux
+`,
+	}
+	// Game CDNs have usable domestic mirrors and should not consume the
+	// overseas download exit. Keep them ahead of Steam's storefront rules.
+	gameDownloads = seedPolicy{
+		name: "游戏下载", icon: "🕹️",
+		members: []seedMember{builtinRef("DIRECT"), policyRef("节点选择"), allGroupsRef},
+		rules: []seedRule{
+			{matcher: "GEOSITE", value: "category-game-platforms-download"},
+			{matcher: "DOMAIN-SUFFIX", value: "steamcontent.com"},
+			{matcher: "DOMAIN-SUFFIX", value: "steamcdn-a.akamaihd.net"},
+		},
+	}
+	steam = seedPolicy{
+		name: "Steam", icon: "🎮",
+		members: []seedMember{policyRef("节点选择"), policyRef("自动选择"), allGroupsRef, builtinRef("DIRECT")},
+		rules:   []seedRule{{matcher: "GEOSITE", value: "steam"}},
+	}
 	// DIRECT leads because it is safe on every network: it races both
 	// families for TCP and sends UDP over IPv4. DIRECT-V6 is offered for
 	// clients with good IPv6, but its UDP never falls back to IPv4, which
@@ -133,6 +203,7 @@ var standardPolicies = []seedPolicy{
 		members: []seedMember{builtinRef("REJECT"), builtinRef("DIRECT")},
 		rules:   []seedRule{{matcher: "GEOSITE", value: "category-ads-all"}},
 	},
+	bulkDownloads,
 	openAI,
 	claude,
 	{
@@ -162,6 +233,9 @@ var standardPolicies = []seedPolicy{
 			{matcher: "GEOIP", value: "netflix", noResolve: true},
 		},
 	},
+	googleServices,
+	gameDownloads,
+	steam,
 	// Apple serves the mainland well from its own CDN; the row exists so a
 	// user who wants the foreign storefront can flip it in one place.
 	{
@@ -208,7 +282,7 @@ func Seed(db *store.DB) error {
 		return ensureDefaultProfile(db)
 	}
 
-	if err := install(db, Presets[0].policies); err != nil {
+	if err := install(db, Presets[0]); err != nil {
 		return err
 	}
 	return ensureDefaultProfile(db)
@@ -217,7 +291,9 @@ func Seed(db *store.DB) error {
 // ApplyPreset replaces every policy with a built-in layout. Profiles and their
 // whitelists are untouched; a profile's override survives when the preset has
 // a policy of the same name, minus any member pointing at a policy the preset
-// lacks. Callers run it inside a transaction and Validate before committing.
+// lacks. Rule sets are kept, and the preset's own are added only where none of
+// that name exists. Callers run it inside a transaction and Validate before
+// committing.
 func ApplyPreset(db *store.DB, preset Preset) error {
 	var oldPolicies []model.Policy
 	if err := db.Find(&oldPolicies).Error; err != nil {
@@ -251,7 +327,7 @@ func ApplyPreset(db *store.DB, preset Preset) error {
 			return err
 		}
 	}
-	if err := install(db, preset.policies); err != nil {
+	if err := install(db, preset); err != nil {
 		return err
 	}
 
@@ -300,9 +376,21 @@ func ApplyPreset(db *store.DB, preset Preset) error {
 }
 
 // install writes a layout's policies, rules and default column into an empty
-// matrix.
-func install(db *store.DB, policies []seedPolicy) error {
-	for i, spec := range policies {
+// matrix, plus whichever of its rule sets do not exist yet.
+func install(db *store.DB, preset Preset) error {
+	for _, spec := range preset.ruleSets {
+		var count int64
+		if err := db.Model(&model.RuleSet{}).Where("name = ?", spec.name).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			continue
+		}
+		if err := db.Create(&model.RuleSet{Name: spec.name, Payload: spec.payload, Remark: spec.remark}).Error; err != nil {
+			return err
+		}
+	}
+	for i, spec := range preset.policies {
 		policy := model.Policy{
 			Name: spec.name, Icon: spec.icon, IsFinal: spec.final,
 			SortOrder: (i + 1) * 10, Enabled: true,

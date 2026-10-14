@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -22,8 +23,15 @@ type presetConfig struct {
 		Name    string   `yaml:"name"`
 		Proxies []string `yaml:"proxies"`
 	} `yaml:"proxy-groups"`
-	Rules []string `yaml:"rules"`
-	DNS   struct {
+	Rules         []string `yaml:"rules"`
+	RuleProviders map[string]struct {
+		Type     string `yaml:"type"`
+		Behavior string `yaml:"behavior"`
+		Format   string `yaml:"format"`
+		URL      string `yaml:"url"`
+		Interval int    `yaml:"interval"`
+	} `yaml:"rule-providers"`
+	DNS struct {
 		EnhancedMode string `yaml:"enhanced-mode"`
 		RespectRules bool   `yaml:"respect-rules"`
 	} `yaml:"dns"`
@@ -63,16 +71,80 @@ func TestRoutingPresetsApplyAndRender(t *testing.T) {
 			t.Errorf("rules lack %q: %v", want, cfg.Rules)
 		}
 	}
+	assertStandardServiceRouting(t, cfg)
 
 	for _, preset := range routing.Presets {
 		h.mustDo(http.MethodPost, "/api/routing/presets/"+preset.Key, nil)
 		cfg := h.subscription(u.SubToken)
+		if preset.Key == "standard" {
+			assertStandardServiceRouting(t, cfg)
+		}
 		if len(cfg.Rules) == 0 || cfg.Rules[len(cfg.Rules)-1] != "MATCH,🐟 漏网之鱼" {
 			t.Errorf("preset %s: rules = %v", preset.Key, cfg.Rules)
 		}
 	}
 	if resp, _ := h.do(http.MethodPost, "/api/routing/presets/nope", nil); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("unknown preset: status %d, want 404", resp.StatusCode)
+	}
+}
+
+// The overlapping service lists only work in one order: whichever row matches
+// first takes the connection, so each narrower row must precede the broader
+// list that also names its hosts.
+func assertStandardServiceRouting(t *testing.T, cfg presetConfig) {
+	t.Helper()
+	firstRule := func(target string) int {
+		return slices.IndexFunc(cfg.Rules, func(rule string) bool {
+			return strings.HasSuffix(rule, ","+target) || strings.Contains(rule, ","+target+",")
+		})
+	}
+	for _, pair := range [][2]string{
+		{"📥 大流量下载", "🤖 OpenAI"},
+		{"📥 大流量下载", "✨ AI 服务"},
+		{"📥 大流量下载", "🔎 谷歌服务"},
+		{"✨ AI 服务", "🔎 谷歌服务"},
+		{"📺 国外媒体", "🔎 谷歌服务"},
+		{"🕹️ 游戏下载", "🎮 Steam"},
+		{"🔎 谷歌服务", "🌐 国外网站"},
+		{"🎮 Steam", "🌐 国外网站"},
+	} {
+		first, second := firstRule(pair[0]), firstRule(pair[1])
+		if first < 0 || second < 0 || first >= second {
+			t.Errorf("want %s rules before %s, indexes = %d, %d", pair[0], pair[1], first, second)
+		}
+	}
+	if !slices.Contains(cfg.Rules, "RULE-SET,大流量下载,📥 大流量下载") {
+		t.Errorf("大流量下载 does not use its rule set: %v", cfg.Rules)
+	}
+	if p, ok := cfg.RuleProviders["大流量下载"]; !ok || p.Type != "http" || p.Behavior != "classical" || p.Format != "text" || !strings.Contains(p.URL, "/rules/") {
+		t.Errorf("rule-provider 大流量下载 = %+v, want an http classical text provider served by FireX", p)
+	}
+	for _, want := range []struct {
+		name  string
+		first string
+	}{
+		{"🔎 谷歌服务", "🚀 节点选择"},
+		{"📥 大流量下载", "🚀 节点选择"},
+		{"🕹️ 游戏下载", "DIRECT"},
+		{"🎮 Steam", "🚀 节点选择"},
+	} {
+		index := slices.IndexFunc(cfg.Groups, func(g struct {
+			Name    string   `yaml:"name"`
+			Proxies []string `yaml:"proxies"`
+		}) bool {
+			return g.Name == want.name
+		})
+		if index < 0 {
+			t.Errorf("groups lack %q", want.name)
+			continue
+		}
+		members := cfg.Groups[index].Proxies
+		if len(members) == 0 || members[0] != want.first {
+			t.Errorf("%s members = %v, want %s first", want.name, members, want.first)
+		}
+		if want.name == "🎮 Steam" && !slices.Contains(members, "DIRECT") {
+			t.Error("Steam group lacks DIRECT")
+		}
 	}
 }
 

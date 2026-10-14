@@ -248,9 +248,23 @@ export interface Egress {
   members: EgressMember[]
 }
 
+/**
+ * A named rule list served to clients as a rule-provider. Policies reach it
+ * through a RULE-SET rule whose value is the set's name.
+ */
+export interface RuleSet {
+  /** 0 for a set created in this draft. */
+  id: number
+  name: string
+  /** Classical rule lines without a target; blank lines and # comments allowed. */
+  payload: string
+  remark: string
+}
+
 export interface RoutingMatrix {
   policies: Policy[]
   egresses: Egress[]
+  ruleSets: RuleSet[]
   /** Set by the schema migration until the matrix is saved once. */
   needsReview: boolean
   options: {

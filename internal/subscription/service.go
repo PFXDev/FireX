@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -21,7 +22,7 @@ import (
 
 // SettingKeyClashTemplate holds the admin-editable mihomo template. It carries
 // base config only — proxy-groups and rules always come from the routing matrix.
-const SettingKeyClashTemplate = "clash.template"
+const SettingKeyClashTemplate = store.SettingClashTemplate
 
 // linkTTL bounds how stale a cached link set may be. Share links only change
 // when an admin edits an inbound, so a short cache spares the panels a burst of
@@ -247,18 +248,32 @@ func uniqueName(name string, used map[string]bool) string {
 
 // Clash renders the result as a mihomo profile. The stored template supplies
 // the base config only; proxies, proxy-groups and rules come from the routing
-// matrix compiled for this user's profile.
-func (s *Service) Clash(result *Result) (string, error) {
+// matrix compiled for this user's profile. base is the public origin the
+// profile's rule-provider URLs point at.
+func (s *Service) Clash(result *Result, base string) (string, error) {
 	template := s.db.GetSetting(SettingKeyClashTemplate, clash.DefaultTemplate)
 	proxies := make([]routing.Proxy, 0, len(result.Entries))
 	for _, e := range result.Entries {
 		proxies = append(proxies, routing.Proxy{InboundID: e.Inbound.ID, Name: e.Name, Entry: e.Clash})
 	}
-	in, err := routing.Compile(s.db, s.profileFor(result.User), proxies)
+	token := ""
+	if result.User != nil {
+		token = result.User.SubToken
+	}
+	in, err := routing.Compile(s.db, s.profileFor(result.User), proxies, func(set model.RuleSet) string {
+		return RuleSetURL(base, token, set.ID)
+	})
 	if err != nil {
 		return "", err
 	}
 	return clash.Render(template, in)
+}
+
+// RuleSetURL is where a client fetches one rule set. It sits under the user's
+// subscription path, so the token that authorises the profile also
+// authorises the lists it references.
+func RuleSetURL(base, token string, id uint) string {
+	return fmt.Sprintf("%s/sub/%s/rules/%d", strings.TrimRight(base, "/"), url.PathEscape(token), id)
 }
 
 // profileFor is the routing profile the user's plan binds, or zero when they

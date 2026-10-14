@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"slices"
 	"sort"
@@ -548,11 +549,21 @@ type matrixEgress struct {
 	Members      []matrixMember `json:"members"`
 }
 
+type matrixRuleSet struct {
+	ID      uint   `json:"id"`
+	Name    string `json:"name"`
+	Payload string `json:"payload"`
+	Remark  string `json:"remark"`
+}
+
 type matrixDoc struct {
 	// Policies are in row order: it is both the rule precedence and the order
 	// the groups appear in a client.
 	Policies []matrixPolicy `json:"policies"`
 	Egresses []matrixEgress `json:"egresses"`
+	// RuleSets travel with the matrix because RULE-SET rules name them. A
+	// document without the key leaves the stored sets alone.
+	RuleSets []matrixRuleSet `json:"ruleSets"`
 }
 
 func (s *Server) getRouting(c *gin.Context) {
@@ -597,9 +608,17 @@ func (s *Server) getRouting(c *gin.Context) {
 		})
 	}
 
+	var sets []model.RuleSet
+	s.db.Order("id ASC").Find(&sets)
+	ruleSets := make([]matrixRuleSet, 0, len(sets))
+	for _, set := range sets {
+		ruleSets = append(ruleSets, matrixRuleSet{ID: set.ID, Name: set.Name, Payload: set.Payload, Remark: set.Remark})
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"policies": rows,
 		"egresses": cells,
+		"ruleSets": ruleSets,
 		// NeedsReview is set by the schema migration: the old flat rule list
 		// was regrouped into policies and the order may not be what the
 		// operator wants. Saving once clears it.
@@ -683,7 +702,53 @@ func writeMatrix(handle *gorm.DB, doc *matrixDoc) error {
 	keep := map[uint]bool{}
 	for _, p := range doc.Policies {
 		if p.ID != 0 {
+			if keep[p.ID] {
+				return fmt.Errorf("分流策略 ID %d 重复，请刷新页面后重试", p.ID)
+			}
 			keep[p.ID] = true
+		}
+	}
+	// A cell copied from the default column may retain profileId 0. Reject
+	// conflicting cells before replacing any rows, rather than leaking a SQL
+	// unique-constraint error or silently choosing one of the two egresses.
+	seenCells := make(map[struct {
+		policyIndex int
+		profileID   uint
+	}]bool, len(doc.Egresses))
+	for _, cell := range doc.Egresses {
+		if cell.PolicyIndex < 0 || cell.PolicyIndex >= len(doc.Policies) {
+			continue
+		}
+		key := struct {
+			policyIndex int
+			profileID   uint
+		}{cell.PolicyIndex, cell.ProfileID}
+		if seenCells[key] {
+			column := "默认出口"
+			if cell.ProfileID != model.DefaultProfileID {
+				column = fmt.Sprintf("方案（ID %d）的出口", cell.ProfileID)
+			}
+			return fmt.Errorf("分流策略「%s」的%s重复，请刷新页面后重试", strings.TrimSpace(doc.Policies[cell.PolicyIndex].Name), column)
+		}
+		seenCells[key] = true
+	}
+	if doc.RuleSets != nil {
+		renamedSets, err := writeRuleSets(handle, doc.RuleSets)
+		if err != nil {
+			return err
+		}
+		// RULE-SET rules name a set by its bare name, the same way members
+		// name a policy.
+		for i := range doc.Policies {
+			for j := range doc.Policies[i].Rules {
+				rule := &doc.Policies[i].Rules[j]
+				if strings.TrimSpace(rule.Type) != routing.RuleSetType {
+					continue
+				}
+				if next, ok := renamedSets[strings.TrimSpace(rule.Value)]; ok {
+					rule.Value = next
+				}
+			}
 		}
 	}
 	var existing []model.Policy
@@ -790,6 +855,80 @@ func writeMatrix(handle *gorm.DB, doc *matrixDoc) error {
 	return nil
 }
 
+// writeRuleSets replaces the stored rule sets with the document's and returns
+// the renames it made, old name to new.
+func writeRuleSets(handle *gorm.DB, sets []matrixRuleSet) (map[string]string, error) {
+	var existing []model.RuleSet
+	if err := handle.Find(&existing).Error; err != nil {
+		return nil, err
+	}
+	storedName := make(map[uint]string, len(existing))
+	for _, set := range existing {
+		storedName[set.ID] = set.Name
+	}
+	keep := map[uint]bool{}
+	names := map[string]bool{}
+	for _, set := range sets {
+		name := strings.TrimSpace(set.Name)
+		if name == "" {
+			return nil, errBadRequest("有一个规则集没有名称")
+		}
+		if names[name] {
+			return nil, fmt.Errorf("规则集名称「%s」重复", name)
+		}
+		names[name] = true
+		if set.ID == 0 {
+			continue
+		}
+		if _, ok := storedName[set.ID]; !ok || keep[set.ID] {
+			return nil, fmt.Errorf("规则集「%s」已被修改或删除，请刷新页面后重试", name)
+		}
+		keep[set.ID] = true
+	}
+	for _, set := range existing {
+		if !keep[set.ID] {
+			if err := handle.Delete(&model.RuleSet{}, set.ID).Error; err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Names are unique, so a swap would collide midway; renamed rows step
+	// aside first under a placeholder no valid name can equal, since valid
+	// names have no commas.
+	renamed := map[string]string{}
+	for _, set := range sets {
+		if set.ID == 0 {
+			continue
+		}
+		if next := strings.TrimSpace(set.Name); next != storedName[set.ID] {
+			renamed[storedName[set.ID]] = next
+			if err := handle.Model(&model.RuleSet{}).Where("id = ?", set.ID).
+				Update("name", fmt.Sprintf(",renaming,%d", set.ID)).Error; err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, set := range sets {
+		row := model.RuleSet{
+			ID: set.ID, Name: strings.TrimSpace(set.Name),
+			Payload: strings.ReplaceAll(set.Payload, "\r\n", "\n"), Remark: set.Remark,
+		}
+		if row.ID == 0 {
+			if err := handle.Create(&row).Error; err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := handle.Model(&model.RuleSet{}).Where("id = ?", row.ID).Updates(map[string]any{
+			"name": row.Name, "payload": row.Payload, "remark": row.Remark,
+		}).Error; err != nil {
+			return nil, err
+		}
+	}
+	return renamed, nil
+}
+
 func deletePolicyRows(handle *gorm.DB, policyID uint) error {
 	var egressIDs []uint
 	handle.Model(&model.Egress{}).Where("policy_id = ?", policyID).Pluck("id", &egressIDs)
@@ -858,11 +997,16 @@ func (s *Server) previewRouting(c *gin.Context) {
 		proxies = append(proxies, routing.Proxy{InboundID: n.ID, Name: name, Entry: entry})
 	}
 
+	// No user is behind a preview, so rule-set URLs carry a placeholder token.
+	base := s.subBase(c)
+	ruleSetURL := func(set model.RuleSet) string {
+		return subscription.RuleSetURL(base, ":token", set.ID)
+	}
 	var in clash.Input
 	if profileID == model.DefaultProfileID {
-		in, err = routing.CompileDefault(s.db, proxies)
+		in, err = routing.CompileDefault(s.db, proxies, ruleSetURL)
 	} else {
-		in, err = routing.Compile(s.db, profileID, proxies)
+		in, err = routing.Compile(s.db, profileID, proxies, ruleSetURL)
 	}
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"error": err.Error()})

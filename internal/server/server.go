@@ -53,6 +53,8 @@ func (s *Server) routes() {
 	// credential, so it must never be logged alongside a session cookie.
 	s.engine.GET("/sub/:token", s.handleSubscription)
 	s.engine.HEAD("/sub/:token", s.handleSubscription)
+	s.engine.GET("/sub/:token/rules/:id", s.handleRuleSet)
+	s.engine.HEAD("/sub/:token/rules/:id", s.handleRuleSet)
 
 	api := s.engine.Group("/api")
 	api.POST("/auth/login", s.handleLogin)

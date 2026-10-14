@@ -6,9 +6,11 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"github.com/PFXDev/FireX/internal/clash"
 	"github.com/PFXDev/FireX/internal/model"
+	"github.com/PFXDev/FireX/internal/routing"
 	"github.com/PFXDev/FireX/internal/subscription"
 )
 
@@ -136,8 +138,15 @@ func (s *Server) setClashTemplate(c *gin.Context) {
 			return
 		}
 	}
-	if err := s.db.SetSetting(subscription.SettingKeyClashTemplate, template); err != nil {
-		fail(c, http.StatusInternalServerError, err)
+	// A RULE-SET rule may name a provider only this template declares.
+	err := s.db.Transaction(func(handle *gorm.DB) error {
+		if err := tx(handle).SetSetting(subscription.SettingKeyClashTemplate, template); err != nil {
+			return err
+		}
+		return routing.Validate(tx(handle))
+	})
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "isDefault": template == ""})

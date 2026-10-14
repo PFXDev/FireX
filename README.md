@@ -293,6 +293,7 @@ GET /sub/<token>              # mihomo by default
 GET /sub/<token>?target=clash
 GET /sub/<token>?target=mihomo
 GET /sub/<token>?target=base64
+GET /sub/<token>/rules/<id>   # a rule set as plain-text classical rules
 ```
 
 The default response is a mihomo profile. Known legacy clients such as v2rayN
@@ -411,7 +412,7 @@ GET  /api/inbounds               # inbounds with their panel and group count
 GET  /api/node-groups            # groups with tags and member inbound ids
 GET  /api/profiles               # profiles with their node-group whitelist
 GET  /api/routing                # the whole matrix plus editor options
-PUT  /api/routing                # validate and store the whole matrix
+PUT  /api/routing                # validate and store the whole matrix, rule sets included
 GET  /api/routing/preview?profileId=
 POST /api/routing/presets/:key   # replace every policy with a built-in layout
 ```
@@ -426,7 +427,7 @@ fills the template editor and waits for you to save.
 
 | Routing preset | Rows |
 | -------------- | ---- |
-| `standard` (fresh installs) | 节点选择, 自动选择, 广告拦截, OpenAI, Claude, AI 服务, 电报消息, 国外媒体, 苹果服务, 国外网站, 全球直连, 漏网之鱼 |
+| `standard` (fresh installs) | 节点选择, 自动选择, 广告拦截, 大流量下载, OpenAI, Claude, AI 服务, 电报消息, 国外媒体, 谷歌服务, 游戏下载, Steam, 苹果服务, 国外网站, 全球直连, 漏网之鱼 |
 | `lite` | 节点选择, 自动选择, OpenAI, Claude, 国外网站, 全球直连, 漏网之鱼 |
 
 | Template preset | Use |
@@ -467,6 +468,18 @@ The stock layouts are built on these choices:
 - **OpenAI and Claude have their own rows**, separate from other AI services.
   They offer node groups first and are plain `select` groups, because both
   services refuse some regions and flag sessions whose exit keeps changing.
+- **Google and Steam have their own proxy switches.** YouTube and Gemini
+  keep their earlier media and AI rules. 大流量下载 puts large downloads from
+  blocked or slow overseas sources (Hugging Face, GitHub downloads, Drive,
+  MEGA, `persistent.oaistatic.com`, Debian/Ubuntu/Arch/AUR) on an exit of
+  their own. It precedes OpenAI, AI and Google so those broader rules cannot
+  capture its hosts. Game CDNs use 游戏下载, defaulting to DIRECT before
+  Steam.
+- **Long, changing lists are rule sets.** 大流量下载's hosts live in a rule
+  set edited under **Routing → 规则集** and referenced by a `RULE-SET` rule.
+  FireX serves it to clients as a `rule-providers` entry at
+  `/sub/<token>/rules/<id>`, which clients re-fetch every six hours. Applying
+  a preset never overwrites an existing rule set.
 
 Background, references and the recommended server-side Xray settings are in
 [`docs/routing.md`](docs/routing.md).
