@@ -51,3 +51,6 @@ web/*.tsbuildinfo
 # clone satisfies the go:embed in internal/web/embed.go without a UI build.
 internal/web/dist/*
 !internal/web/dist/.gitkeep
+
+# macOS metadata
+.DS_Store

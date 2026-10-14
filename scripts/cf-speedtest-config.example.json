@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "subscription_url": "https://firex.example.com/sub/REPLACE_WITH_YOUR_TOKEN",
+  "node_name": "REPLACE_WITH_NODE_NAME",
+  "settings": {
+    "label": "上海移动",
+    "iface": null,
+    "threads": 128,
+    "shortlist": 200,
+    "top": 5,
+    "reps": 3,
+    "download_mib": 16,
+    "download_timeout": 25,
+    "max_latency_ms": 190,
+    "min_download_mib_s": 15,
+    "origin_code": 404
+  }
+}
