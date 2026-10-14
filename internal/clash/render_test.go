@@ -253,6 +253,44 @@ func TestProxyEntryRealityFields(t *testing.T) {
 	if pk != "PBK" {
 		t.Errorf("public-key = %v, want PBK", pk)
 	}
+	if _, ok := entry.Get("encryption"); ok {
+		t.Error("encryption set on a plain VLESS link")
+	}
+}
+
+func TestProxyEntryRealityHybridKeyExchange(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		want        bool
+	}{
+		{"advertised", "&support-x25519mlkem768=true", true},
+		{"numeric", "&support-x25519mlkem768=1", true},
+		{"disabled", "&support-x25519mlkem768=false", false},
+		{"legacy", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := mustEntry(t, "vless://uuid-x@n.example:443?security=reality&pbk=PBK&sid=aa"+tc.query+"#N")
+			raw, _ := entry.Get("reality-opts")
+			value, present := raw.(*Ordered).Get("support-x25519mlkem768")
+			if present != tc.want || (present && value != true) {
+				t.Fatalf("hybrid key exchange = %v (present %v), want enabled %v", value, present, tc.want)
+			}
+		})
+	}
+}
+
+// A panel inbound with VLESS Encryption rejects any client that skips the
+// ML-KEM handshake, so the link's encryption value must reach mihomo as is.
+func TestProxyEntryVLESSEncryption(t *testing.T) {
+	const enc = "mlkem768x25519plus.native.0rtt.KEY"
+	entry := mustEntry(t, "vless://uuid-x@n.example:443?type=tcp&security=reality&pbk=PBK&encryption="+enc+"#N")
+	if v, _ := entry.Get("encryption"); v != enc {
+		t.Errorf("encryption = %v, want %s", v, enc)
+	}
+	plain := mustEntry(t, "vless://uuid-x@n.example:443?type=tcp&security=reality&pbk=PBK&encryption=none#N")
+	if _, ok := plain.Get("encryption"); ok {
+		t.Error("encryption=none should be omitted")
+	}
 }
 
 func TestProxyEntryWebSocketHeaders(t *testing.T) {

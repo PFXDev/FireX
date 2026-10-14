@@ -26,6 +26,9 @@ func ProxyEntry(p *sharelink.Proxy) (*Ordered, bool) {
 		if p.Flow != "" {
 			o.Set("flow", p.Flow)
 		}
+		if p.Encryption != "" {
+			o.Set("encryption", p.Encryption)
+		}
 		applyTLS(o, p)
 		applyTransport(o, p)
 	case "vmess":
@@ -120,6 +123,9 @@ func applyTLS(o *Ordered, p *sharelink.Proxy) {
 		reality.Set("public-key", p.RealityPublicKey)
 		if p.RealityShortID != "" {
 			reality.Set("short-id", p.RealityShortID)
+		}
+		if p.RealitySupportX25519MLKEM768 {
+			reality.Set("support-x25519mlkem768", true)
 		}
 		o.Set("reality-opts", reality)
 	}

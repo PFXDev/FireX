@@ -24,6 +24,9 @@ type Proxy struct {
 	Cipher   string
 	AlterID  int
 	Flow     string
+	// Encryption is the VLESS Encryption (ML-KEM) client setting; empty or
+	// "none" means plain VLESS.
+	Encryption string
 
 	Network         string // tcp | ws | grpc | h2 | http | httpupgrade | xhttp
 	Path            string
@@ -39,6 +42,9 @@ type Proxy struct {
 
 	RealityPublicKey string
 	RealityShortID   string
+	// Modern panels advertise this explicitly; older REALITY servers may not
+	// support the hybrid TLS key exchange, so do not infer it from encryption.
+	RealitySupportX25519MLKEM768 bool
 
 	Obfs         string
 	ObfsPassword string
@@ -116,6 +122,9 @@ func parseVLESS(raw string) (*Proxy, error) {
 		UUID:   u.User.Username(),
 		Flow:   q.Get("flow"),
 		UDP:    true,
+	}
+	if enc := q.Get("encryption"); enc != "none" {
+		p.Encryption = enc
 	}
 	applyTransport(p, q)
 	applySecurity(p, q)
@@ -383,6 +392,7 @@ func applySecurity(p *Proxy, q url.Values) {
 	if security == "reality" {
 		p.RealityPublicKey = q.Get("pbk")
 		p.RealityShortID = q.Get("sid")
+		p.RealitySupportX25519MLKEM768 = isTrue(q.Get("support-x25519mlkem768"))
 		// Reality pins the certificate itself; skip-cert-verify would be wrong.
 		p.AllowInsecure = false
 	}
