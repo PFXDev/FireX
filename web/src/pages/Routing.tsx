@@ -5,6 +5,7 @@ import {
   ArrowUpIcon,
   ChevronDownIcon,
   EyeIcon,
+  LayoutTemplateIcon,
   ListTreeIcon,
   PencilIcon,
   PlusIcon,
@@ -25,6 +26,7 @@ import type {
   Policy,
   Profile,
   RoutingMatrix,
+  RoutingPreset,
 } from "@/api";
 import { CodeBlock } from "@/components/code-display";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -178,6 +180,9 @@ export function RoutingPage() {
   const [pendingProfileDelete, setPendingProfileDelete] =
     useState<Profile | null>(null);
   const [pendingPolicyDelete, setPendingPolicyDelete] = useState<number | null>(
+    null,
+  );
+  const [pendingPreset, setPendingPreset] = useState<RoutingPreset | null>(
     null,
   );
 
@@ -496,6 +501,17 @@ export function RoutingPage() {
     }
   };
 
+  const applyPreset = async (preset: RoutingPreset) => {
+    try {
+      await api.post(`/routing/presets/${preset.key}`);
+    } catch (err) {
+      toast.error(errorMessage(err, "套用预设失败"));
+      throw err;
+    }
+    toast.success(`已套用「${preset.name}」分流`);
+    if (!(await load())) toast.warning("已套用预设，但刷新失败，请重新加载");
+  };
+
   const retry = () => {
     setRetrying(true);
     void load().finally(() => setRetrying(false));
@@ -579,6 +595,32 @@ export function RoutingPage() {
         title="分流"
         description="行是分流策略（一份规则清单），列是分流方案。第一列是默认出口，方案列只写和默认不同的部分。"
       >
+        {options.presets.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="outline" />}>
+              <LayoutTemplateIcon data-icon="inline-start" />
+              套用预设
+              <ChevronDownIcon data-icon="inline-end" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-80">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>内置分流预设</DropdownMenuLabel>
+                {options.presets.map((preset) => (
+                  <DropdownMenuItem
+                    key={preset.key}
+                    className="flex-col items-start gap-0.5"
+                    onClick={() => setPendingPreset(preset)}
+                  >
+                    <span className="font-medium">{preset.name}</span>
+                    <span className="text-xs whitespace-normal text-muted-foreground">
+                      {preset.description}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
         <Button variant="outline" onClick={addPolicy}>
           <PlusIcon data-icon="inline-start" />
           新建策略
@@ -1085,6 +1127,22 @@ export function RoutingPage() {
         confirmLabel="删除方案"
         onConfirm={async () => {
           if (pendingProfileDelete) await removeProfile(pendingProfileDelete);
+        }}
+      />
+
+      <ConfirmDialog
+        open={pendingPreset !== null}
+        onOpenChange={(open) => !open && setPendingPreset(null)}
+        title={`套用「${pendingPreset?.name ?? ""}」分流预设？`}
+        description={
+          <>
+            现有的分流策略和规则会整体替换成预设，并立即保存。方案和可用节点组不变；方案列里同名策略的出口覆盖会保留，其余覆盖丢弃。
+            {dirty && " 矩阵里尚未保存的改动也会一并丢弃。"}
+          </>
+        }
+        confirmLabel="套用预设"
+        onConfirm={async () => {
+          if (pendingPreset) await applyPreset(pendingPreset);
         }}
       />
 
@@ -1846,7 +1904,7 @@ function MemberPicker({
               key={builtin}
               onClick={() => pick("builtin", builtin)}
             >
-              {builtin}
+              {builtin === "DIRECT-V6" ? "DIRECT-V6（直连，IPv6 优先）" : builtin}
             </DropdownMenuItem>
           ))}
         </DropdownMenuGroup>

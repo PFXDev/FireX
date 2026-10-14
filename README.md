@@ -353,11 +353,11 @@ Rows are **policies**, columns are **profiles**, and each cell is an **egress**.
 ```
                  default        VIP           VVIP
 🛑 广告拦截       REJECT         —             —
-🤖 AI 服务        all groups     CN2GIA        —
+🤖 OpenAI         all groups     CN2GIA        —
 📺 国外媒体       all groups     —             IEPL only
 ```
 
-A policy owns its rule list, and that list is the same for everybody: `AI 服务`
+A policy owns its rule list, and that list is the same for everybody: `OpenAI`
 matches `GEOSITE,openai` whichever tier you are on. What differs per tier is the
 egress — which node groups the traffic actually leaves through.
 
@@ -413,7 +413,63 @@ GET  /api/profiles               # profiles with their node-group whitelist
 GET  /api/routing                # the whole matrix plus editor options
 PUT  /api/routing                # validate and store the whole matrix
 GET  /api/routing/preview?profileId=
+POST /api/routing/presets/:key   # replace every policy with a built-in layout
 ```
+
+### Presets, DNS and IPv6
+
+Both halves of a profile have built-in starting points, and neither is ever
+applied behind your back. **Routing → 套用预设** swaps every policy for a
+built-in layout in one validated transaction; profiles, whitelists and any
+profile override whose policy name survives are kept. **Settings → 载入预设**
+fills the template editor and waits for you to save.
+
+| Routing preset | Rows |
+| -------------- | ---- |
+| `standard` (fresh installs) | 节点选择, 自动选择, 广告拦截, OpenAI, Claude, AI 服务, 电报消息, 国外媒体, 苹果服务, 国外网站, 全球直连, 漏网之鱼 |
+| `lite` | 节点选择, 自动选择, OpenAI, Claude, 国外网站, 全球直连, 漏网之鱼 |
+
+| Template preset | Use |
+| --------------- | --- |
+| `dual-stack` (built-in default) | IPv6 on; the right choice wherever clients have working IPv6 |
+| `ipv4-only` | Same DNS layout with IPv6 off |
+
+The stock layouts are built on these choices:
+
+- **fake-ip, always.** The renderer pins `dns.enhanced-mode` to `fake-ip`
+  whatever the template says. A proxied domain is handed to the exit node
+  unresolved, so the client never looks it up — no leak, and the CDN answer
+  is the one nearest the exit.
+- **Split DNS.** Mainland and private domains, node addresses and every
+  DIRECT dial resolve through AliDNS DoH (`direct-nameserver`,
+  `proxy-server-nameserver`, `nameserver-policy`). Anything else that needs a
+  client-side answer goes to Cloudflare DoH, which `respect-rules` sends
+  through the proxy. Every upstream is an IP literal, so nothing needs a
+  bootstrap lookup.
+- **IPv6-first node connections.** Generated nodes carry
+  `ip-version: ipv6-prefer`. TCP prefers IPv6 with IPv4 fallback; literal IP
+  endpoints keep using that address. The `ipv4-only` template still disables
+  IPv6 DNS resolution. UDP-based transports follow mihomo's address selection
+  and do not guarantee fallback after an IPv6 handshake failure.
+- **Every mainland address bypasses.** `GEOSITE,cn` catches known domains;
+  the last direct rule is a resolving `GEOIP,cn`, so a mainland site no list
+  knows still goes direct. It sits after `geolocation-!cn`, so only domains in
+  neither list pay for the lookup.
+- **IPv6 that degrades safely.** Direct rows default to the builtin
+  `DIRECT`, which races both families for TCP and sends UDP over IPv4, so a
+  network without IPv6 loses nothing. 全球直连 also offers `DIRECT-V6`, a
+  `type: direct` outbound with `ip-version: ipv6-prefer` that FireX adds to
+  `proxies` whenever a group lists it. A client on good IPv6 can switch to it
+  for domestic IPv6 first. It is not the default, because its UDP never falls
+  back to IPv4. Proxied domains get no AAAA on the client and are resolved by
+  the exit; set the panel's freedom outbound to `UseIPv4v6` for IPv4-first
+  exits.
+- **OpenAI and Claude have their own rows**, separate from other AI services.
+  They offer node groups first and are plain `select` groups, because both
+  services refuse some regions and flag sessions whose exit keeps changing.
+
+Background, references and the recommended server-side Xray settings are in
+[`docs/routing.md`](docs/routing.md).
 
 ### Migrating from the pre-matrix schema
 

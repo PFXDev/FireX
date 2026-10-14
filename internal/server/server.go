@@ -105,6 +105,7 @@ func (s *Server) routes() {
 	authed.GET("/routing", s.getRouting)
 	authed.PUT("/routing", s.setRouting)
 	authed.GET("/routing/preview", s.previewRouting)
+	authed.POST("/routing/presets/:key", s.applyRoutingPreset)
 
 	authed.GET("/plans", s.listPlans)
 	authed.POST("/plans", s.createPlan)

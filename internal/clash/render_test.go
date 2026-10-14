@@ -391,3 +391,19 @@ func TestProxyEntryShadowsocksWithPluginIsSkipped(t *testing.T) {
 		t.Error("ProxyEntry() accepted an ss proxy whose plugin options were dropped")
 	}
 }
+
+// A template written for redir-host still renders fake-ip: proxied domains are
+// meant to reach the exit unresolved, which only holds under fake-ip.
+func TestRenderForcesFakeIP(t *testing.T) {
+	tpl := "dns:\n  enable: true\n  enhanced-mode: redir-host\n  nameserver: [223.5.5.5]\n"
+	cfg := decode(t, mustRenderWith(t, tpl, Input{Rules: []string{"MATCH,DIRECT"}}))
+	dns := cfg["dns"].(map[string]any)
+	if dns["enhanced-mode"] != "fake-ip" || dns["fake-ip-range"] != "198.18.0.1/16" {
+		t.Errorf("dns = %v, want fake-ip with a range", dns)
+	}
+	for _, preset := range TemplatePresets {
+		if _, err := Render(preset.Template, Input{Rules: []string{"MATCH,DIRECT"}}); err != nil {
+			t.Errorf("preset %s does not render: %v", preset.Key, err)
+		}
+	}
+}

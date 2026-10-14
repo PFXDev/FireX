@@ -108,6 +108,7 @@ func (s *Server) getClashTemplate(c *gin.Context) {
 		"template":  template,
 		"isDefault": template == "",
 		"default":   clash.DefaultTemplate,
+		"presets":   clash.TemplatePresets,
 	})
 }
 

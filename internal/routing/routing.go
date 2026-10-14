@@ -8,6 +8,7 @@
 package routing
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -260,6 +261,18 @@ func compile(db *store.DB, profileID uint, groups []model.NodeGroup, proxies []P
 			Tolerance: g.Tolerance,
 			Members:   groupMembers[g.Name],
 		})
+	}
+
+	// DIRECT-V6 is an outbound, not a mihomo builtin, so it has to be declared
+	// for any group to list it. It trails the inbounds so a client's flat proxy
+	// list still opens with real nodes.
+	for _, g := range in.Groups {
+		if slices.Contains(g.Members, model.BuiltinDirectV6) {
+			in.Proxies = append(in.Proxies, clash.Proxy{
+				Name: model.BuiltinDirectV6, Entry: clash.DirectEntry(model.BuiltinDirectV6, "ipv6-prefer"),
+			})
+			break
+		}
 	}
 
 	in.Rules = compileRules(cells)

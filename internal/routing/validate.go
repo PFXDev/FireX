@@ -34,7 +34,7 @@ var MemberKinds = []string{
 // ReservedNames are the targets mihomo resolves itself. A proxy-group rendered
 // under one of these names would shadow the builtin, so neither a policy nor a
 // node group may display as one.
-var ReservedNames = []string{"DIRECT", "REJECT", "REJECT-DROP", "PASS", "GLOBAL", "COMPATIBLE"}
+var ReservedNames = []string{"DIRECT", model.BuiltinDirectV6, "REJECT", "REJECT-DROP", "PASS", "GLOBAL", "COMPATIBLE"}
 
 // IsReserved reports whether a rendered group name collides with a builtin.
 func IsReserved(display string) bool {

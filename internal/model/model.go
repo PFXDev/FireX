@@ -296,8 +296,14 @@ const (
 	MemberAllInbounds = "all-inbounds"
 )
 
-// BuiltinPolicies are the non-group members mihomo understands.
-var BuiltinPolicies = []string{"DIRECT", "REJECT", "REJECT-DROP", "PASS"}
+// BuiltinDirectV6 is the one builtin FireX supplies itself rather than
+// mihomo: a direct outbound that prefers IPv6, rendered into `proxies` only
+// when some group references it. Its TCP falls back to IPv4 but its UDP does
+// not, so it is an opt-in for clients on good IPv6, never a default.
+const BuiltinDirectV6 = "DIRECT-V6"
+
+// BuiltinPolicies are the non-group members a policy may list.
+var BuiltinPolicies = []string{"DIRECT", BuiltinDirectV6, "REJECT", "REJECT-DROP", "PASS"}
 
 type EgressMember struct {
 	ID        uint   `json:"id" gorm:"primaryKey;autoIncrement"`

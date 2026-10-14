@@ -148,19 +148,26 @@ func TestClashOutputRendersNodeGroupsAndPolicies(t *testing.T) {
 
 	var cfg struct {
 		Proxies []struct {
-			Type string `yaml:"type"`
-			UUID string `yaml:"uuid"`
+			Type      string `yaml:"type"`
+			UUID      string `yaml:"uuid"`
+			IPVersion string `yaml:"ip-version"`
 		} `yaml:"proxies"`
 		Rules []string `yaml:"rules"`
 	}
 	if err := yaml.Unmarshal([]byte(out), &cfg); err != nil {
 		t.Fatalf("rendered profile is not valid YAML: %v\n%s", err, out)
 	}
-	if len(cfg.Proxies) != 2 {
-		t.Fatalf("proxies = %d, want 2", len(cfg.Proxies))
+	// Two inbounds, then the DIRECT-V6 outbound the stock matrix references.
+	if len(cfg.Proxies) != 3 || cfg.Proxies[2].Type != "direct" {
+		t.Fatalf("proxies = %+v, want 2 inbounds and DIRECT-V6", cfg.Proxies)
 	}
 	if cfg.Proxies[0].UUID != "uuid-bob" || cfg.Proxies[0].Type != "vless" {
 		t.Errorf("proxy[0] = %+v", cfg.Proxies[0])
+	}
+	for i, proxy := range cfg.Proxies[:2] {
+		if proxy.IPVersion != "ipv6-prefer" {
+			t.Errorf("proxy[%d] ip-version = %q, want ipv6-prefer", i, proxy.IPVersion)
+		}
 	}
 
 	groups := renderedGroups(t, out)
@@ -325,8 +332,8 @@ func TestClashHonoursPerInboundUdpToggle(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(out), &cfg); err != nil {
 		t.Fatalf("invalid YAML: %v", err)
 	}
-	if len(cfg.Proxies) != 2 {
-		t.Fatalf("proxies = %d, want 2", len(cfg.Proxies))
+	if len(cfg.Proxies) != 3 || cfg.Proxies[2].Name != model.BuiltinDirectV6 {
+		t.Fatalf("proxies = %+v, want 2 inbounds and DIRECT-V6", cfg.Proxies)
 	}
 	if !cfg.Proxies[0].UDP {
 		t.Errorf("proxy[0] udp = false, want true")

@@ -15,6 +15,8 @@ func ProxyEntry(p *sharelink.Proxy) (*Ordered, bool) {
 	o.Set("type", p.Type)
 	o.Set("server", p.Server)
 	o.Set("port", p.Port)
+	// Prefer IPv6 for the node connection while retaining IPv4 fallback for TCP.
+	o.Set("ip-version", "ipv6-prefer")
 
 	switch p.Type {
 	case "vless":

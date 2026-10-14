@@ -610,8 +610,47 @@ func (s *Server) getRouting(c *gin.Context) {
 			"groupTypes":     clash.GroupTypes,
 			"builtins":       model.BuiltinPolicies,
 			"memberKinds":    routing.MemberKinds,
+			"presets":        routingPresets(),
 		},
 	})
+}
+
+type routingPreset struct {
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+func routingPresets() []routingPreset {
+	out := make([]routingPreset, 0, len(routing.Presets))
+	for _, p := range routing.Presets {
+		out = append(out, routingPreset{Key: p.Key, Name: p.Name, Description: p.Description})
+	}
+	return out
+}
+
+// applyRoutingPreset swaps every policy for a built-in layout. Like a matrix
+// save it validates inside the transaction, and like one it never touches a
+// panel: profiles and their whitelists are kept as they are.
+func (s *Server) applyRoutingPreset(c *gin.Context) {
+	preset, ok := routing.PresetByKey(c.Param("key"))
+	if !ok {
+		failMsg(c, http.StatusNotFound, "没有这个分流预设")
+		return
+	}
+	err := s.db.Transaction(func(handle *gorm.DB) error {
+		if err := routing.ApplyPreset(tx(handle), preset); err != nil {
+			return err
+		}
+		return routing.Validate(tx(handle))
+	})
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	_ = s.db.SetSetting(store.SettingRoutingReview, "")
+	s.subs.InvalidateAll()
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // setRouting replaces the whole matrix in one transaction. The editor always

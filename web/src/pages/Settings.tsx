@@ -1,8 +1,10 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
+  ChevronDownIcon,
   FileCode2Icon,
   InfoIcon,
+  LayoutTemplateIcon,
   RotateCcwIcon,
   SaveIcon,
   ShieldCheckIcon,
@@ -17,6 +19,14 @@ import { PageHeader } from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -24,10 +34,18 @@ import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { errorMessage } from '@/lib/format'
 
+interface TemplatePreset {
+  key: string
+  name: string
+  description: string
+  template: string
+}
+
 interface TemplateResponse {
   template: string
   isDefault: boolean
   default: string
+  presets: TemplatePreset[]
 }
 
 export function SettingsPage() {
@@ -195,7 +213,9 @@ export function SettingsPage() {
             aria-busy={templateBusy}
             onSubmit={(event) => {
               event.preventDefault()
-              if (dirty && !templateBusy) void saveTemplate(text)
+              // Saving the stock text stores nothing, so the install keeps
+              // following the built-in default when a later build improves it.
+              if (dirty && !templateBusy) void saveTemplate(text === tpl.default ? '' : text)
             }}
           >
             <Card>
@@ -217,6 +237,9 @@ export function SettingsPage() {
                     <p>
                       成员为空的策略组会被自动移除，指向它的规则会改写到还存在的组上，所以配额用尽的用户拿到的
                       仍然是一份能加载的配置。
+                    </p>
+                    <p>
+                      DNS 一律渲染为 <CodeText>fake-ip</CodeText>：被代理的域名不在客户端解析，交给出口节点。
                     </p>
                   </AlertDescription>
                 </Alert>
@@ -245,6 +268,34 @@ export function SettingsPage() {
                   {saving ? <Spinner data-icon="inline-start" /> : <SaveIcon data-icon="inline-start" />}
                   {saving ? '保存中…' : '保存模板'}
                 </Button>
+                {tpl.presets.length > 0 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={<Button type="button" variant="outline" className="w-full sm:w-auto" disabled={templateBusy} />}
+                    >
+                      <LayoutTemplateIcon data-icon="inline-start" />
+                      载入预设
+                      <ChevronDownIcon data-icon="inline-end" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-80">
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel>载入后检查无误再保存</DropdownMenuLabel>
+                        {tpl.presets.map((preset) => (
+                          <DropdownMenuItem
+                            key={preset.key}
+                            className="flex-col items-start gap-0.5"
+                            onClick={() => setText(preset.template)}
+                          >
+                            <span className="font-medium">{preset.name}</span>
+                            <span className="text-xs whitespace-normal text-muted-foreground">
+                              {preset.description}
+                            </span>
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
                 <Button
                   type="button"
                   variant="outline"

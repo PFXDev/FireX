@@ -76,6 +76,7 @@ func Render(template string, in Input) (string, error) {
 	// that tuned the generated region groups. It means nothing now and mihomo
 	// would reject the unknown key, so drop it on the way through.
 	root.delete("firex")
+	forceFakeIP(root)
 
 	proxies := make([]any, 0, len(in.Proxies))
 	for _, p := range in.Proxies {
@@ -104,6 +105,37 @@ func Render(template string, in Input) (string, error) {
 		return "", fmt.Errorf("clash: encode: %w", err)
 	}
 	return string(out), nil
+}
+
+// forceFakeIP pins a template's DNS to fake-ip. The stock routing leans on it:
+// a proxied domain is handed to the exit node unresolved, so a client in
+// redir-host mode would resolve every foreign domain locally and leak it. A
+// template with no dns block is left alone — mihomo refuses a DNS section with
+// no nameserver, and there is none to invent.
+func forceFakeIP(root *Ordered) {
+	raw, ok := root.Get("dns")
+	if !ok {
+		return
+	}
+	dns, ok := raw.(*Ordered)
+	if !ok {
+		return
+	}
+	dns.Set("enhanced-mode", "fake-ip")
+	if _, ok := dns.Get("fake-ip-range"); !ok {
+		dns.Set("fake-ip-range", "198.18.0.1/16")
+	}
+}
+
+// DirectEntry is a mihomo `direct` outbound that prefers the given IP family.
+// The builtin DIRECT races both families and takes whichever answers first;
+// this one waits briefly for the preferred family before falling back.
+func DirectEntry(name, ipVersion string) *Ordered {
+	return NewOrdered().
+		Set("name", name).
+		Set("type", "direct").
+		Set("udp", true).
+		Set("ip-version", ipVersion)
 }
 
 func groupNode(g Group) *Ordered {

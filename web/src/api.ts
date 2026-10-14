@@ -259,7 +259,15 @@ export interface RoutingMatrix {
     groupTypes: string[]
     builtins: string[]
     memberKinds: MemberKind[]
+    /** Built-in layouts that can replace every policy at once. */
+    presets: RoutingPreset[]
   }
+}
+
+export interface RoutingPreset {
+  key: string
+  name: string
+  description: string
 }
 
 export interface Plan {

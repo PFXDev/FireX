@@ -258,8 +258,8 @@ func TestFullFlowServesClashSubscription(t *testing.T) {
 	if err := yaml.Unmarshal(body, &cfg); err != nil {
 		t.Fatalf("subscription is not valid YAML: %v\n%s", err, body)
 	}
-	if len(cfg.Proxies) != 2 {
-		t.Fatalf("proxies = %d, want 2:\n%s", len(cfg.Proxies), body)
+	if len(cfg.Proxies) != 3 || cfg.Proxies[2].Name != model.BuiltinDirectV6 {
+		t.Fatalf("proxies = %d, want 2 inbounds and DIRECT-V6:\n%s", len(cfg.Proxies), body)
 	}
 	if cfg.Proxies[0].UUID != u.UUID {
 		t.Errorf("proxy uuid = %q, want the user's %q", cfg.Proxies[0].UUID, u.UUID)
