@@ -887,7 +887,13 @@ export function RoutingPage() {
                 <TableHead className="sticky left-0 z-20 w-(--policy-width) bg-card">
                   分流策略
                 </TableHead>
-                <TableHead className="sticky left-(--policy-width) z-10 w-(--default-width) border-r bg-card transition-[width] duration-300 ease-out motion-reduce:transition-none">
+                <TableHead
+                  className={cn(
+                    "sticky left-(--policy-width) z-10 w-(--default-width) border-r bg-card transition-[width] duration-300 ease-out motion-reduce:transition-none",
+                    stickyEdgeShadow,
+                    matrixScrolled && "after:opacity-100",
+                  )}
+                >
                   默认出口
                 </TableHead>
                 {profiles.map((profile) => (
@@ -935,7 +941,11 @@ export function RoutingPage() {
                   </TableCell>
 
                   <CellButton
-                    className="sticky left-(--policy-width) z-10 border-r bg-card"
+                    className={cn(
+                      "sticky left-(--policy-width) z-10 border-r bg-card",
+                      stickyEdgeShadow,
+                      matrixScrolled && "after:opacity-100",
+                    )}
                     compact={matrixScrolled}
                     label={`${row.policy.name} · 默认出口`}
                     summary={cellSummary(
@@ -1343,6 +1353,10 @@ export function RoutingPage() {
   );
 }
 
+/** A soft edge on the pinned default column, shown while profile columns scroll under it. */
+const stickyEdgeShadow =
+  "after:pointer-events-none after:absolute after:inset-y-0 after:left-full after:w-3 after:bg-linear-to-r after:from-foreground/6 after:to-transparent after:opacity-0 after:transition-opacity after:duration-300 motion-reduce:after:transition-none dark:after:from-black/50";
+
 function ruleCountLabel(rules: Policy["rules"]): string {
   if (rules.length === 0) return "无规则（纯选择器）";
   const off = rules.filter((rule) => rule.disabled).length;
@@ -1405,10 +1419,14 @@ function CellButton({
             summary.tone === "hidden" && "italic",
           )}
         >
+          {/* The two labels share one grid cell: the outgoing one clears before
+              the incoming one fades in, so they never show through each other. */}
           <span
             className={cn(
-              "col-start-1 row-start-1 min-w-0 truncate transition-opacity duration-200 ease-out motion-reduce:transition-none",
-              compact && summary.compactText ? "opacity-0" : "opacity-100",
+              "col-start-1 row-start-1 min-w-0 truncate transition-opacity ease-out motion-reduce:transition-none",
+              compact && summary.compactText
+                ? "opacity-0 duration-100"
+                : "opacity-100 duration-200 delay-100",
             )}
           >
             {summary.text}
@@ -1416,8 +1434,10 @@ function CellButton({
           {compact !== undefined && summary.compactText && (
             <span
               className={cn(
-                "col-start-1 row-start-1 min-w-0 truncate transition-opacity duration-200 ease-out motion-reduce:transition-none",
-                compact ? "opacity-100" : "opacity-0",
+                "col-start-1 row-start-1 min-w-0 truncate transition-opacity ease-out motion-reduce:transition-none",
+                compact
+                  ? "opacity-100 duration-200 delay-100"
+                  : "opacity-0 duration-100",
               )}
             >
               {summary.compactText}

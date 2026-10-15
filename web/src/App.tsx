@@ -42,7 +42,7 @@ function sidebarDefaultOpen() {
 
 export function App() {
   return (
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
       <Shell />
       <Toaster position="bottom-right" />
     </ThemeProvider>
@@ -88,7 +88,8 @@ function Shell() {
   if (checking) {
     return (
       <div className="flex min-h-svh items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-3 text-center">
+        {/* Held back briefly so a fast session check never flashes the spinner. */}
+        <div className="flex flex-col items-center gap-3 text-center animate-in fade-in-0 duration-300 delay-200 fill-mode-backwards motion-reduce:animate-none">
           <div className="flex size-10 items-center justify-center rounded-xl bg-brand text-brand-foreground">
             <FlameIcon />
           </div>
@@ -111,7 +112,10 @@ function Shell() {
         className="md:h-[calc(100svh-1rem)] md:overflow-y-auto md:border md:border-sidebar-border"
       >
         <SiteHeader route={route} />
-        <div className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-6 p-4 md:p-6 lg:p-8">
+        <div
+          key={route}
+          className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-6 p-4 animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out motion-reduce:animate-none md:p-6 lg:p-8"
+        >
           <Page route={route} />
         </div>
       </SidebarInset>
@@ -204,7 +208,7 @@ function Login({ onSignedIn }: { onSignedIn: () => Promise<void> }) {
     <main className="grid min-h-svh bg-background">
       <section className="relative flex items-center justify-center overflow-hidden p-4 sm:p-8 lg:p-12">
         <div className="pointer-events-none absolute inset-x-8 top-0 h-40 rounded-full bg-brand/10 blur-3xl lg:hidden" />
-        <div className="relative flex w-full max-w-md flex-col gap-6">
+        <div className="relative flex w-full max-w-md flex-col gap-6 animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out motion-reduce:animate-none">
           <div className="flex items-center gap-3">
             <div className="flex size-10 items-center justify-center rounded-xl bg-brand text-brand-foreground">
               <FlameIcon />
