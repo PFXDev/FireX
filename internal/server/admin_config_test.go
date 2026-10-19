@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/PFXDev/FireX/internal/config"
 )
@@ -48,7 +49,7 @@ func TestServerConfigPersistsToCustomPathWithoutChangingRuntime(t *testing.T) {
 	patch := map[string]any{
 		"listen": "127.0.0.1:9090", "dataDir": "./moved-data", "debug": true,
 		"subBaseUrl": " https://sub.example.com/ ", "syncInterval": "90s",
-		"trafficInterval": "30s", "discoverInterval": "10m",
+		"trafficInterval": "30s", "discoverInterval": "10m", "subUpdateInterval": "24h",
 		"update": map[string]any{"enabled": true, "channel": "dev", "source": "proxy", "checkInterval": "2h", "repo": "example/FireX", "proxyBaseUrl": "https://mirror.example.com"},
 	}
 	h.mustDo(http.MethodPut, "/api/settings/server", map[string]any{"revision": before.Revision, "config": patch})
@@ -63,7 +64,8 @@ func TestServerConfigPersistsToCustomPathWithoutChangingRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Listen != "127.0.0.1:9090" || loaded.DBPath != "moved-data/firex.db" || loaded.Update.Repo != "example/FireX" || loaded.SyncInterval != config.Duration(90_000_000_000) {
+	if loaded.Listen != "127.0.0.1:9090" || loaded.DBPath != "moved-data/firex.db" || loaded.Update.Repo != "example/FireX" || loaded.SyncInterval != config.Duration(90_000_000_000) ||
+		loaded.SubUpdateInterval != config.Duration(24*time.Hour) {
 		t.Fatalf("next startup does not load the edit: %+v", loaded)
 	}
 	info, err := os.Stat(h.configPath)
@@ -134,6 +136,7 @@ func TestServerConfigRejectsInvalidEditsWithoutWriting(t *testing.T) {
 	for _, patch := range []map[string]any{
 		{"listen": "bad-address"}, {"listen": ":70000"}, {"dataDir": " "},
 		{"syncInterval": "0s"}, {"trafficInterval": "-1m"}, {"discoverInterval": "oops"}, {"syncInterval": 120},
+		{"subUpdateInterval": "30m"}, {"subUpdateInterval": "90m"}, {"subUpdateInterval": "0s"},
 		{"subBaseUrl": "javascript:alert(1)"}, {"adminUser": ""}, {"adminPassword": "short"},
 		{"adminUser": "missing", "adminPassword": "pending-reset-123"},
 		{"update": map[string]any{"channel": "nightly"}},

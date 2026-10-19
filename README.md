@@ -120,6 +120,7 @@ written as anything but a string, aborts startup.
   "dataDir": "./data",
   "dbPath": "",
   "subBaseUrl": "",
+  "subUpdateInterval": "12h0m0s",
   "debug": false,
   "adminUser": "admin",
   "adminPassword": "",
@@ -143,6 +144,7 @@ written as anything but a string, aborts startup.
 | `dataDir`              | Directory for the database and staged updates                     |
 | `dbPath`               | Explicit database path; empty follows `dataDir`                   |
 | `subBaseUrl`           | Public origin for subscription URLs; empty derives it per request |
+| `subUpdateInterval`    | How often clients refresh their subscription, in whole hours      |
 | `debug`                | Verbose logging and SQL tracing                                   |
 | `adminUser`            | Admin username; created on first start, reset target after        |
 | `adminPassword`        | One-shot: sets the admin's password on the next start, then blanks |
@@ -429,7 +431,8 @@ either format explicitly with `target`. sing-box output is not enabled and an
 unsupported target is rejected instead of silently returning another format.
 The response carries
 `Subscription-Userinfo` with the aggregate upload, download, quota and expiry,
-so clients can show remaining traffic.
+so clients can show remaining traffic, and `Profile-Update-Interval` with
+`subUpdateInterval` in hours, so clients know how often to refresh.
 
 Share links come from each panel's own link generator, so Reality keys, host
 overrides and external addresses stay correct. FireX only rewrites the display

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -253,6 +254,9 @@ func TestFullFlowServesClashSubscription(t *testing.T) {
 	}
 	if got := resp.Header.Get("Subscription-Userinfo"); !strings.Contains(got, "total=") {
 		t.Errorf("Subscription-Userinfo = %q", got)
+	}
+	if got := resp.Header.Get("Profile-Update-Interval"); got != "12" {
+		t.Errorf("Profile-Update-Interval = %q, want the default 12 hours", got)
 	}
 
 	var cfg struct {
@@ -845,5 +849,20 @@ func TestInboundPublicEndpointIsValidatedAndServed(t *testing.T) {
 	decoded, _ = base64.StdEncoding.DecodeString(string(raw))
 	if !strings.Contains(string(decoded), "@host1.example.com:443?") {
 		t.Errorf("cleared override still applied:\n%s", decoded)
+	}
+}
+
+func TestSubscriptionUpdateIntervalFollowsConfig(t *testing.T) {
+	h := newHarness(t)
+	u := h.seed()
+	h.cfg.SubUpdateInterval = config.Duration(24 * time.Hour)
+
+	resp, err := h.client.Get(h.server.URL + "/sub/" + u.SubToken)
+	if err != nil {
+		t.Fatalf("fetch subscription: %v", err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("Profile-Update-Interval"); got != "24" {
+		t.Errorf("Profile-Update-Interval = %q, want 24", got)
 	}
 }

@@ -145,6 +145,7 @@ export function ServerConfigEditor() {
                     {textField('subBaseUrl', '订阅公开地址', '留空时从请求推导；反向代理部署时填写公开地址。', 'https://sub.example.com')}
                     {textField('dataDir', '数据目录', '存放数据库和暂存更新；相对路径以进程工作目录为基准。', './data')}
                     {textField('dbPath', '数据库路径', '留空使用数据目录中的 firex.db；迁移前请先准备好数据库。', '留空跟随数据目录')}
+                    {textField('subUpdateInterval', '订阅更新间隔', '客户端自动刷新订阅的周期，必须是整小时，例如 12h 或 24h。', '12h')}
                   </FieldGroup>
                   <FieldGroup>
                     <Field orientation="horizontal" data-disabled={busy || undefined}>

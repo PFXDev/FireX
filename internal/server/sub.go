@@ -54,7 +54,7 @@ func (s *Server) handleSubscription(c *gin.Context) {
 	s.recordFetch(&u, c.GetHeader("User-Agent"))
 
 	c.Header("Subscription-Userinfo", subscription.UserInfo(&u))
-	c.Header("Profile-Update-Interval", "12")
+	c.Header("Profile-Update-Interval", strconv.Itoa(int(s.cfg.SubUpdateInterval.Duration()/time.Hour)))
 	c.Header("Cache-Control", "no-store")
 	filename := u.Username
 	if target == targetMihomo {

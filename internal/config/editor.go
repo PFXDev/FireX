@@ -87,6 +87,9 @@ func (c *Config) Validate() map[string]string {
 			fields[d.key] = "时间间隔必须大于 0，例如 30s、2m 或 1h。"
 		}
 	}
+	if c.SubUpdateInterval < Duration(time.Hour) || c.SubUpdateInterval%Duration(time.Hour) != 0 {
+		fields["subUpdateInterval"] = "订阅更新间隔必须是整小时，至少 1h，例如 12h 或 24h。"
+	}
 	if c.Update.CheckInterval < Duration(time.Minute) {
 		fields["update.checkInterval"] = "更新检查间隔至少为 1m。"
 	}

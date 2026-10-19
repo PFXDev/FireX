@@ -35,7 +35,11 @@ type Config struct {
 	// file keeps the empty value and the derived path never freezes into it.
 	DBPath     string `json:"dbPath"`
 	SubBaseURL string `json:"subBaseUrl"`
-	Debug      bool   `json:"debug"`
+	// SubUpdateInterval is how often clients re-fetch their subscription,
+	// sent as Profile-Update-Interval. That header counts whole hours, so the
+	// value is kept to whole hours here rather than truncated on the wire.
+	SubUpdateInterval Duration `json:"subUpdateInterval"`
+	Debug             bool     `json:"debug"`
 
 	// AdminUser names the admin: created on first start, and the account a
 	// later AdminPassword override applies to.
@@ -69,16 +73,17 @@ type Update struct {
 // setting a hand-written file leaves out.
 func Template() *Config {
 	return &Config{
-		Listen:           ":8080",
-		DataDir:          "./data",
-		DBPath:           "",
-		SubBaseURL:       "",
-		Debug:            false,
-		AdminUser:        "admin",
-		AdminPassword:    "",
-		SyncInterval:     Duration(2 * time.Minute),
-		TrafficInterval:  Duration(time.Minute),
-		DiscoverInterval: Duration(5 * time.Minute),
+		Listen:            ":8080",
+		DataDir:           "./data",
+		DBPath:            "",
+		SubBaseURL:        "",
+		SubUpdateInterval: Duration(12 * time.Hour),
+		Debug:             false,
+		AdminUser:         "admin",
+		AdminPassword:     "",
+		SyncInterval:      Duration(2 * time.Minute),
+		TrafficInterval:   Duration(time.Minute),
+		DiscoverInterval:  Duration(5 * time.Minute),
 		Update: Update{
 			// Self-updating is opt-in: replacing the binary under a running
 			// fleet is the operator's call, not a default.
@@ -171,6 +176,14 @@ func (c *Config) complete() {
 	c.AdminUser = strings.TrimSpace(c.AdminUser)
 	if c.AdminUser == "" {
 		c.AdminUser = def.AdminUser
+	}
+
+	// A client cannot be told anything finer than an hour, so a partial hour
+	// rounds up: refreshing less often than asked beats hammering the panels.
+	if c.SubUpdateInterval <= 0 {
+		c.SubUpdateInterval = def.SubUpdateInterval
+	} else if rem := c.SubUpdateInterval % Duration(time.Hour); rem != 0 {
+		c.SubUpdateInterval += Duration(time.Hour) - rem
 	}
 
 	for _, d := range []struct {

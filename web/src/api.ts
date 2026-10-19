@@ -471,6 +471,7 @@ export interface ServerConfig {
   dataDir: string
   dbPath: string
   subBaseUrl: string
+  subUpdateInterval: string
   debug: boolean
   adminUser: string
   adminPassword: string

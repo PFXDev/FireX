@@ -118,6 +118,7 @@ func TestLoadReplacesUnusableValues(t *testing.T) {
 	  "syncInterval": "0s",
 	  "trafficInterval": "-1m",
 	  "subBaseUrl": "https://sub.example.com/",
+	  "subUpdateInterval": "90m",
 	  "update": {"channel": "DEV", "source": "nowhere", "proxyBaseUrl": "https://mirror.example.com/", "checkInterval": "0s"}
 	}`)
 
@@ -132,6 +133,9 @@ func TestLoadReplacesUnusableValues(t *testing.T) {
 	}
 	if cfg.SubBaseURL != "https://sub.example.com" {
 		t.Errorf("SubBaseURL = %q, want the trailing slash gone", cfg.SubBaseURL)
+	}
+	if cfg.SubUpdateInterval != Duration(2*time.Hour) {
+		t.Errorf("SubUpdateInterval = %v, want 90m rounded up to 2h", cfg.SubUpdateInterval)
 	}
 	if cfg.Update.Channel != "dev" {
 		t.Errorf("Update.Channel = %q, want dev", cfg.Update.Channel)
