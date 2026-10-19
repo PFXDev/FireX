@@ -426,6 +426,34 @@ export interface AgentSession {
   result: SnapshotOutcome | null
 }
 
+/** A row of the agent history; GET the session for its diff. */
+export interface AgentHistoryItem {
+  id: number
+  task: string
+  state: AgentState
+  live: boolean
+  expired: boolean
+  summary: string
+  submissions: number
+  changes: number
+  admin: string
+  createdAt: number
+  finishedAt: number
+}
+
+/** One configuration change made through the admin API. */
+export interface AuditLog {
+  id: number
+  actor: string
+  action: string
+  /** The object's name when the change was made. */
+  target: string
+  method: string
+  path: string
+  ip: string
+  createdAt: number
+}
+
 export interface ServerConfig {
   listen: string
   dataDir: string

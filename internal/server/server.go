@@ -63,7 +63,8 @@ func (s *Server) routes() {
 	api.POST("/auth/login", s.handleLogin)
 	api.POST("/auth/logout", s.handleLogout)
 
-	authed := api.Group("", s.requireAdmin)
+	// Every successful write through the admin API lands in the audit log.
+	authed := api.Group("", s.requireAdmin, s.audit)
 	authed.GET("/auth/me", s.handleMe)
 	authed.POST("/auth/password", s.handleChangePassword)
 
@@ -73,6 +74,7 @@ func (s *Server) routes() {
 	// An agent session hands the configuration to an outside agent: it edits
 	// a snapshot with a single-use token, and an admin reviews the diff before
 	// anything takes effect.
+	authed.GET("/agent-sessions", s.listAgentSessions)
 	authed.POST("/agent-sessions", s.createAgentSession)
 	authed.GET("/agent-sessions/current", s.currentAgentSession)
 	authed.GET("/agent-sessions/:id", s.getAgentSession)
@@ -152,6 +154,8 @@ func (s *Server) routes() {
 	// Self-update sits behind the admin session like everything else. The
 	// session lives in the database, so it survives the restart an update
 	// causes and the UI keeps polling straight through.
+	authed.GET("/audit-logs", s.listAuditLogs)
+
 	authed.GET("/version", s.handleVersion)
 	authed.GET("/update/status", s.handleUpdateStatus)
 	authed.POST("/update/check", s.handleUpdateCheck)

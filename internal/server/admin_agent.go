@@ -166,6 +166,54 @@ func (s *Server) currentAgentSession(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"session": s.agentView(sess)})
 }
 
+// agentHistoryItem is one row of the history list; the full review, diff
+// included, is a GET of the session itself.
+type agentHistoryItem struct {
+	ID          uint   `json:"id"`
+	Task        string `json:"task"`
+	State       string `json:"state"`
+	Live        bool   `json:"live"`
+	Expired     bool   `json:"expired"`
+	Summary     string `json:"summary"`
+	Submissions int    `json:"submissions"`
+	Changes     int    `json:"changes"`
+	Admin       string `json:"admin"`
+	CreatedAt   int64  `json:"createdAt"`
+	FinishedAt  int64  `json:"finishedAt"`
+}
+
+func (s *Server) listAgentSessions(c *gin.Context) {
+	var sessions []model.AgentSession
+	if err := s.db.Order("id DESC").Limit(100).Find(&sessions).Error; err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	var admins []model.Admin
+	s.db.Find(&admins)
+	names := map[uint]string{}
+	for _, admin := range admins {
+		names[admin.ID] = admin.Username
+	}
+	now := nowMs()
+	items := make([]agentHistoryItem, 0, len(sessions))
+	for _, sess := range sessions {
+		item := agentHistoryItem{
+			ID: sess.ID, Task: sess.Task, State: sess.State, Live: sess.Live(now),
+			Summary: sess.Summary, Submissions: sess.Submissions, Admin: names[sess.AdminID],
+			CreatedAt: sess.CreatedAt, FinishedAt: sess.FinishedAt,
+		}
+		item.Expired = !item.Live && sess.State != model.AgentMerged && sess.State != model.AgentCancelled
+		if sess.Preview != "" {
+			var preview snapshotPreview
+			if json.Unmarshal([]byte(sess.Preview), &preview) == nil {
+				item.Changes = len(preview.Changes)
+			}
+		}
+		items = append(items, item)
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
 func (s *Server) loadAgentSession(c *gin.Context) (model.AgentSession, bool) {
 	var sess model.AgentSession
 	id, ok := paramID(c)

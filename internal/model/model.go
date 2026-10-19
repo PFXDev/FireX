@@ -525,10 +525,26 @@ func (a *AgentSession) Live(nowMs int64) bool {
 	return false
 }
 
+// AuditLog records one configuration change made through the admin API. It
+// names who did what to which object, never the request body, so passwords and
+// panel credentials stay out of it.
+type AuditLog struct {
+	ID     uint   `json:"id" gorm:"primaryKey;autoIncrement"`
+	Actor  string `json:"actor"`
+	Action string `json:"action"`
+	// Target is the object's name as it was when the change was made, so a
+	// deleted object still reads as something.
+	Target    string `json:"target"`
+	Method    string `json:"method"`
+	Path      string `json:"path"`
+	IP        string `json:"ip"`
+	CreatedAt int64  `json:"createdAt" gorm:"index"`
+}
+
 // AllModels is the AutoMigrate list.
 func AllModels() []any {
 	return []any{
-		&Admin{}, &Session{}, &AgentSession{}, &Panel{}, &Inbound{},
+		&Admin{}, &Session{}, &AgentSession{}, &AuditLog{}, &Panel{}, &Inbound{},
 		&NodeGroup{}, &NodeGroupTag{}, &NodeGroupInbound{},
 		&Policy{}, &Rule{}, &RuleSet{},
 		&Profile{}, &ProfileNodeGroup{}, &Egress{}, &EgressMember{},

@@ -262,6 +262,7 @@ to the agent, which rebuilds on the current configuration.
 
 ```
 # Admin (session cookie)
+GET  /api/agent-sessions               # history: the last 100 sessions
 POST /api/agent-sessions               # { task, ttlMinutes } → { session, token, prompt }
 GET  /api/agent-sessions/current       # the live session, or null
 GET  /api/agent-sessions/:id           # state, diff preview, merge result
@@ -316,6 +317,24 @@ top-level sections are `panels`, `inbounds`, `inboundTemplates`, `nodeGroups`,
 - **Users and plans are out of scope.** They carry live traffic counters and
   subscription tokens that a configuration push must never rewind. A profile
   still bound by a plan cannot be deleted by a snapshot.
+
+The Agent page lists past sessions under **历史记录**. Opening one shows the
+task, the agent's summary, the last feedback and the diff that was merged (or,
+for an unmerged session, its last submission).
+
+## Audit log
+
+Every successful write through the admin API is recorded on the **操作日志**
+page with the time, admin, action, target and client IP. Agent sessions are
+recorded too: created, returned, cancelled and merged. The target is the
+object's name as it was before the change, so deletes and renames still read
+correctly. Request bodies are never stored, so passwords and panel tokens stay
+out of the log. Reads, previews, connection tests and rejected requests are not
+recorded. The newest 10,000 entries are kept.
+
+```
+GET /api/audit-logs?before=<id>        # { items, more }, newest first, 50 per page
+```
 
 ## Updates
 

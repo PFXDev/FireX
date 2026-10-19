@@ -14,12 +14,12 @@ import {
   XIcon,
 } from 'lucide-react'
 
-import { ApiError, type AgentSession, type SnapshotChange, api } from '@/api'
+import { ApiError, type AgentHistoryItem, type AgentSession, type SnapshotChange, api } from '@/api'
 import { CodeBlock, CodeText } from '@/components/code-display'
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { LoadErrorAlert } from '@/components/load-state'
+import { LoadErrorAlert, RefreshButton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
-import { StatusBadge } from '@/components/status-badge'
+import { StatusBadge, type Tone } from '@/components/status-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -36,6 +36,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { reportSyncError } from '@/lib/sync'
 import { copyText, errorMessage, formatTime } from '@/lib/format'
@@ -175,6 +176,7 @@ export function AgentPage() {
       ) : (
         <FinishedCard session={session} onRestart={() => adopt(null)} />
       )}
+      <HistoryCard reloadKey={session ? `${session.id}:${session.state}:${session.submissions}` : ''} />
     </div>
   )
 }
@@ -671,5 +673,203 @@ function FinishedCard({ session, onRestart }: { session: AgentSession; onRestart
         </Button>
       </CardFooter>
     </Card>
+  )
+}
+
+function historyStatus(item: { state: AgentHistoryItem['state']; live: boolean; expired: boolean }): [string, Tone] {
+  if (item.expired) return ['已过期', 'idle']
+  switch (item.state) {
+    case 'merged':
+      return ['已合并', 'good']
+    case 'cancelled':
+      return ['已取消', 'idle']
+    case 'submitted':
+      return ['待审核', 'warn']
+    case 'returned':
+      return ['已退回', 'warn']
+    default:
+      return ['等待 agent', 'warn']
+  }
+}
+
+/** Past sessions, newest first; reloads whenever the current one moves on. */
+function HistoryCard({ reloadKey }: { reloadKey: string }) {
+  const [items, setItems] = useState<AgentHistoryItem[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [openId, setOpenId] = useState<number | null>(null)
+
+  const refresh = useCallback(async () => {
+    setLoading(true)
+    setLoadError(null)
+    try {
+      const res = await api.get<{ items: AgentHistoryItem[] }>('/agent-sessions')
+      setItems(res.items)
+    } catch (err) {
+      setLoadError(errorMessage(err, '加载历史记录失败'))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh, reloadKey])
+
+  if (items !== null && items.length === 0 && !loadError) return null
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>历史记录</CardTitle>
+        <CardDescription>最近 100 次 agent 会话。点开查看任务、说明和合并的差异。</CardDescription>
+        <CardAction>
+          <RefreshButton loading={loading} onClick={() => void refresh()} />
+        </CardAction>
+      </CardHeader>
+      <CardContent className="px-0">
+        {loadError && (
+          <div className="px-4">
+            <LoadErrorAlert title="历史记录加载失败" message={loadError} retrying={loading} onRetry={() => void refresh()} />
+          </div>
+        )}
+        {items === null ? (
+          <div className="px-4">
+            <Skeleton className="h-24 w-full" />
+          </div>
+        ) : (
+          items.length > 0 && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>任务</TableHead>
+                  <TableHead>状态</TableHead>
+                  <TableHead className="hidden sm:table-cell">差异</TableHead>
+                  <TableHead className="hidden md:table-cell">创建</TableHead>
+                  <TableHead className="hidden lg:table-cell">管理员</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {items.map((item) => {
+                  const [label, tone] = historyStatus(item)
+                  return (
+                    <TableRow key={item.id} className="cursor-pointer" onClick={() => setOpenId(item.id)}>
+                      <TableCell className="max-w-80">
+                        <div className="flex flex-col gap-0.5">
+                          <span className="truncate font-medium" title={item.task}>
+                            {item.task || <span className="text-muted-foreground">（未填写任务）</span>}
+                          </span>
+                          {item.summary && (
+                            <span className="truncate text-xs text-muted-foreground" title={item.summary}>
+                              {item.summary}
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge tone={tone}>{label}</StatusBadge>
+                      </TableCell>
+                      <TableCell className="hidden tabular-nums text-muted-foreground sm:table-cell">
+                        {item.submissions > 0 ? `${item.changes} 项 · 提交 ${item.submissions} 次` : '—'}
+                      </TableCell>
+                      <TableCell className="hidden tabular-nums text-muted-foreground md:table-cell">
+                        {formatTime(item.createdAt)}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell">{item.admin}</TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          )
+        )}
+      </CardContent>
+      <HistoryDialog id={openId} onClose={() => setOpenId(null)} />
+    </Card>
+  )
+}
+
+function HistoryDialog({ id, onClose }: { id: number | null; onClose: () => void }) {
+  const [session, setSession] = useState<AgentSession | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (id === null) return
+    let cancelled = false
+    setSession(null)
+    setLoadError(null)
+    api
+      .get<{ session: AgentSession }>(`/agent-sessions/${id}`)
+      .then((res) => !cancelled && setSession(res.session))
+      .catch((err) => !cancelled && setLoadError(errorMessage(err, '加载会话失败')))
+    return () => {
+      cancelled = true
+    }
+  }, [id])
+
+  const changes = session?.result?.changes ?? session?.preview?.changes ?? []
+  const status = session && historyStatus(session)
+
+  return (
+    <Dialog open={id !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            Agent 会话 #{id}
+            {status && <StatusBadge tone={status[1]}>{status[0]}</StatusBadge>}
+          </DialogTitle>
+          <DialogDescription>
+            {session
+              ? `创建于 ${formatTime(session.createdAt)}${session.finishedAt ? `，结束于 ${formatTime(session.finishedAt)}` : ''}`
+              : '加载中…'}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="-mx-4 flex min-h-0 flex-col gap-4 overflow-y-auto px-4 text-sm">
+          {loadError && <LoadErrorAlert title="加载失败" message={loadError} />}
+          {!session && !loadError && <Skeleton className="h-32 w-full" />}
+          {session && (
+            <>
+              <div className="flex flex-col gap-1">
+                <span className="font-medium">任务</span>
+                <p className="whitespace-pre-wrap text-muted-foreground">{session.task || '（未填写）'}</p>
+              </div>
+              {session.summary && (
+                <div className="flex flex-col gap-1">
+                  <span className="font-medium">agent 的说明</span>
+                  <p className="whitespace-pre-wrap text-muted-foreground">{session.summary}</p>
+                </div>
+              )}
+              {session.feedback && (
+                <div className="flex flex-col gap-1">
+                  <span className="font-medium">最近一次退回意见</span>
+                  <p className="whitespace-pre-wrap text-muted-foreground">{session.feedback}</p>
+                </div>
+              )}
+              {session.result?.syncError && (
+                <Alert variant="destructive">
+                  <TriangleAlertIcon />
+                  <AlertTitle>合并后下发到面板时出错</AlertTitle>
+                  <AlertDescription>{session.result.syncError}</AlertDescription>
+                </Alert>
+              )}
+              {changes.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  <span className="font-medium">
+                    {session.state === 'merged' ? '合并的差异' : '最后一次提交的差异'}（{changes.length} 项）
+                  </span>
+                  <ul className="flex flex-col gap-2">
+                    {changes.map((change) => (
+                      <ChangeRow key={`${change.section}/${change.key}`} change={change} />
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-muted-foreground">agent 没有提交过修改。</p>
+              )}
+            </>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }

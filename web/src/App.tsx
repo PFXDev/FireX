@@ -35,6 +35,7 @@ import { UsersPage } from '@/pages/Users'
 import { SettingsPage } from '@/pages/Settings'
 import { SystemPage } from '@/pages/System'
 import { AgentPage } from '@/pages/Agent'
+import { AuditPage } from '@/pages/Audit'
 
 /** Restores the collapsed state that the sidebar persists in its cookie. */
 function sidebarDefaultOpen() {
@@ -144,6 +145,8 @@ function Page({ route }: { route: RouteKey }) {
       return <RoutingPage />
     case 'agent':
       return <AgentPage />
+    case 'audit':
+      return <AuditPage />
     case 'settings':
       return <SettingsPage />
     case 'system':
