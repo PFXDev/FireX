@@ -235,39 +235,52 @@ POST   /api/inbound-templates/:id/instantiate  # revision, panelId, listen, port
                                                # acceptProxyProtocol, publicAddress, publicPort
 ```
 
-## API tokens and snapshots
+## Agent sessions
 
-Scripts and local agents call the same `/api` as the UI, with a bearer token
-instead of a session cookie. Create one under **Settings → API 令牌**; it is
-shown once, and FireX keeps only its hash.
+A local agent (Claude Code, a script, anything that speaks HTTP) can edit the
+configuration, but nothing it sends takes effect until an admin has reviewed
+the diff in the UI and merged it.
 
-```bash
-curl -H "Authorization: Bearer fxt_…" https://firex.example.com/api/snapshot
+1. Under **Agent 修改**, describe the task, pick how long the session lives
+   (30 minutes to 24 hours) and click **生成提示词**. FireX returns a short
+   prompt with the background, the API address and a single-use `fxa_` token.
+   FireX stores only the token's hash, and the prompt stays in this browser
+   until the session ends.
+2. Paste the prompt into the agent. It reads `GET /api/agent/guide`, fetches a
+   snapshot, checks its edits with the preview endpoint and submits them with
+   a summary. The page tracks it live: connected, read the config, submitted.
+3. Review the diff: every changed row, field by field. **合并** applies it,
+   **退回修改** sends it back with feedback (the agent keeps its token and
+   resubmits), **取消会话** discards it. A newer submission replaces the one
+   under review, and a merge only applies the version the reviewer saw.
+4. Merging, cancelling or expiry ends the session. The token stops working on
+   the next request.
+
+There is one live session at a time. If the configuration changed after the
+agent submitted, the submission cannot be merged: a merge attempt returns it
+to the agent, which rebuilds on the current configuration.
+
 ```
+# Admin (session cookie)
+POST /api/agent-sessions               # { task, ttlMinutes } → { session, token, prompt }
+GET  /api/agent-sessions/current       # the live session, or null
+GET  /api/agent-sessions/:id           # state, diff preview, merge result
+POST /api/agent-sessions/:id/merge     # { submissions, allowPanelRemoval }
+POST /api/agent-sessions/:id/return    # { feedback }
+POST /api/agent-sessions/:id/cancel
 
-A token acts as the admin who created it, with two limits: it can never manage
-credentials (tokens and the password need a signed-in session, so a leaked
-token cannot mint itself a successor), and a **read-only** token may only make
-`GET` requests and preview a snapshot. A request carrying an `Authorization`
-header never falls back to the session cookie. Tokens may expire; revoking
-one takes effect on the next request.
-
-```
-GET    /api/tokens       # session only
-POST   /api/tokens       # { name, readOnly, expiresInDays } → { token, apiToken }
-DELETE /api/tokens/:id
+# Agent (Authorization: Bearer fxa_…; reaches nothing else)
+GET  /api/agent                        # state, task, feedback
+GET  /api/agent/guide                  # the format and rules, in markdown
+GET  /api/agent/snapshot               # { revision, ...sections }
+POST /api/agent/preview                # validates and returns the diff, writes nothing
+PUT  /api/agent/submission             # { revision, ...sections, summary }
 ```
 
 A **snapshot** is the configuration as one JSON document keyed by name rather
 than row id, so the same document means the same thing on any install. The
-intended loop is: read it, edit it, preview, apply.
-
-```
-GET  /api/snapshot           # { revision, panels, inbounds, inboundTemplates,
-                             #   nodeGroups, profiles, routing, clashTemplate }
-POST /api/snapshot/preview   # same body as PUT; returns the diff, writes nothing
-PUT  /api/snapshot           # { revision, ...sections, allowPanelRemoval }
-```
+top-level sections are `panels`, `inbounds`, `inboundTemplates`, `nodeGroups`,
+`profiles`, `routing` and `clashTemplate`.
 
 - **Sections are optional; a present section is the whole truth.** A section
   left out is untouched. A section that is present replaces what is stored:
@@ -275,30 +288,31 @@ PUT  /api/snapshot           # { revision, ...sections, allowPanelRemoval }
   value a new row would get.
 - **One transaction.** The whole document is written and run through the same
   routing validation as a matrix save, then committed or rolled back as a
-  unit. Preview runs exactly the same path and rolls back, so a preview that
-  succeeds is an apply that will.
+  unit. Preview and submission run exactly the same path and roll back, so a
+  submission that is accepted is a merge that will succeed, unless the
+  configuration has moved since.
 - **Optimistic concurrency.** `revision` is required and must match the
-  current configuration, or the apply returns `409`. The apply response
-  carries the revision to build the next edit on.
+  current configuration, both when the agent submits and when the admin
+  merges.
 - **References are names.** Inbounds are addressed as `{ panel, remoteId }`;
   node groups, profiles, policies and rule sets by bare name, as everywhere
   else in FireX.
 - **Panels.** `apiToken` is never exported. It is required for a new panel and
   optional for an existing one (empty keeps the stored token). Dropping a panel
-  deletes every FireX client on it, so it is refused unless the request sets
-  `allowPanelRemoval: true`; the preview lists it under `removedPanels`. New
-  panels are discovered after the commit, so their inbounds can only be
-  referenced by the next apply.
+  deletes every FireX client on it, so the review page lists it under
+  `removedPanels` and the reviewer must tick a confirmation before merging. New
+  panels are discovered after the merge, so their inbounds can only be
+  referenced by the next session.
 - **Inbounds** are discovered, not created. A snapshot sets FireX's own fields
   and the managed configuration (`managedConfig`, `null` to stop managing).
   Leaving out an inbound that still exists on its panel is refused; one
   marked missing is deleted. Discovery-owned fields (`tag`, `port`, …) are
-  shown for reading and ignored on apply.
-- **Panels are written only for clients.** If the apply changed which inbounds
-  a profile reaches, the affected users are pushed before the response
-  returns (`reconciledPlans`, `syncError`). A changed managed configuration is
-  **not** deployed: it becomes pending and is listed in `pendingDeployments`,
-  to be deployed through the inbound config preview/deploy endpoints.
+  shown for reading and ignored on merge.
+- **Panels are written only for clients.** If the merge changed which inbounds
+  a profile reaches, the affected users are pushed before the merge returns
+  (`reconciledPlans`, `syncError`). A changed managed configuration is **not**
+  deployed: it becomes pending, and the result page links each one to its
+  inbound config page to preview and deploy.
 - **Users and plans are out of scope.** They carry live traffic counters and
   subscription tokens that a configuration push must never rewind. A profile
   still bound by a plan cannot be deleted by a snapshot.

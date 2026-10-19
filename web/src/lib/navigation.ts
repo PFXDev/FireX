@@ -1,4 +1,5 @@
 import {
+  BotIcon,
   BoxesIcon,
   CpuIcon,
   GaugeIcon,
@@ -21,6 +22,7 @@ export type RouteKey =
   | 'plans'
   | 'users'
   | 'routing'
+  | 'agent'
   | 'settings'
   | 'system'
 
@@ -65,6 +67,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: '运维配置',
     items: [
       { route: 'routing', title: '分流', icon: SplitIcon },
+      { route: 'agent', title: 'Agent 修改', icon: BotIcon },
       { route: 'settings', title: '设置', icon: SettingsIcon },
       { route: 'system', title: '系统', icon: CpuIcon },
     ],

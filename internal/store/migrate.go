@@ -57,6 +57,13 @@ func (d *DB) migrate(path string) error {
 	if err := d.AutoMigrate(model.AllModels()...); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
+	// Long-lived API tokens were replaced by reviewed agent sessions; dropping
+	// the table revokes any token a build that had them issued.
+	if d.Migrator().HasTable("api_tokens") {
+		if err := d.Migrator().DropTable("api_tokens"); err != nil {
+			return fmt.Errorf("drop api_tokens: %w", err)
+		}
+	}
 
 	if legacy {
 		if err := d.fillFromLegacy(); err != nil {

@@ -4,7 +4,6 @@ import {
   ChevronDownIcon,
   FileCode2Icon,
   InfoIcon,
-  KeyRoundIcon,
   LayoutTemplateIcon,
   RotateCcwIcon,
   SaveIcon,
@@ -12,7 +11,6 @@ import {
 } from 'lucide-react'
 
 import { ApiError, api } from '@/api'
-import { ApiTokens } from '@/components/api-tokens'
 import { CodeText, CodeTextarea } from '@/components/code-display'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { confirmUnsavedNavigation, useUnsavedGuard } from '@/hooks/use-unsaved-guard'
@@ -158,7 +156,7 @@ export function SettingsPage() {
   if (!tpl) {
     return (
       <div className="flex flex-col gap-6">
-        <PageHeader title="设置" description="管理订阅模板、管理员账号安全与 API 令牌" />
+        <PageHeader title="设置" description="管理订阅模板与管理员账号安全" />
         {loadError ? (
           <LoadErrorAlert title="无法加载设置" message={loadError} retrying={loading} onRetry={() => void load()} />
         ) : (
@@ -185,7 +183,7 @@ export function SettingsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="设置" description="管理订阅模板、管理员账号安全与 API 令牌" />
+      <PageHeader title="设置" description="管理订阅模板与管理员账号安全" />
 
       {loadError && (
         <LoadErrorAlert
@@ -207,10 +205,6 @@ export function SettingsPage() {
           <TabsTrigger value="security">
             <ShieldCheckIcon />
             账号安全
-          </TabsTrigger>
-          <TabsTrigger value="tokens">
-            <KeyRoundIcon />
-            API 令牌
           </TabsTrigger>
         </TabsList>
 
@@ -371,10 +365,6 @@ export function SettingsPage() {
               </CardFooter>
             </Card>
           </form>
-        </TabsContent>
-
-        <TabsContent value="tokens">
-          <ApiTokens />
         </TabsContent>
       </Tabs>
 

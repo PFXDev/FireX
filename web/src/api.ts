@@ -366,17 +366,64 @@ export interface VersionInfo {
   updateRepo: string
 }
 
-/** A bearer token for scripts and agents. The secret itself is shown once, at creation. */
-export interface ApiToken {
+/** live states keep the token working: open → submitted ⇄ returned → merged | cancelled. */
+export type AgentState = 'open' | 'submitted' | 'returned' | 'merged' | 'cancelled'
+
+export interface SnapshotFieldChange {
+  path: string
+  before?: unknown
+  after?: unknown
+}
+
+/** One row of a snapshot diff, keyed by name. */
+export interface SnapshotChange {
+  section: string
+  key: string
+  action: 'create' | 'update' | 'delete'
+  fields?: SnapshotFieldChange[]
+}
+
+export interface SnapshotPreview {
+  changes: SnapshotChange[]
+  /** Panels discovered after the merge commits. */
+  discover: string[]
+  /** Panels deleted with every FireX client on them. */
+  removedPanels: string[]
+  reconcilePlans: number
+}
+
+export interface SnapshotOutcome {
+  revision: string
+  changes: SnapshotChange[]
+  discover: { panel: string; error: string }[]
+  reconciledPlans: number
+  syncError: string
+  remoteCleanupFailures: number
+  /** Managed configurations the merge left pending; deploy them from the inbound config page. */
+  pendingDeployments: { panel: string; remoteId: number; inboundId: number; revision: number }[]
+}
+
+/** One hand-off of the configuration to an outside agent, reviewed before it takes effect. */
+export interface AgentSession {
   id: number
-  name: string
-  /** The token's first characters, to tell tokens apart. */
-  prefix: string
-  readOnly: boolean
-  /** ms epoch, 0 = never. */
+  task: string
+  state: AgentState
+  feedback: string
+  summary: string
+  revision: string
+  submissions: number
+  readAt: number
+  lastSeenAt: number
+  submittedAt: number
   expiresAt: number
-  lastUsedAt: number
+  finishedAt: number
   createdAt: number
+  live: boolean
+  expired: boolean
+  /** The configuration moved since the submission; merging returns it to the agent. */
+  stale: boolean
+  preview: SnapshotPreview | null
+  result: SnapshotOutcome | null
 }
 
 export interface ServerConfig {

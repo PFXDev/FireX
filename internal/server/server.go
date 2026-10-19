@@ -29,6 +29,9 @@ type Server struct {
 	upd        *updater.Updater
 	configPath string
 	configMu   sync.Mutex
+	// agentMu orders submissions against merges, so a merge never applies a
+	// submission the reviewer has not seen.
+	agentMu sync.Mutex
 
 	engine *gin.Engine
 	http   *http.Server
@@ -62,23 +65,29 @@ func (s *Server) routes() {
 
 	authed := api.Group("", s.requireAdmin)
 	authed.GET("/auth/me", s.handleMe)
-
-	// Credentials are managed from a signed-in session only; an API token can
-	// do everything else but cannot mint, list or revoke tokens.
-	session := authed.Group("", requireSession)
-	session.POST("/auth/password", s.handleChangePassword)
-	session.GET("/tokens", s.listAPITokens)
-	session.POST("/tokens", s.createAPIToken)
-	session.DELETE("/tokens/:id", s.deleteAPIToken)
+	authed.POST("/auth/password", s.handleChangePassword)
 
 	authed.GET("/overview", s.handleOverview)
 	authed.POST("/sync", s.handleSyncNow)
 
-	// A snapshot is the configuration keyed by name for agents and scripts:
-	// read it, edit it, preview the diff, apply it in one transaction.
-	authed.GET("/snapshot", s.getSnapshot)
-	authed.POST("/snapshot/preview", s.previewSnapshot)
-	authed.PUT("/snapshot", s.applySnapshot)
+	// An agent session hands the configuration to an outside agent: it edits
+	// a snapshot with a single-use token, and an admin reviews the diff before
+	// anything takes effect.
+	authed.POST("/agent-sessions", s.createAgentSession)
+	authed.GET("/agent-sessions/current", s.currentAgentSession)
+	authed.GET("/agent-sessions/:id", s.getAgentSession)
+	authed.POST("/agent-sessions/:id/merge", s.mergeAgentSession)
+	authed.POST("/agent-sessions/:id/return", s.returnAgentSession)
+	authed.POST("/agent-sessions/:id/cancel", s.cancelAgentSession)
+
+	// The agent's own surface. Its token works nowhere else and only while
+	// the session is live.
+	agent := api.Group("/agent", s.requireAgent)
+	agent.GET("", s.agentSession)
+	agent.GET("/guide", s.agentGuide)
+	agent.GET("/snapshot", s.agentSnapshot)
+	agent.POST("/preview", s.agentPreview)
+	agent.PUT("/submission", s.agentSubmit)
 
 	authed.GET("/panels", s.listPanels)
 	authed.POST("/panels", s.createPanel)

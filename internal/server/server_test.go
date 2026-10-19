@@ -32,6 +32,8 @@ type harness struct {
 	fake       *paneltest.Panel
 	configPath string
 	cfg        *config.Config
+	// agent is the token of the agent session tests drive snapshots through.
+	agent string
 }
 
 func newHarness(t *testing.T) *harness {

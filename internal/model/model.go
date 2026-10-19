@@ -26,24 +26,6 @@ type Session struct {
 	CreatedAt int64  `json:"createdAt"`
 }
 
-// APIToken lets a script or agent call the admin API with a bearer header
-// instead of a browser session. Only a hash is stored; the token itself is
-// shown once, when it is created.
-type APIToken struct {
-	ID      uint   `json:"id" gorm:"primaryKey;autoIncrement"`
-	AdminID uint   `json:"-" gorm:"index"`
-	Name    string `json:"name" gorm:"not null"`
-	Hash    string `json:"-" gorm:"uniqueIndex;not null"`
-	// Prefix is the token's first characters, enough to tell tokens apart in
-	// a list and in a leaked log line.
-	Prefix string `json:"prefix"`
-	// ReadOnly tokens may only read, plus preview a snapshot.
-	ReadOnly   bool  `json:"readOnly"`
-	ExpiresAt  int64 `json:"expiresAt"` // ms epoch, 0 = never
-	LastUsedAt int64 `json:"lastUsedAt"`
-	CreatedAt  int64 `json:"createdAt"`
-}
-
 // PanelStatus values for Panel.Status.
 const (
 	PanelStatusUnknown = "unknown"
@@ -492,10 +474,61 @@ type InboundDeployment struct {
 	CreatedAt     int64  `json:"createdAt" gorm:"autoCreateTime:milli"`
 }
 
+// AgentSession states. Open, Submitted and Returned are live: the token works.
+const (
+	AgentOpen      = "open"
+	AgentSubmitted = "submitted"
+	AgentReturned  = "returned"
+	AgentMerged    = "merged"
+	AgentCancelled = "cancelled"
+)
+
+// AgentSession hands the configuration to an outside agent for one task. The
+// agent reads a snapshot and submits an edited one with a single-use token;
+// nothing takes effect until an admin reviews the diff and merges it, which
+// ends the session and the token with it. Only the token's hash is stored.
+type AgentSession struct {
+	ID        uint   `json:"id" gorm:"primaryKey;autoIncrement"`
+	AdminID   uint   `json:"-" gorm:"index"`
+	TokenHash string `json:"-" gorm:"uniqueIndex;not null"`
+	// Task is what the admin asked for, shown to the agent.
+	Task  string `json:"task"`
+	State string `json:"state" gorm:"index;not null"`
+	// Feedback is the reviewer's note on a returned submission.
+	Feedback string `json:"feedback"`
+
+	// Submission is the agent's latest snapshot request, JSON. Summary is its
+	// own account of the change; Preview is the dry run computed when it was
+	// submitted, against Revision.
+	Submission  string `json:"-"`
+	Summary     string `json:"summary"`
+	Preview     string `json:"-"`
+	Revision    string `json:"revision"`
+	Submissions int    `json:"submissions"`
+	// Result is the merge response, JSON, kept for the finished page.
+	Result string `json:"-"`
+
+	ReadAt      int64 `json:"readAt"`
+	LastSeenAt  int64 `json:"lastSeenAt"`
+	SubmittedAt int64 `json:"submittedAt"`
+	ExpiresAt   int64 `json:"expiresAt"`
+	FinishedAt  int64 `json:"finishedAt"`
+	CreatedAt   int64 `json:"createdAt"`
+}
+
+// Live reports whether the session's token still works.
+func (a *AgentSession) Live(nowMs int64) bool {
+	switch a.State {
+	case AgentOpen, AgentSubmitted, AgentReturned:
+		return a.ExpiresAt > nowMs
+	}
+	return false
+}
+
 // AllModels is the AutoMigrate list.
 func AllModels() []any {
 	return []any{
-		&Admin{}, &Session{}, &APIToken{}, &Panel{}, &Inbound{},
+		&Admin{}, &Session{}, &AgentSession{}, &Panel{}, &Inbound{},
 		&NodeGroup{}, &NodeGroupTag{}, &NodeGroupInbound{},
 		&Policy{}, &Rule{}, &RuleSet{},
 		&Profile{}, &ProfileNodeGroup{}, &Egress{}, &EgressMember{},

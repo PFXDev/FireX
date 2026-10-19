@@ -414,11 +414,8 @@ func exportRouting(db *store.DB, profileName map[uint]string, profileOrder map[u
 
 type snapshotRequest struct {
 	snapshotDoc
-	// Revision is the one GET /api/snapshot returned. Required.
+	// Revision is the one the snapshot it was edited from carried. Required.
 	Revision string `json:"revision"`
-	// AllowPanelRemoval must be set to apply a panels section that drops a
-	// panel, because that deletes every FireX client on it.
-	AllowPanelRemoval bool `json:"allowPanelRemoval"`
 }
 
 type removedPanel struct {
@@ -455,12 +452,16 @@ func failSnapshot(c *gin.Context, err error) {
 	fail(c, http.StatusBadRequest, err)
 }
 
+// errSnapshotStale marks an apply whose revision no longer matches.
+var errSnapshotStale = deployError(http.StatusConflict, "配置已被修改，请重新读取快照后再提交")
+
 // runSnapshot applies the document inside one transaction and reports what
 // changed. A dry run rolls everything back, so a preview is validated exactly
-// as an apply would be.
-func (s *Server) runSnapshot(req *snapshotRequest, dryRun bool) (*snapshotResult, error) {
+// as an apply would be. Dropping a panel deletes every FireX client on it, so
+// it needs allowPanelRemoval; a dry run reports it instead.
+func (s *Server) runSnapshot(req *snapshotRequest, dryRun, allowPanelRemoval bool) (*snapshotResult, error) {
 	if req.Revision == "" {
-		return nil, deployError(http.StatusBadRequest, "缺少 revision：先 GET /api/snapshot，再带着它返回的 revision 提交")
+		return nil, deployError(http.StatusBadRequest, "缺少 revision：先读取快照，再带着它返回的 revision 提交")
 	}
 	result := &snapshotResult{}
 	err := s.db.Transaction(func(handle *gorm.DB) error {
@@ -470,7 +471,7 @@ func (s *Server) runSnapshot(req *snapshotRequest, dryRun bool) (*snapshotResult
 			return err
 		}
 		if snapshotRevision(before) != req.Revision {
-			return deployError(http.StatusConflict, "配置已被修改，请重新读取快照后再提交")
+			return errSnapshotStale
 		}
 		result.before = before
 		reachBefore, err := profileReach(db)
@@ -483,7 +484,7 @@ func (s *Server) runSnapshot(req *snapshotRequest, dryRun bool) (*snapshotResult
 		eff := &result.effects
 		doc := &req.snapshotDoc
 		if doc.Panels != nil {
-			if err := applySnapshotPanels(handle, doc.Panels, req.AllowPanelRemoval || dryRun, eff); err != nil {
+			if err := applySnapshotPanels(handle, doc.Panels, allowPanelRemoval || dryRun, eff); err != nil {
 				return err
 			}
 		}
@@ -671,7 +672,7 @@ func applySnapshotPanels(handle *gorm.DB, rows []snapshotPanel, allowRemoval boo
 	}
 	if len(removed) > 0 && !allowRemoval {
 		return deployError(http.StatusBadRequest, fmt.Sprintf(
-			"快照会删除面板「%s」以及其上全部 FireX 客户端；确认无误后请带上 allowPanelRemoval: true", strings.Join(removed, "」「")))
+			"快照会删除面板「%s」以及其上全部 FireX 客户端，合并前需要确认删除", strings.Join(removed, "」「")))
 	}
 	for _, p := range existing {
 		if listed[p.Name] {
@@ -1167,7 +1168,9 @@ func diffRows(changes []snapshotChange, section string, before, after keyedRows)
 	for _, k := range after.order {
 		old, ok := before.rows[k]
 		if !ok {
-			changes = append(changes, snapshotChange{Section: section, Key: k, Action: "create"})
+			// A reviewer needs to see what a new row holds, not just its name.
+			fields := configChanges(map[string]any{}, after.rows[k], "")
+			changes = append(changes, snapshotChange{Section: section, Key: k, Action: "create", Fields: fields})
 			continue
 		}
 		if fields := configChanges(old, after.rows[k], ""); len(fields) > 0 {
@@ -1176,7 +1179,8 @@ func diffRows(changes []snapshotChange, section string, before, after keyedRows)
 	}
 	for _, k := range before.order {
 		if _, ok := after.rows[k]; !ok {
-			changes = append(changes, snapshotChange{Section: section, Key: k, Action: "delete"})
+			fields := configChanges(before.rows[k], map[string]any{}, "")
+			changes = append(changes, snapshotChange{Section: section, Key: k, Action: "delete", Fields: fields})
 		}
 	}
 	return changes
@@ -1247,20 +1251,7 @@ func diffSnapshots(before, after snapshotDoc, tokenChanged []string) []snapshotC
 	return changes
 }
 
-// ---------------------------------------------------------------- handlers
-
-func (s *Server) getSnapshot(c *gin.Context) {
-	doc, err := exportSnapshot(s.db)
-	if err != nil {
-		fail(c, http.StatusInternalServerError, err)
-		return
-	}
-	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, struct {
-		Revision string `json:"revision"`
-		snapshotDoc
-	}{snapshotRevision(doc), doc})
-}
+// ----------------------------------------------------------------- outcome
 
 func uniquePlans(ids []uint) []uint {
 	seen := map[uint]bool{}
@@ -1274,29 +1265,28 @@ func uniquePlans(ids []uint) []uint {
 	return out
 }
 
-func (s *Server) previewSnapshot(c *gin.Context) {
-	var req snapshotRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		fail(c, http.StatusBadRequest, err)
-		return
-	}
-	result, err := s.runSnapshot(&req, true)
-	if err != nil {
-		failSnapshot(c, err)
-		return
-	}
+// snapshotPreview is what applying a document would do, from a dry run.
+type snapshotPreview struct {
+	Changes []snapshotChange `json:"changes"`
+	// Discover names the panels discovered after the commit.
+	Discover []string `json:"discover"`
+	// RemovedPanels lose every FireX client on them.
+	RemovedPanels []string `json:"removedPanels"`
+	// ReconcilePlans counts the plans whose users would be pushed.
+	ReconcilePlans int `json:"reconcilePlans"`
+}
+
+func (r *snapshotResult) preview() snapshotPreview {
 	removed := []string{}
-	for _, r := range result.effects.removed {
-		removed = append(removed, r.panel.Name)
+	for _, gone := range r.effects.removed {
+		removed = append(removed, gone.panel.Name)
 	}
-	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, gin.H{
-		"revision":       req.Revision,
-		"changes":        diffSnapshots(result.before, result.after, result.effects.tokenChanged),
-		"discover":       jsonList(result.effects.discoverNames),
-		"removedPanels":  removed,
-		"reconcilePlans": len(uniquePlans(result.effects.plans)),
-	})
+	return snapshotPreview{
+		Changes:        diffSnapshots(r.before, r.after, r.effects.tokenChanged),
+		Discover:       jsonList(r.effects.discoverNames),
+		RemovedPanels:  removed,
+		ReconcilePlans: len(uniquePlans(r.effects.plans)),
+	}
 }
 
 type snapshotDiscovery struct {
@@ -1311,31 +1301,39 @@ type pendingDeployment struct {
 	Revision  uint `json:"revision"`
 }
 
-func (s *Server) applySnapshot(c *gin.Context) {
-	var req snapshotRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		fail(c, http.StatusBadRequest, err)
-		return
-	}
-	result, err := s.runSnapshot(&req, false)
-	if err != nil {
-		failSnapshot(c, err)
-		return
-	}
-	eff := result.effects
-	changes := diffSnapshots(result.before, result.after, eff.tokenChanged)
+// snapshotOutcome is what a committed apply did, panel work included.
+type snapshotOutcome struct {
+	// Revision is the configuration's revision after discovery.
+	Revision              string              `json:"revision"`
+	Changes               []snapshotChange    `json:"changes"`
+	Discover              []snapshotDiscovery `json:"discover"`
+	ReconciledPlans       int                 `json:"reconciledPlans"`
+	SyncError             string              `json:"syncError"`
+	RemoteCleanupFailures int                 `json:"remoteCleanupFailures"`
+	// PendingDeployments are managed configurations waiting to be deployed
+	// through the inbound config endpoints; applying never writes them.
+	PendingDeployments []pendingDeployment `json:"pendingDeployments"`
+}
 
+// settleSnapshot does the panel work a committed apply left: drop the
+// clients on removed panels, discover new or rewired ones, and push the users
+// whose reach changed.
+func (s *Server) settleSnapshot(result *snapshotResult) snapshotOutcome {
+	eff := result.effects
+	out := snapshotOutcome{
+		Changes:            diffSnapshots(result.before, result.after, eff.tokenChanged),
+		Discover:           []snapshotDiscovery{},
+		PendingDeployments: []pendingDeployment{},
+	}
 	for _, id := range eff.invalidate {
 		s.mgr.Invalidate(id)
 	}
-	cleanupFailures := 0
 	for _, gone := range eff.removed {
 		ctx, cancel := context.WithTimeout(context.Background(), discoverTimeout)
-		cleanupFailures += s.deleteRemoteClients(ctx, &gone.panel, gone.emails)
+		out.RemoteCleanupFailures += s.deleteRemoteClients(ctx, &gone.panel, gone.emails)
 		cancel()
 		s.mgr.Invalidate(gone.panel.ID)
 	}
-	discovered := []snapshotDiscovery{}
 	for _, id := range eff.discover {
 		var p model.Panel
 		if err := s.db.First(&p, id).Error; err != nil {
@@ -1344,13 +1342,13 @@ func (s *Server) applySnapshot(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(context.Background(), discoverTimeout)
 		err := s.mgr.DiscoverPanel(ctx, &p)
 		cancel()
-		discovered = append(discovered, snapshotDiscovery{Panel: p.Name, Error: errString(err)})
+		out.Discover = append(out.Discover, snapshotDiscovery{Panel: p.Name, Error: errString(err)})
 	}
 	plans := uniquePlans(eff.plans)
-	syncErr := s.reconcilePlans(plans)
+	out.ReconciledPlans = len(plans)
+	out.SyncError = errString(s.reconcilePlans(plans))
 	s.subs.InvalidateAll()
 
-	pending := []pendingDeployment{}
 	var configs []model.InboundConfig
 	s.db.Where("applied_revision <> revision").Find(&configs)
 	for _, cfg := range configs {
@@ -1359,23 +1357,12 @@ func (s *Server) applySnapshot(c *gin.Context) {
 		if s.db.First(&n, cfg.InboundID).Error != nil || s.db.First(&p, n.PanelID).Error != nil {
 			continue
 		}
-		pending = append(pending, pendingDeployment{inboundRef{p.Name, n.RemoteID}, n.ID, cfg.Revision})
+		out.PendingDeployments = append(out.PendingDeployments, pendingDeployment{inboundRef{p.Name, n.RemoteID}, n.ID, cfg.Revision})
 	}
-
 	// Discovery may have added inbounds, so the revision to build on next is
 	// read after it.
-	revision := ""
 	if doc, err := exportSnapshot(s.db); err == nil {
-		revision = snapshotRevision(doc)
+		out.Revision = snapshotRevision(doc)
 	}
-	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, gin.H{
-		"revision":              revision,
-		"changes":               changes,
-		"discover":              discovered,
-		"reconciledPlans":       len(plans),
-		"syncError":             errString(syncErr),
-		"remoteCleanupFailures": cleanupFailures,
-		"pendingDeployments":    pending,
-	})
+	return out
 }
