@@ -448,6 +448,8 @@ export interface AdminAccount {
   id: number
   username: string
   role: AdminRole
+  /** An operator's read-only access to panels, inbounds, node groups, routing and the template. */
+  canViewConfig: boolean
   createdAt: number
   updatedAt: number
   /** Whether this is the signed-in admin, whose own account cannot be removed. */

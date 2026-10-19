@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BoxesIcon, PencilIcon, PlusIcon, RouteIcon, Trash2Icon, TriangleAlertIcon, XIcon } from 'lucide-react'
+import { BoxesIcon, EyeIcon, PencilIcon, PlusIcon, RouteIcon, Trash2Icon, TriangleAlertIcon, XIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api } from '@/api'
@@ -49,6 +49,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { errorMessage } from '@/lib/format'
 import { inboundTitle } from '@/lib/inbound'
+import { useSession } from '@/lib/session'
 import { reportSyncError } from '@/lib/sync'
 
 const GROUP_TYPES = [
@@ -103,6 +104,7 @@ export function NodeGroupsPage() {
   const [saving, setSaving] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<NodeGroup | null>(null)
   const [tagFilter, setTagFilter] = useState<{ key: string; value: string } | null>(null)
+  const { readOnly } = useSession()
 
   const load = useCallback(async () => {
     try {
@@ -278,6 +280,8 @@ export function NodeGroupsPage() {
 
   const nameInvalid = Boolean(showErrors && draft && !draft.name.trim())
   const commaInvalid = Boolean(showErrors && draft && draft.name.includes(','))
+  // Operators open the editor only to read a group's settings and members.
+  const locked = saving || readOnly
   const probeGroup = draft?.type !== 'select'
   const selectedInboundCount = inboundsByPanel.reduce(
     (count, [, panelInbounds]) => count + panelInbounds.filter((inbound) => draft?.inboundIds.includes(inbound.id)).length,
@@ -289,10 +293,17 @@ export function NodeGroupsPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="节点组" description="把不同面板的入站聚合成客户端看到的一组线路，用标签按地区、线路管理。">
-        <Button onClick={openCreate}>
-          <PlusIcon data-icon="inline-start" />
-          新建节点组
-        </Button>
+        {readOnly ? (
+          <Badge variant="outline">
+            <EyeIcon data-icon="inline-start" />
+            只读
+          </Badge>
+        ) : (
+          <Button onClick={openCreate}>
+            <PlusIcon data-icon="inline-start" />
+            新建节点组
+          </Button>
+        )}
       </PageHeader>
 
       {unreachable > 0 && (
@@ -348,12 +359,14 @@ export function NodeGroupsPage() {
                   节点组是管理的最小单位：分流方案挑节点组，套餐绑分流方案，用户绑套餐。没有分组就没人能用到任何入站。
                 </EmptyDescription>
               </EmptyHeader>
-              <EmptyContent>
-                <Button onClick={openCreate}>
-                  <PlusIcon data-icon="inline-start" />
-                  新建节点组
-                </Button>
-              </EmptyContent>
+              {!readOnly && (
+                <EmptyContent>
+                  <Button onClick={openCreate}>
+                    <PlusIcon data-icon="inline-start" />
+                    新建节点组
+                  </Button>
+                </EmptyContent>
+              )}
             </Empty>
           ) : (
             <div className="flex flex-col gap-3">
@@ -462,22 +475,24 @@ export function NodeGroupsPage() {
                             type="button"
                             variant="outline"
                             size="sm"
-                            aria-label={`编辑 ${group.name}`}
+                            aria-label={`${readOnly ? '查看' : '编辑'} ${group.name}`}
                             onClick={() => openEdit(group)}
                           >
-                            <PencilIcon data-icon="inline-start" />
-                            <span className="hidden sm:inline">编辑</span>
+                            {readOnly ? <EyeIcon data-icon="inline-start" /> : <PencilIcon data-icon="inline-start" />}
+                            <span className="hidden sm:inline">{readOnly ? '查看' : '编辑'}</span>
                           </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            aria-label={`删除 ${group.name}`}
-                            onClick={() => setPendingDelete(group)}
-                          >
-                            <Trash2Icon data-icon="inline-start" />
-                            <span className="hidden sm:inline">删除</span>
-                          </Button>
+                          {!readOnly && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              aria-label={`删除 ${group.name}`}
+                              onClick={() => setPendingDelete(group)}
+                            >
+                              <Trash2Icon data-icon="inline-start" />
+                              <span className="hidden sm:inline">删除</span>
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -510,22 +525,22 @@ export function NodeGroupsPage() {
           {draft && (
             <form className="contents" noValidate onSubmit={save}>
               <DialogHeader className="shrink-0">
-                <DialogTitle>{draft.id ? '编辑节点组' : '新建节点组'}</DialogTitle>
+                <DialogTitle>{readOnly ? '查看节点组' : draft.id ? '编辑节点组' : '新建节点组'}</DialogTitle>
                 <DialogDescription>分组名会直接作为客户端里的策略组名称显示。</DialogDescription>
               </DialogHeader>
               <FieldGroup className="-mx-4 min-h-0 overflow-y-auto px-4 py-1">
                 <FieldGroup className="sm:grid sm:grid-cols-[6rem_1fr]">
-                  <Field data-disabled={saving || undefined}>
+                  <Field data-disabled={locked || undefined}>
                     <FieldLabel htmlFor="group-emoji">图标</FieldLabel>
                     <Input
                       id="group-emoji"
-                      disabled={saving}
+                      disabled={locked}
                       placeholder="🇭🇰"
                       value={draft.emoji}
                       onChange={(event) => setDraft({ ...draft, emoji: event.target.value })}
                     />
                   </Field>
-                  <Field data-invalid={nameInvalid || commaInvalid || undefined} data-disabled={saving || undefined}>
+                  <Field data-invalid={nameInvalid || commaInvalid || undefined} data-disabled={locked || undefined}>
                     <FieldLabel htmlFor="group-name">名称</FieldLabel>
                     <Input
                       id="group-name"
@@ -533,7 +548,7 @@ export function NodeGroupsPage() {
                       value={draft.name}
                       required
                       aria-invalid={nameInvalid || commaInvalid || undefined}
-                      disabled={saving}
+                      disabled={locked}
                       onChange={(event) => setDraft({ ...draft, name: event.target.value })}
                     />
                     {nameInvalid && <FieldError>请输入分组名称。</FieldError>}
@@ -550,7 +565,7 @@ export function NodeGroupsPage() {
                         <Input
                           aria-label={`标签 ${index + 1} 的键`}
                           className="basis-2/5"
-                          disabled={saving}
+                          disabled={locked}
                           list="firex-tag-keys"
                           placeholder="地区"
                           value={tag.key}
@@ -559,34 +574,38 @@ export function NodeGroupsPage() {
                         <Input
                           aria-label={`标签 ${index + 1} 的值`}
                           placeholder="香港"
-                          disabled={saving}
+                          disabled={locked}
                           value={tag.value}
                           onChange={(event) => patchTag(index, { value: event.target.value })}
                         />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`删除标签 ${index + 1}`}
-                          disabled={saving}
-                          onClick={() => setDraft({ ...draft, tags: draft.tags.filter((_, i) => i !== index) })}
-                        >
-                          <XIcon />
-                        </Button>
+                        {!readOnly && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`删除标签 ${index + 1}`}
+                            disabled={saving}
+                            onClick={() => setDraft({ ...draft, tags: draft.tags.filter((_, i) => i !== index) })}
+                          >
+                            <XIcon />
+                          </Button>
+                        )}
                       </div>
                     ))}
-                    <div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={saving}
-                        onClick={() => setDraft({ ...draft, tags: [...draft.tags, { key: '', value: '' }] })}
-                      >
-                        <PlusIcon data-icon="inline-start" />
-                        添加标签
-                      </Button>
-                    </div>
+                    {!readOnly && (
+                      <div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={saving}
+                          onClick={() => setDraft({ ...draft, tags: [...draft.tags, { key: '', value: '' }] })}
+                        >
+                          <PlusIcon data-icon="inline-start" />
+                          添加标签
+                        </Button>
+                      </div>
+                    )}
                   </FieldGroup>
                   <datalist id="firex-tag-keys">
                     {SUGGESTED_TAG_KEYS.map((key) => (
@@ -596,12 +615,12 @@ export function NodeGroupsPage() {
                 </FieldSet>
 
                 <FieldGroup className="sm:grid sm:grid-cols-3">
-                  <Field data-disabled={saving || undefined}>
+                  <Field data-disabled={locked || undefined}>
                     <FieldLabel htmlFor="group-type">选择方式</FieldLabel>
                     <Select
                       items={GROUP_TYPES}
                       value={draft.type}
-                      disabled={saving}
+                      disabled={locked}
                       onValueChange={(value) => setDraft({ ...draft, type: String(value) })}
                     >
                       <SelectTrigger id="group-type" className="w-full">
@@ -618,11 +637,11 @@ export function NodeGroupsPage() {
                       </SelectContent>
                     </Select>
                   </Field>
-                  <Field data-disabled={saving || undefined}>
+                  <Field data-disabled={locked || undefined}>
                     <FieldLabel htmlFor="group-multiplier">倍率</FieldLabel>
                     <Input
                       id="group-multiplier"
-                      disabled={saving}
+                      disabled={locked}
                       type="number"
                       min={0}
                       step="0.1"
@@ -631,11 +650,11 @@ export function NodeGroupsPage() {
                     />
                     <FieldDescription>仅作展示记录，不参与计费。</FieldDescription>
                   </Field>
-                  <Field data-disabled={saving || undefined}>
+                  <Field data-disabled={locked || undefined}>
                     <FieldLabel htmlFor="group-sort">排序</FieldLabel>
                     <Input
                       id="group-sort"
-                      disabled={saving}
+                      disabled={locked}
                       type="number"
                       value={draft.sortOrder}
                       onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })}
@@ -646,22 +665,22 @@ export function NodeGroupsPage() {
 
                 {probeGroup && (
                   <FieldGroup className="sm:grid sm:grid-cols-3">
-                    <Field className="sm:col-span-3" data-disabled={saving || undefined}>
+                    <Field className="sm:col-span-3" data-disabled={locked || undefined}>
                       <FieldLabel htmlFor="group-test-url">测速地址</FieldLabel>
                       <Input
                         id="group-test-url"
-                        disabled={saving}
+                        disabled={locked}
                         placeholder="https://www.gstatic.com/generate_204"
                         value={draft.testUrl}
                         onChange={(event) => setDraft({ ...draft, testUrl: event.target.value })}
                       />
                       <FieldDescription>留空则使用默认地址。</FieldDescription>
                     </Field>
-                    <Field data-disabled={saving || undefined}>
+                    <Field data-disabled={locked || undefined}>
                       <FieldLabel htmlFor="group-interval">测速间隔 (秒)</FieldLabel>
                       <Input
                         id="group-interval"
-                        disabled={saving}
+                        disabled={locked}
                         type="number"
                         min={0}
                         value={draft.interval}
@@ -669,11 +688,11 @@ export function NodeGroupsPage() {
                       />
                     </Field>
                     {draft.type === 'url-test' && (
-                      <Field data-disabled={saving || undefined}>
+                      <Field data-disabled={locked || undefined}>
                         <FieldLabel htmlFor="group-tolerance">容差 (毫秒)</FieldLabel>
                         <Input
                           id="group-tolerance"
-                          disabled={saving}
+                          disabled={locked}
                           type="number"
                           min={0}
                           value={draft.tolerance}
@@ -711,7 +730,7 @@ export function NodeGroupsPage() {
                                   id={`group-panel-${panel}`}
                                   checked={allSelected}
                                   indeterminate={selectedCount > 0 && !allSelected}
-                                  disabled={saving}
+                                  disabled={locked}
                                   onCheckedChange={() => togglePanel(group)}
                                 />
                                 <FieldLabel htmlFor={`group-panel-${panel}`}>
@@ -727,7 +746,7 @@ export function NodeGroupsPage() {
                                     <Checkbox
                                       id={`group-inbound-${inbound.id}`}
                                       checked={draft.inboundIds.includes(inbound.id)}
-                                      disabled={saving}
+                                      disabled={locked}
                                       onCheckedChange={() => toggleInbound(inbound.id)}
                                     />
                                     <FieldLabel htmlFor={`group-inbound-${inbound.id}`}>
@@ -747,21 +766,21 @@ export function NodeGroupsPage() {
                   </ScrollArea>
                 </FieldSet>
 
-                <Field orientation="horizontal" data-disabled={saving || undefined}>
+                <Field orientation="horizontal" data-disabled={locked || undefined}>
                   <FieldLabel htmlFor="group-enabled">启用分组</FieldLabel>
                   <Switch
                     id="group-enabled"
-                    disabled={saving}
+                    disabled={locked}
                     checked={draft.enabled}
                     onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
                   />
                 </Field>
 
-                <Field data-disabled={saving || undefined}>
+                <Field data-disabled={locked || undefined}>
                   <FieldLabel htmlFor="group-remark">备注</FieldLabel>
                   <Input
                     id="group-remark"
-                    disabled={saving}
+                    disabled={locked}
                     value={draft.remark}
                     onChange={(event) => setDraft({ ...draft, remark: event.target.value })}
                   />
@@ -770,12 +789,14 @@ export function NodeGroupsPage() {
 
               <DialogFooter className="shrink-0">
                 <Button type="button" variant="outline" disabled={saving} onClick={() => setDraft(null)}>
-                  取消
+                  {readOnly ? '关闭' : '取消'}
                 </Button>
-                <Button type="submit" disabled={saving}>
-                  {saving && <Spinner data-icon="inline-start" />}
-                  {saving ? '保存中…' : '保存分组'}
-                </Button>
+                {!readOnly && (
+                  <Button type="submit" disabled={saving}>
+                    {saving && <Spinner data-icon="inline-start" />}
+                    {saving ? '保存中…' : '保存分组'}
+                  </Button>
+                )}
               </DialogFooter>
             </form>
           )}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { KeyRoundIcon, PencilIcon, PlusIcon, ShieldCheckIcon, ShieldIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react'
+import { EyeIcon, KeyRoundIcon, PencilIcon, PlusIcon, ShieldCheckIcon, ShieldIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { type AdminAccount, type AdminRole, api } from '@/api'
@@ -8,6 +8,7 @@ import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -27,10 +28,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
+import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { errorMessage, formatTime } from '@/lib/format'
 import { useSession } from '@/lib/session'
@@ -40,9 +42,10 @@ type Draft = {
   username: string
   password: string
   role: AdminRole
+  canViewConfig: boolean
 }
 
-const emptyDraft: Draft = { username: '', password: '', role: 'operator' }
+const emptyDraft: Draft = { username: '', password: '', role: 'operator', canViewConfig: false }
 
 const ROLE_LABEL: Record<AdminRole, string> = {
   super_admin: '超级管理员',
@@ -95,7 +98,7 @@ export function AdminsPage() {
 
   const openEdit = (admin: AdminAccount) => {
     setShowErrors(false)
-    setDraft({ id: admin.id, username: admin.username, password: '', role: admin.role })
+    setDraft({ id: admin.id, username: admin.username, password: '', role: admin.role, canViewConfig: admin.canViewConfig })
   }
 
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -109,13 +112,18 @@ export function AdminsPage() {
     setSaving(true)
     try {
       if (draft.id) {
-        await api.put(`/admins/${draft.id}`, { username: draft.username.trim(), role: draft.role })
+        await api.put(`/admins/${draft.id}`, {
+          username: draft.username.trim(),
+          role: draft.role,
+          canViewConfig: draft.canViewConfig,
+        })
         toast.success('管理员已保存')
       } else {
         await api.post('/admins', {
           username: draft.username.trim(),
           password: draft.password,
           role: draft.role,
+          canViewConfig: draft.canViewConfig,
         })
         toast.success('管理员已创建')
       }
@@ -256,9 +264,17 @@ export function AdminsPage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <StatusBadge tone={admin.role === 'super_admin' ? 'good' : 'idle'}>
-                          {ROLE_LABEL[admin.role] ?? admin.role}
-                        </StatusBadge>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <StatusBadge tone={admin.role === 'super_admin' ? 'good' : 'idle'}>
+                            {ROLE_LABEL[admin.role] ?? admin.role}
+                          </StatusBadge>
+                          {admin.role === 'operator' && admin.canViewConfig && (
+                            <Badge variant="outline">
+                              <EyeIcon data-icon="inline-start" />
+                              只读配置
+                            </Badge>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="hidden text-muted-foreground tabular-nums md:table-cell">
                         {admin.createdAt ? formatTime(admin.createdAt) : '—'}
@@ -393,6 +409,23 @@ export function AdminsPage() {
                     普通管理员只能管理用户；超级管理员可以管理其余全部内容与账号。
                   </FieldDescription>
                 </Field>
+
+                {draft.role === 'operator' && (
+                  <Field orientation="horizontal" data-disabled={saving || undefined}>
+                    <FieldContent>
+                      <FieldLabel htmlFor="admin-can-view-config">只读查看配置</FieldLabel>
+                      <FieldDescription>
+                        允许查看面板、入站、节点组、分流与订阅模板，但不能做任何修改。入站密钥会被隐藏。
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id="admin-can-view-config"
+                      checked={draft.canViewConfig}
+                      disabled={saving}
+                      onCheckedChange={(checked) => setDraft({ ...draft, canViewConfig: checked })}
+                    />
+                  </Field>
+                )}
               </FieldGroup>
 
               <DialogFooter>

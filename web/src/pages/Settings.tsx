@@ -7,6 +7,7 @@ import {
   LayoutTemplateIcon,
   RotateCcwIcon,
   SaveIcon,
+  EyeIcon,
   ShieldCheckIcon,
 } from 'lucide-react'
 
@@ -17,6 +18,7 @@ import { confirmUnsavedNavigation, useUnsavedGuard } from '@/hooks/use-unsaved-g
 import { FieldsSkeleton, LoadErrorAlert } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -50,7 +52,9 @@ interface TemplateResponse {
 }
 
 export function SettingsPage() {
-  const { isSuperAdmin } = useSession()
+  const { isSuperAdmin, canViewConfig } = useSession()
+  // An operator with the view switch reads the template; only a super admin edits it.
+  const readOnly = !isSuperAdmin
   const [tpl, setTpl] = useState<TemplateResponse | null>(null)
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(true)
@@ -65,8 +69,8 @@ export function SettingsPage() {
   useUnsavedGuard(dirty)
 
   const load = useCallback(() => {
-    // Operators have no access to this endpoint, so do not ask.
-    if (!isSuperAdmin) return Promise.resolve(false)
+    // Operators without the view switch have no access, so do not ask.
+    if (!canViewConfig) return Promise.resolve(false)
     if (loadPromiseRef.current) return loadPromiseRef.current
 
     const request = (async () => {
@@ -88,7 +92,7 @@ export function SettingsPage() {
 
     loadPromiseRef.current = request
     return request
-  }, [isSuperAdmin])
+  }, [canViewConfig])
 
   useEffect(() => {
     void load()
@@ -134,9 +138,9 @@ export function SettingsPage() {
     }
   }
 
-  // Operators manage users, not the subscription template; their settings page
-  // is only the password form.
-  if (!isSuperAdmin) {
+  // Operators manage users, not the subscription template; unless granted the
+  // read-only view, their settings page is only the password form.
+  if (!canViewConfig) {
     return (
       <div className="flex flex-col gap-6">
         <PageHeader title="设置" description="管理员账号安全" />
@@ -148,7 +152,7 @@ export function SettingsPage() {
   if (!tpl) {
     return (
       <div className="flex flex-col gap-6">
-        <PageHeader title="设置" description="管理订阅模板与管理员账号安全" />
+        <PageHeader title="设置" description={readOnly ? '查看订阅模板，管理账号安全' : '管理订阅模板与管理员账号安全'} />
         {loadError ? (
           <LoadErrorAlert title="无法加载设置" message={loadError} retrying={loading} onRetry={() => void load()} />
         ) : (
@@ -175,7 +179,14 @@ export function SettingsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="设置" description="管理订阅模板与管理员账号安全" />
+      <PageHeader title="设置" description={readOnly ? '查看订阅模板，管理账号安全' : '管理订阅模板与管理员账号安全'}>
+        {readOnly && (
+          <Badge variant="outline">
+            <EyeIcon data-icon="inline-start" />
+            模板只读
+          </Badge>
+        )}
+      </PageHeader>
 
       {loadError && (
         <LoadErrorAlert
@@ -207,7 +218,7 @@ export function SettingsPage() {
               event.preventDefault()
               // Saving the stock text stores nothing, so the install keeps
               // following the built-in default when a later build improves it.
-              if (dirty && !templateBusy) void saveTemplate(text === tpl.default ? '' : text)
+              if (!readOnly && dirty && !templateBusy) void saveTemplate(text === tpl.default ? '' : text)
             }}
           >
             <Card>
@@ -247,58 +258,61 @@ export function SettingsPage() {
                       className="max-h-[60vh]"
                       value={text}
                       disabled={templateBusy}
+                      readOnly={readOnly}
                       onChange={(event) => setText(event.target.value)}
                     />
                     <FieldDescription>
-                      {dirty ? '有尚未保存的更改。' : '当前内容已保存。'}
+                      {readOnly ? '只读：修改模板需要超级管理员。' : dirty ? '有尚未保存的更改。' : '当前内容已保存。'}
                     </FieldDescription>
                   </Field>
                 </FieldGroup>
               </CardContent>
-              <CardFooter className="flex-col items-stretch gap-2 sm:flex-row sm:items-center">
-                <Button type="submit" className="w-full sm:w-auto" disabled={templateBusy || !dirty}>
-                  {saving ? <Spinner data-icon="inline-start" /> : <SaveIcon data-icon="inline-start" />}
-                  {saving ? '保存中…' : '保存模板'}
-                </Button>
-                {tpl.presets.length > 0 && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={<Button type="button" variant="outline" className="w-full sm:w-auto" disabled={templateBusy} />}
-                    >
-                      <LayoutTemplateIcon data-icon="inline-start" />
-                      载入预设
-                      <ChevronDownIcon data-icon="inline-end" />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-80">
-                      <DropdownMenuGroup>
-                        <DropdownMenuLabel>载入后检查无误再保存</DropdownMenuLabel>
-                        {tpl.presets.map((preset) => (
-                          <DropdownMenuItem
-                            key={preset.key}
-                            className="flex-col items-start gap-0.5"
-                            onClick={() => setText(preset.template)}
-                          >
-                            <span className="font-medium">{preset.name}</span>
-                            <span className="text-xs whitespace-normal text-muted-foreground">
-                              {preset.description}
-                            </span>
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuGroup>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full sm:w-auto"
-                  disabled={templateBusy || !canRestore}
-                  onClick={() => setRestoreOpen(true)}
-                >
-                  {restoring ? <Spinner data-icon="inline-start" /> : <RotateCcwIcon data-icon="inline-start" />}
-                  {restoring ? '恢复中…' : '恢复默认'}
-                </Button>
-              </CardFooter>
+              {!readOnly && (
+                <CardFooter className="flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+                  <Button type="submit" className="w-full sm:w-auto" disabled={templateBusy || !dirty}>
+                    {saving ? <Spinner data-icon="inline-start" /> : <SaveIcon data-icon="inline-start" />}
+                    {saving ? '保存中…' : '保存模板'}
+                  </Button>
+                  {tpl.presets.length > 0 && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={<Button type="button" variant="outline" className="w-full sm:w-auto" disabled={templateBusy} />}
+                      >
+                        <LayoutTemplateIcon data-icon="inline-start" />
+                        载入预设
+                        <ChevronDownIcon data-icon="inline-end" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-80">
+                        <DropdownMenuGroup>
+                          <DropdownMenuLabel>载入后检查无误再保存</DropdownMenuLabel>
+                          {tpl.presets.map((preset) => (
+                            <DropdownMenuItem
+                              key={preset.key}
+                              className="flex-col items-start gap-0.5"
+                              onClick={() => setText(preset.template)}
+                            >
+                              <span className="font-medium">{preset.name}</span>
+                              <span className="text-xs whitespace-normal text-muted-foreground">
+                                {preset.description}
+                              </span>
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full sm:w-auto"
+                    disabled={templateBusy || !canRestore}
+                    onClick={() => setRestoreOpen(true)}
+                  >
+                    {restoring ? <Spinner data-icon="inline-start" /> : <RotateCcwIcon data-icon="inline-start" />}
+                    {restoring ? '恢复中…' : '恢复默认'}
+                  </Button>
+                </CardFooter>
+              )}
             </Card>
           </form>
         </TabsContent>

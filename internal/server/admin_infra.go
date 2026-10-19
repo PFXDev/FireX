@@ -304,7 +304,7 @@ func (s *Server) getInbound(c *gin.Context) {
 		}
 	}
 	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, gin.H{"parameters": config, "lastSeenAt": inbound.LastSeenAt})
+	c.JSON(http.StatusOK, gin.H{"parameters": redactForViewer(c, config), "lastSeenAt": inbound.LastSeenAt})
 }
 
 func (s *Server) listInbounds(c *gin.Context) {

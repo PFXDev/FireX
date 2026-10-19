@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/cookiejar"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
@@ -232,5 +233,81 @@ func TestResetOwnPasswordGoesThroughTheAccountPage(t *testing.T) {
 	})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("reset own password = %d, want 400: %s", resp.StatusCode, raw)
+	}
+}
+
+// The "view configuration" switch opens the configuration reads to an
+// operator, never the writes, and inbound credentials stay masked.
+func TestOperatorConfigViewSwitch(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+	staff := makeOperator(t, h, "staff")
+
+	reads := []string{
+		"/api/panels", "/api/inbounds", "/api/node-groups", "/api/routing",
+		"/api/routing/preview", "/api/inbound-templates", "/api/settings/clashTemplate",
+	}
+	h.loginAs("staff", "password123")
+	for _, path := range reads {
+		if resp, raw := h.do(http.MethodGet, path, nil); resp.StatusCode != http.StatusForbidden {
+			t.Errorf("GET %s without the switch = %d, want 403: %s", path, resp.StatusCode, raw)
+		}
+	}
+
+	h.login()
+	h.mustDo(http.MethodPut, "/api/admins/"+itoa(staff.ID), map[string]any{
+		"username": "staff", "role": model.AdminRoleOperator, "canViewConfig": true,
+	})
+
+	h.loginAs("staff", "password123")
+	var me struct {
+		CanViewConfig bool `json:"canViewConfig"`
+	}
+	if err := json.Unmarshal(h.mustDo(http.MethodGet, "/api/auth/me", nil), &me); err != nil {
+		t.Fatalf("decode me: %v", err)
+	}
+	if !me.CanViewConfig {
+		t.Fatalf("/auth/me canViewConfig = false after the switch was turned on")
+	}
+	for _, path := range reads {
+		if resp, raw := h.do(http.MethodGet, path, nil); resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s with the switch = %d, want 200: %s", path, resp.StatusCode, raw)
+		}
+	}
+
+	var inbounds []struct {
+		ID uint `json:"id"`
+	}
+	if err := json.Unmarshal(h.mustDo(http.MethodGet, "/api/inbounds", nil), &inbounds); err != nil || len(inbounds) == 0 {
+		t.Fatalf("decode inbounds: %v (%d rows)", err, len(inbounds))
+	}
+	detail := string(h.mustDo(http.MethodGet, "/api/inbounds/"+itoa(inbounds[0].ID), nil))
+	if strings.Contains(detail, "test-private-key") {
+		t.Errorf("operator saw the REALITY private key: %s", detail)
+	}
+	if !strings.Contains(detail, "PBK") {
+		t.Errorf("public parameters were masked too: %s", detail)
+	}
+
+	writes := []struct{ method, path string }{
+		{http.MethodPost, "/api/panels"},
+		{http.MethodPut, "/api/inbounds/" + itoa(inbounds[0].ID)},
+		{http.MethodPost, "/api/node-groups"},
+		{http.MethodPut, "/api/routing"},
+		{http.MethodPut, "/api/settings/clashTemplate"},
+		{http.MethodGet, "/api/settings/server"},
+		{http.MethodGet, "/api/audit-logs"},
+		{http.MethodGet, "/api/admins"},
+	}
+	for _, req := range writes {
+		if resp, raw := h.do(req.method, req.path, map[string]any{"name": "x"}); resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s %s with the switch = %d, want 403: %s", req.method, req.path, resp.StatusCode, raw)
+		}
+	}
+
+	// A super admin still reads the real value.
+	h.login()
+	if detail := string(h.mustDo(http.MethodGet, "/api/inbounds/"+itoa(inbounds[0].ID), nil)); !strings.Contains(detail, "test-private-key") {
+		t.Errorf("super admin lost the private key: %s", detail)
 	}
 }

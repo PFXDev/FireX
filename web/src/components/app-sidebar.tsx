@@ -28,7 +28,7 @@ export function AppSidebar({
   onSignedOut: () => void
 }) {
   const { isMobile, setOpenMobile } = useSidebar()
-  const groups = navGroupsFor(admin.role === 'super_admin')
+  const groups = navGroupsFor({ isSuperAdmin: admin.role === 'super_admin', canViewConfig: admin.canViewConfig })
 
   return (
     <Sidebar collapsible="icon" variant="inset" {...props}>

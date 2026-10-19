@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { FileCogIcon, LayoutTemplateIcon, MousePointerClickIcon, PlusIcon, SaveIcon, Trash2Icon } from 'lucide-react'
+import { EyeIcon, FileCogIcon, LayoutTemplateIcon, MousePointerClickIcon, PlusIcon, SaveIcon, Trash2Icon } from 'lucide-react'
 
 import { api, type InboundDeployment, type Panel } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -20,6 +20,7 @@ import { Switch } from '@/components/ui/switch'
 import { confirmUnsavedNavigation, useUnsavedGuard } from '@/hooks/use-unsaved-guard'
 import { errorMessage, formatTime } from '@/lib/format'
 import { hashID } from '@/lib/inbound'
+import { useSession } from '@/lib/session'
 
 type Template = { id: number; name: string; revision: number; updatedAt: number }
 type Detail = { template: Template; parameters: Parameters }
@@ -38,6 +39,7 @@ type Node = {
 const blankNode: Node = { panelId: null, listen: '', port: 443, remark: '', acceptProxyProtocol: false, publicAddress: '', publicPort: 0 }
 
 export function InboundTemplatesPage() {
+  const { readOnly } = useSession()
   const [rows, setRows] = useState<Template[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -198,12 +200,14 @@ export function InboundTemplatesPage() {
                 <EmptyTitle>还没有模板</EmptyTitle>
                 <EmptyDescription>在「入站配置」中打开一个已接管的入站，选择「另存为模板」。</EmptyDescription>
               </EmptyHeader>
-              <EmptyContent>
-                <Button render={<a href="#/inbound-configs" />} nativeButton={false}>
-                  <FileCogIcon data-icon="inline-start" />
-                  前往入站配置
-                </Button>
-              </EmptyContent>
+              {!readOnly && (
+                <EmptyContent>
+                  <Button render={<a href="#/inbound-configs" />} nativeButton={false}>
+                    <FileCogIcon data-icon="inline-start" />
+                    前往入站配置
+                  </Button>
+                </EmptyContent>
+              )}
             </Empty>
           )
         ) : (
@@ -232,7 +236,14 @@ export function InboundTemplatesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="入站模板" description="模板保存多个节点共用的参数，例如 REALITY 设置。用模板创建入站时填写各节点的监听与 PROXY，创建后由 FireX 独立接管。" />
+      <PageHeader title="入站模板" description="模板保存多个节点共用的参数，例如 REALITY 设置。用模板创建入站时填写各节点的监听与 PROXY，创建后由 FireX 独立接管。">
+        {readOnly && (
+          <Badge variant="outline">
+            <EyeIcon data-icon="inline-start" />
+            只读
+          </Badge>
+        )}
+      </PageHeader>
 
       {rows.length === 0 ? (
         listCard
@@ -248,7 +259,7 @@ export function InboundTemplatesPage() {
                       <MousePointerClickIcon />
                     </EmptyMedia>
                     <EmptyTitle>选择一个模板</EmptyTitle>
-                    <EmptyDescription>在左侧列表中选择模板，查看和编辑它的共用参数。</EmptyDescription>
+                    <EmptyDescription>{readOnly ? '在左侧列表中选择模板，查看它的共用参数。' : '在左侧列表中选择模板，查看和编辑它的共用参数。'}</EmptyDescription>
                   </EmptyHeader>
                 </Empty>
               </CardContent>
@@ -269,33 +280,37 @@ export function InboundTemplatesPage() {
                     <span>更新于 {formatTime(detail.template.updatedAt)}</span>
                     {dirty && <Badge variant="secondary">未保存</Badge>}
                   </CardDescription>
-                  <CardAction className="flex flex-wrap justify-end gap-2">
-                    <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => setDeleting(true)}>
-                      <Trash2Icon data-icon="inline-start" />
-                      删除
-                    </Button>
-                    <Button type="button" variant="outline" size="sm" disabled={busy || dirty} title={dirty ? '请先保存模板' : undefined} onClick={() => void openCreate()}>
-                      {pending === 'open' ? <Spinner data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
-                      用模板创建入站
-                    </Button>
-                    <Button type="button" size="sm" disabled={busy || !dirty || invalid || !name.trim()} onClick={() => void save()}>
-                      {pending === 'save' ? <Spinner data-icon="inline-start" /> : <SaveIcon data-icon="inline-start" />}
-                      {pending === 'save' ? '保存中…' : '保存'}
-                    </Button>
-                  </CardAction>
+                  {!readOnly && (
+                    <CardAction className="flex flex-wrap justify-end gap-2">
+                      <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => setDeleting(true)}>
+                        <Trash2Icon data-icon="inline-start" />
+                        删除
+                      </Button>
+                      <Button type="button" variant="outline" size="sm" disabled={busy || dirty} title={dirty ? '请先保存模板' : undefined} onClick={() => void openCreate()}>
+                        {pending === 'open' ? <Spinner data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
+                        用模板创建入站
+                      </Button>
+                      <Button type="button" size="sm" disabled={busy || !dirty || invalid || !name.trim()} onClick={() => void save()}>
+                        {pending === 'save' ? <Spinner data-icon="inline-start" /> : <SaveIcon data-icon="inline-start" />}
+                        {pending === 'save' ? '保存中…' : '保存'}
+                      </Button>
+                    </CardAction>
+                  )}
                 </CardHeader>
                 <CardContent>
                   <FieldGroup>
-                    <Field data-invalid={!name.trim() || undefined} data-disabled={busy || undefined}>
+                    <Field data-invalid={!name.trim() || undefined} data-disabled={readOnly || busy || undefined}>
                       <FieldLabel htmlFor="template-name">模板名称</FieldLabel>
-                      <Input id="template-name" value={name} disabled={busy} aria-invalid={!name.trim() || undefined} onChange={(event) => setName(event.target.value)} />
+                      <Input id="template-name" value={name} disabled={readOnly || busy} aria-invalid={!name.trim() || undefined} onChange={(event) => setName(event.target.value)} />
                       {!name.trim() && <FieldError>请输入模板名称。</FieldError>}
                     </Field>
-                    <Field orientation="horizontal">
-                      <FieldLabel htmlFor="reveal-template">显示密钥</FieldLabel>
-                      <Switch id="reveal-template" checked={reveal} onCheckedChange={setReveal} />
-                    </Field>
-                    <ConfigEditor key={detail.template.id} parameters={draft} onChange={setDraft} onInvalidChange={setInvalid} disabled={busy} reveal={reveal} />
+                    {!readOnly && (
+                      <Field orientation="horizontal">
+                        <FieldLabel htmlFor="reveal-template">显示密钥</FieldLabel>
+                        <Switch id="reveal-template" checked={reveal} onCheckedChange={setReveal} />
+                      </Field>
+                    )}
+                    <ConfigEditor key={detail.template.id} parameters={draft} onChange={setDraft} onInvalidChange={setInvalid} disabled={readOnly || busy} reveal={reveal} />
                   </FieldGroup>
                 </CardContent>
               </>

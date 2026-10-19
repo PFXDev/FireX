@@ -13,16 +13,20 @@ import (
 )
 
 // Admin management is super-admin only: an operator can sign in and manage
-// users but can never mint peers or promote themselves. The one rule that is
+// users but can never mint peers, promote themselves or grant themselves the
+// read-only view of the configuration. The one rule that is
 // not about roles is that the install must always keep a super admin, which is
 // why demoting or deleting the last one is refused.
 
 type adminRow struct {
-	ID        uint   `json:"id"`
-	Username  string `json:"username"`
-	Role      string `json:"role"`
-	CreatedAt int64  `json:"createdAt"`
-	UpdatedAt int64  `json:"updatedAt"`
+	ID       uint   `json:"id"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	// CanViewConfig is the operator's read-only access to the configuration
+	// pages; always false for a super admin, who needs no switch.
+	CanViewConfig bool  `json:"canViewConfig"`
+	CreatedAt     int64 `json:"createdAt"`
+	UpdatedAt     int64 `json:"updatedAt"`
 	// IsSelf lets the UI disable the actions that would lock the caller out.
 	IsSelf bool `json:"isSelf"`
 }
@@ -35,20 +39,28 @@ func (s *Server) listAdmins(c *gin.Context) {
 	}
 	self := currentAdmin(c)
 	out := make([]adminRow, 0, len(admins))
-	for _, admin := range admins {
-		out = append(out, adminRow{
-			ID: admin.ID, Username: admin.Username, Role: admin.Role,
-			CreatedAt: admin.CreatedAt, UpdatedAt: admin.UpdatedAt,
-			IsSelf: self != nil && self.ID == admin.ID,
-		})
+	for i := range admins {
+		row := toAdminRow(&admins[i])
+		row.IsSelf = self != nil && self.ID == admins[i].ID
+		out = append(out, row)
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+func toAdminRow(admin *model.Admin) adminRow {
+	return adminRow{
+		ID: admin.ID, Username: admin.Username, Role: admin.Role,
+		CanViewConfig: admin.Role != model.AdminRoleSuperAdmin && admin.CanViewConfig,
+		CreatedAt:     admin.CreatedAt, UpdatedAt: admin.UpdatedAt,
+	}
 }
 
 type adminRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 	Role     string `json:"role"`
+	// CanViewConfig is nil when the caller leaves it unchanged.
+	CanViewConfig *bool `json:"canViewConfig"`
 }
 
 // normalizeAdminRole keeps unknown roles from creating an admin who can do
@@ -101,14 +113,14 @@ func (s *Server) createAdmin(c *gin.Context) {
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
+	if req.CanViewConfig != nil {
+		admin.CanViewConfig = *req.CanViewConfig
+	}
 	if err := s.db.Create(&admin).Error; err != nil {
 		failMsg(c, http.StatusBadRequest, "用户名已被占用")
 		return
 	}
-	c.JSON(http.StatusOK, adminRow{
-		ID: admin.ID, Username: admin.Username, Role: admin.Role,
-		CreatedAt: admin.CreatedAt, UpdatedAt: admin.UpdatedAt,
-	})
+	c.JSON(http.StatusOK, toAdminRow(&admin))
 }
 
 func (s *Server) updateAdmin(c *gin.Context) {
@@ -147,12 +159,15 @@ func (s *Server) updateAdmin(c *gin.Context) {
 		}
 	}
 	admin.Role = role
+	if req.CanViewConfig != nil {
+		admin.CanViewConfig = *req.CanViewConfig
+	}
 	admin.UpdatedAt = provision.NowMs()
 	if err := s.db.Save(&admin).Error; err != nil {
 		failMsg(c, http.StatusBadRequest, "用户名已被占用")
 		return
 	}
-	c.JSON(http.StatusOK, adminRow{ID: admin.ID, Username: admin.Username, Role: admin.Role, CreatedAt: admin.CreatedAt, UpdatedAt: admin.UpdatedAt})
+	c.JSON(http.StatusOK, toAdminRow(&admin))
 }
 
 func (s *Server) deleteAdmin(c *gin.Context) {

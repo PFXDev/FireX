@@ -17,6 +17,7 @@ import { copyText, errorMessage, formatTime } from '@/lib/format'
 import { inboundTitle } from '@/lib/inbound'
 import { parameterLabel } from '@/lib/inbound-labels'
 import { concealed, isObject } from '@/lib/inbound-parameters'
+import { useSession } from '@/lib/session'
 
 type Props = {
   inbound: Inbound | null
@@ -31,6 +32,7 @@ async function copy(value: string) {
 }
 
 export function InboundDetails({ inbound, onClose, onEdit, onRefresh }: Props) {
+  const { readOnly } = useSession()
   const [detail, setDetail] = useState<InboundDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
@@ -126,7 +128,7 @@ export function InboundDetails({ inbound, onClose, onEdit, onRefresh }: Props) {
             <Alert variant="destructive">
               <TriangleAlertIcon />
               <AlertTitle>Vision 设置与入站不兼容</AlertTitle>
-              <AlertDescription>{inbound.visionReason}。可在编辑入站中关闭 Vision。</AlertDescription>
+              <AlertDescription>{inbound.visionReason}。{!readOnly && '可在编辑入站中关闭 Vision。'}</AlertDescription>
             </Alert>
           )}
           <Tabs value={tab} onValueChange={(value) => setTab(String(value))} className="gap-4">
@@ -135,10 +137,12 @@ export function InboundDetails({ inbound, onClose, onEdit, onRefresh }: Props) {
                 <TabsTrigger value="parameters">参数一览</TabsTrigger>
                 <TabsTrigger value="json">JSON</TabsTrigger>
               </TabsList>
-              <Button type="button" size="sm" variant="ghost" disabled={!parameters} onClick={() => setReveal(!reveal)}>
-                {reveal ? <EyeOffIcon data-icon="inline-start" /> : <EyeIcon data-icon="inline-start" />}
-                {reveal ? '隐藏密钥' : '显示密钥'}
-              </Button>
+              {!readOnly && (
+                <Button type="button" size="sm" variant="ghost" disabled={!parameters} onClick={() => setReveal(!reveal)}>
+                  {reveal ? <EyeOffIcon data-icon="inline-start" /> : <EyeIcon data-icon="inline-start" />}
+                  {reveal ? '隐藏密钥' : '显示密钥'}
+                </Button>
+              )}
             </div>
             {loading ? (
               <FieldsSkeleton />
@@ -151,7 +155,7 @@ export function InboundDetails({ inbound, onClose, onEdit, onRefresh }: Props) {
                     <FileSearchIcon />
                   </EmptyMedia>
                   <EmptyTitle>尚未同步入站参数</EmptyTitle>
-                  <EmptyDescription>点击下方「同步参数」，读取面板中的完整入站配置。</EmptyDescription>
+                  <EmptyDescription>{readOnly ? '面板同步后，这里会显示完整的入站配置。' : '点击下方「同步参数」，读取面板中的完整入站配置。'}</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : (
@@ -178,21 +182,25 @@ export function InboundDetails({ inbound, onClose, onEdit, onRefresh }: Props) {
             )}
           </Tabs>
         </div>
-        <Separator />
-        <SheetFooter className="flex-row justify-between">
-          <Button type="button" variant="outline" disabled={loading || syncing} onClick={() => void sync()}>
-            {syncing ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
-            {syncing ? '同步中…' : '同步参数'}
-          </Button>
-          <Button type="button" disabled={syncing} onClick={() => {
-            if (inbound) {
-              editAfterClose.current = inbound
-              onClose()
-            }
-          }}>
-            <PencilIcon data-icon="inline-start" />编辑入站
-          </Button>
-        </SheetFooter>
+        {!readOnly && (
+          <>
+            <Separator />
+            <SheetFooter className="flex-row justify-between">
+              <Button type="button" variant="outline" disabled={loading || syncing} onClick={() => void sync()}>
+                {syncing ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
+                {syncing ? '同步中…' : '同步参数'}
+              </Button>
+              <Button type="button" disabled={syncing} onClick={() => {
+                if (inbound) {
+                  editAfterClose.current = inbound
+                  onClose()
+                }
+              }}>
+                <PencilIcon data-icon="inline-start" />编辑入站
+              </Button>
+            </SheetFooter>
+          </>
+        )}
       </SheetContent>
     </Sheet>
   )

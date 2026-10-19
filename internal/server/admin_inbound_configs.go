@@ -73,7 +73,7 @@ func (s *Server) inboundConfigResponse(c *gin.Context, inbound model.Inbound) {
 			fail(c, http.StatusInternalServerError, err)
 			return
 		}
-		response["config"], response["parameters"], response["state"] = managed, parameters, configState(inbound, &managed)
+		response["config"], response["parameters"], response["state"] = managed, redactForViewer(c, parameters), configState(inbound, &managed)
 	}
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, response)

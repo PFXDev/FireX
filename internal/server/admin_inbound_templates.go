@@ -118,6 +118,9 @@ func (s *Server) getInboundTemplate(c *gin.Context) {
 		return
 	}
 	c.Header("Cache-Control", "no-store")
+	if redacted, ok := redactForViewer(c, parameters).(map[string]any); ok {
+		parameters = redacted
+	}
 	c.JSON(http.StatusOK, templateResponse{row, parameters})
 }
 

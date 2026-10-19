@@ -187,6 +187,22 @@ func (s *Server) superAdminOnly(c *gin.Context) {
 	c.Next()
 }
 
+// configViewer lets a request through for a super admin, or for an operator
+// whose CanViewConfig switch is on. It guards only reads; every write to the
+// same resources stays behind superAdminOnly.
+func (s *Server) configViewer(c *gin.Context) {
+	if !canViewConfig(currentAdmin(c)) {
+		failMsg(c, http.StatusForbidden, "需要超级管理员权限，或由超级管理员开启「只读查看配置」")
+		return
+	}
+	c.Next()
+}
+
+// canViewConfig reports whether an admin may read the configuration pages.
+func canViewConfig(admin *model.Admin) bool {
+	return isSuperAdmin(admin) || (admin != nil && admin.CanViewConfig)
+}
+
 // requireSuperAdmin is the group form of superAdminOnly.
 func (s *Server) requireSuperAdmin(c *gin.Context) {
 	if !isSuperAdmin(currentAdmin(c)) {
@@ -254,7 +270,12 @@ func (s *Server) handleLogin(c *gin.Context) {
 		SameSite: http.SameSiteLaxMode,
 		Expires:  now.Add(sessionTTL),
 	})
-	c.JSON(http.StatusOK, gin.H{"username": admin.Username, "role": admin.Role})
+	c.JSON(http.StatusOK, meResponse(&admin))
+}
+
+// meResponse is what the UI adapts to; the server still checks every request.
+func meResponse(admin *model.Admin) gin.H {
+	return gin.H{"username": admin.Username, "role": admin.Role, "canViewConfig": canViewConfig(admin)}
 }
 
 func (s *Server) handleLogout(c *gin.Context) {
@@ -266,8 +287,7 @@ func (s *Server) handleLogout(c *gin.Context) {
 }
 
 func (s *Server) handleMe(c *gin.Context) {
-	admin := currentAdmin(c)
-	c.JSON(http.StatusOK, gin.H{"username": admin.Username, "role": admin.Role})
+	c.JSON(http.StatusOK, meResponse(currentAdmin(c)))
 }
 
 type changePasswordRequest struct {

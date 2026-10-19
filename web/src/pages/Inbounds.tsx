@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { BoxesIcon, FileCogIcon, LayersIcon, ListTreeIcon, PencilIcon, ServerIcon, Trash2Icon } from 'lucide-react'
+import { BoxesIcon, EyeIcon, FileCogIcon, LayersIcon, ListTreeIcon, PencilIcon, ServerIcon, Trash2Icon } from 'lucide-react'
 
 import { api } from '@/api'
 import type { Inbound } from '@/api'
@@ -39,6 +39,7 @@ import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { errorMessage } from '@/lib/format'
 import { inboundLabel, inboundTitle } from '@/lib/inbound'
+import { useSession } from '@/lib/session'
 import { reportSyncError } from '@/lib/sync'
 
 type Draft = {
@@ -60,6 +61,7 @@ type PendingAction = 'bulk-enable' | 'bulk-disable' | 'save' | 'remove'
 const visionLabels = { preserve: '保留现有流控', on: '开启 Vision', off: '关闭 Vision' }
 
 export function InboundsPage() {
+  const { readOnly } = useSession()
   const [inbounds, setInbounds] = useState<Inbound[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [loadError, setLoadError] = useState('')
@@ -183,7 +185,14 @@ export function InboundsPage() {
       <PageHeader
         title="入站"
         description="点击名称查看完整参数，编辑入站设置 Vision 流控。新入站默认停用，启用并加入节点组后即可下发给用户。"
-      />
+      >
+        {readOnly && (
+          <Badge variant="outline">
+            <EyeIcon data-icon="inline-start" />
+            只读
+          </Badge>
+        )}
+      </PageHeader>
 
       {orphanCount > 0 && (
         <Alert>
@@ -192,16 +201,18 @@ export function InboundsPage() {
           <AlertDescription>
             用户能用到哪些入站只由分流方案里的节点组决定，不在任何分组里的入站不会出现在任何订阅中。
           </AlertDescription>
-          <AlertAction>
-            <Button variant="outline" size="sm" render={<a href="#/node-groups" />} nativeButton={false}>
-              <BoxesIcon data-icon="inline-start" />
-              去分组
-            </Button>
-          </AlertAction>
+          {!readOnly && (
+            <AlertAction>
+              <Button variant="outline" size="sm" render={<a href="#/node-groups" />} nativeButton={false}>
+                <BoxesIcon data-icon="inline-start" />
+                去分组
+              </Button>
+            </AlertAction>
+          )}
         </Alert>
       )}
 
-      {selected.size > 0 && (
+      {!readOnly && selected.size > 0 && (
         <Card>
           <CardHeader>
             <CardTitle>批量管理入站</CardTitle>
@@ -260,7 +271,7 @@ export function InboundsPage() {
           {loadState === 'loading' ? (
             <TableSkeleton
               columns={[
-                { label: '', className: 'w-10', width: 'w-4' },
+                ...(readOnly ? [] : [{ label: '', className: 'w-10', width: 'w-4' }]),
                 { label: '名称', width: 'w-32' },
                 { label: '面板 / 入站', className: 'hidden lg:table-cell', width: 'w-28' },
                 { label: '协议', className: 'hidden md:table-cell', width: 'w-16' },
@@ -283,28 +294,32 @@ export function InboundsPage() {
                 <EmptyTitle>还没有入站</EmptyTitle>
                 <EmptyDescription>先添加面板，FireX 会自动拉取它的入站。</EmptyDescription>
               </EmptyHeader>
-              <EmptyContent>
-                <Button render={<a href="#/panels" />} nativeButton={false}>
-                  <ServerIcon data-icon="inline-start" />
-                  前往面板
-                </Button>
-              </EmptyContent>
+              {!readOnly && (
+                <EmptyContent>
+                  <Button render={<a href="#/panels" />} nativeButton={false}>
+                    <ServerIcon data-icon="inline-start" />
+                    前往面板
+                  </Button>
+                </EmptyContent>
+              )}
             </Empty>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-10">
-                    <Checkbox
-                      checked={allSelected}
-                      indeterminate={selected.size > 0 && !allSelected}
-                      disabled={isBulkPending}
-                      aria-label="全选入站"
-                      onCheckedChange={(checked) =>
-                        setSelected(checked ? new Set(inbounds.map((n) => n.id)) : new Set())
-                      }
-                    />
-                  </TableHead>
+                  {!readOnly && (
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={allSelected}
+                        indeterminate={selected.size > 0 && !allSelected}
+                        disabled={isBulkPending}
+                        aria-label="全选入站"
+                        onCheckedChange={(checked) =>
+                          setSelected(checked ? new Set(inbounds.map((n) => n.id)) : new Set())
+                        }
+                      />
+                    </TableHead>
+                  )}
                   <TableHead>名称</TableHead>
                   <TableHead className="hidden lg:table-cell">面板 / 入站</TableHead>
                   <TableHead className="hidden md:table-cell">协议</TableHead>
@@ -319,14 +334,16 @@ export function InboundsPage() {
               <TableBody>
                 {inbounds.map((inbound) => (
                   <TableRow key={inbound.id} data-state={selected.has(inbound.id) ? 'selected' : undefined}>
-                    <TableCell>
-                      <Checkbox
-                        checked={selected.has(inbound.id)}
-                        disabled={isBulkPending}
-                        aria-label={`选择 ${inboundLabel(inbound)}`}
-                        onCheckedChange={() => toggle(inbound.id)}
-                      />
-                    </TableCell>
+                    {!readOnly && (
+                      <TableCell>
+                        <Checkbox
+                          checked={selected.has(inbound.id)}
+                          disabled={isBulkPending}
+                          aria-label={`选择 ${inboundLabel(inbound)}`}
+                          onCheckedChange={() => toggle(inbound.id)}
+                        />
+                      </TableCell>
+                    )}
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <Button variant="link" className="h-auto justify-start p-0 text-left whitespace-normal" onClick={() => setDetailID(inbound.id)}>
@@ -380,18 +397,20 @@ export function InboundsPage() {
                           <ListTreeIcon data-icon="inline-start" />
                           <span className="hidden sm:inline">参数</span>
                         </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          aria-label={`编辑 ${inboundLabel(inbound)}`}
-                          disabled={pendingAction !== null}
-                          onClick={() => edit(inbound)}
-                        >
-                          <PencilIcon data-icon="inline-start" />
-                          <span className="hidden sm:inline">编辑</span>
-                        </Button>
-                        {inbound.missing && (
+                        {!readOnly && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            aria-label={`编辑 ${inboundLabel(inbound)}`}
+                            disabled={pendingAction !== null}
+                            onClick={() => edit(inbound)}
+                          >
+                            <PencilIcon data-icon="inline-start" />
+                            <span className="hidden sm:inline">编辑</span>
+                          </Button>
+                        )}
+                        {!readOnly && inbound.missing && (
                           <Button
                             type="button"
                             variant="ghost"

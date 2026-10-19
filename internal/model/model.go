@@ -12,7 +12,8 @@
 package model
 
 // Admin roles. A super admin can do everything, including managing other
-// admins; an operator manages users and may only read the overview and plans.
+// admins; an operator manages users and may only read the overview and plans,
+// plus the configuration pages when Admin.CanViewConfig is set.
 const (
 	AdminRoleSuperAdmin = "super_admin"
 	AdminRoleOperator   = "operator"
@@ -24,9 +25,13 @@ type Admin struct {
 	PasswordHash string `json:"-" gorm:"not null"`
 	// Role is AdminRoleSuperAdmin or AdminRoleOperator. Rows from before roles
 	// existed migrate in blank and are promoted, since they had full access.
-	Role      string `json:"role" gorm:"not null;default:''"`
-	CreatedAt int64  `json:"createdAt"`
-	UpdatedAt int64  `json:"updatedAt"`
+	Role string `json:"role" gorm:"not null;default:''"`
+	// CanViewConfig lets an operator read panels, inbounds, node groups,
+	// routing and the subscription template without changing any of them.
+	// Super admins can always read and write, so it is ignored for them.
+	CanViewConfig bool  `json:"canViewConfig" gorm:"not null;default:false"`
+	CreatedAt     int64 `json:"createdAt"`
+	UpdatedAt     int64 `json:"updatedAt"`
 }
 
 type Session struct {

@@ -114,6 +114,7 @@ import {
 } from "@/components/ui/table";
 import { useUnsavedGuard } from "@/hooks/use-unsaved-guard";
 import { errorMessage } from "@/lib/format";
+import { useSession } from "@/lib/session";
 import { reportSyncError } from "@/lib/sync";
 import {
   dropRuleSetReferences,
@@ -162,6 +163,7 @@ function move<T>(list: T[], index: number, delta: number): T[] {
 }
 
 export function RoutingPage() {
+  const { readOnly } = useSession();
   const [rows, setRows] = useState<Row[]>([]);
   const [ruleSets, setRuleSets] = useState<RuleSet[]>([]);
   const [options, setOptions] = useState<RoutingMatrix["options"] | null>(null);
@@ -256,7 +258,8 @@ export function RoutingPage() {
     }
   }, []);
 
-  useUnsavedGuard(dirty);
+  // Operators get no write affordances, so they can never hold unsaved edits.
+  useUnsavedGuard(dirty && !readOnly);
 
   useEffect(() => {
     void load().finally(() => setLoading(false));
@@ -636,7 +639,13 @@ export function RoutingPage() {
         title="分流"
         description="行是分流策略（一份规则清单），列是分流方案。第一列是默认出口，方案列只写和默认不同的部分。"
       >
-        {options.presets.length > 0 && (
+        {readOnly && (
+          <Badge variant="outline">
+            <EyeIcon data-icon="inline-start" />
+            只读
+          </Badge>
+        )}
+        {!readOnly && options.presets.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger render={<Button variant="outline" />}>
               <LayoutTemplateIcon data-icon="inline-start" />
@@ -662,18 +671,22 @@ export function RoutingPage() {
             </DropdownMenuContent>
           </DropdownMenu>
         )}
-        <Button variant="outline" onClick={addPolicy}>
-          <PlusIcon data-icon="inline-start" />
-          新建策略
-        </Button>
-        <Button disabled={saving || !dirty} onClick={() => void save()}>
-          {saving ? (
-            <Spinner data-icon="inline-start" />
-          ) : (
-            <SaveIcon data-icon="inline-start" />
-          )}
-          {saving ? "保存中…" : dirty ? "保存分流" : "已保存"}
-        </Button>
+        {!readOnly && (
+          <>
+            <Button variant="outline" onClick={addPolicy}>
+              <PlusIcon data-icon="inline-start" />
+              新建策略
+            </Button>
+            <Button disabled={saving || !dirty} onClick={() => void save()}>
+              {saving ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <SaveIcon data-icon="inline-start" />
+              )}
+              {saving ? "保存中…" : dirty ? "保存分流" : "已保存"}
+            </Button>
+          </>
+        )}
       </PageHeader>
 
       {needsReview && (
@@ -684,21 +697,23 @@ export function RoutingPage() {
             旧的规则清单已按目标拆成了分流策略，顺序按每条策略首条规则的位置排列，可能和你原来的客户端排列不同；
             每个套餐也各自生成了一个分流方案。确认无误后保存一次，这条提示就会消失。
           </AlertDescription>
-          <AlertAction>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={saving}
-              onClick={() => void save()}
-            >
-              {saving ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <SaveIcon data-icon="inline-start" />
-              )}
-              {saving ? "保存中…" : "确认并保存"}
-            </Button>
-          </AlertAction>
+          {!readOnly && (
+            <AlertAction>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={saving}
+                onClick={() => void save()}
+              >
+                {saving ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <SaveIcon data-icon="inline-start" />
+                )}
+                {saving ? "保存中…" : "确认并保存"}
+              </Button>
+            </AlertAction>
+          )}
         </Alert>
       )}
 
@@ -713,10 +728,12 @@ export function RoutingPage() {
               loading={refreshingProfiles}
               onClick={refreshProfiles}
             />
-            <Button variant="outline" size="sm" onClick={openNewProfile}>
-              <PlusIcon data-icon="inline-start" />
-              新建方案
-            </Button>
+            {!readOnly && (
+              <Button variant="outline" size="sm" onClick={openNewProfile}>
+                <PlusIcon data-icon="inline-start" />
+                新建方案
+              </Button>
+            )}
           </CardAction>
         </CardHeader>
         <CardContent className="px-0">
@@ -731,12 +748,14 @@ export function RoutingPage() {
                   没有方案，套餐就无处可绑，用户也拿不到任何节点。
                 </EmptyDescription>
               </EmptyHeader>
-              <EmptyContent>
-                <Button onClick={openNewProfile}>
-                  <PlusIcon data-icon="inline-start" />
-                  新建方案
-                </Button>
-              </EmptyContent>
+              {!readOnly && (
+                <EmptyContent>
+                  <Button onClick={openNewProfile}>
+                    <PlusIcon data-icon="inline-start" />
+                    新建方案
+                  </Button>
+                </EmptyContent>
+              )}
             </Empty>
           ) : (
             <Table>
@@ -748,9 +767,11 @@ export function RoutingPage() {
                     可用入站
                   </TableHead>
                   <TableHead className="hidden md:table-cell">套餐</TableHead>
-                  <TableHead>
-                    <span className="sr-only">操作</span>
-                  </TableHead>
+                  {!readOnly && (
+                    <TableHead>
+                      <span className="sr-only">操作</span>
+                    </TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -788,37 +809,39 @@ export function RoutingPage() {
                     <TableCell className="hidden tabular-nums md:table-cell">
                       {profile.planCount}
                     </TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          aria-label={`编辑方案 ${profile.name}`}
-                          onClick={() =>
-                            setProfileDraft({
-                              id: profile.id,
-                              name: profile.name,
-                              allGroups: profile.allGroups,
-                              enabled: profile.enabled,
-                              remark: profile.remark,
-                              groupIds: profile.groupIds,
-                            })
-                          }
-                        >
-                          <PencilIcon data-icon="inline-start" />
-                          <span className="hidden sm:inline">编辑</span>
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          aria-label={`删除方案 ${profile.name}`}
-                          onClick={() => setPendingProfileDelete(profile)}
-                        >
-                          <Trash2Icon data-icon="inline-start" />
-                          <span className="hidden sm:inline">删除</span>
-                        </Button>
-                      </div>
-                    </TableCell>
+                    {!readOnly && (
+                      <TableCell>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            aria-label={`编辑方案 ${profile.name}`}
+                            onClick={() =>
+                              setProfileDraft({
+                                id: profile.id,
+                                name: profile.name,
+                                allGroups: profile.allGroups,
+                                enabled: profile.enabled,
+                                remark: profile.remark,
+                                groupIds: profile.groupIds,
+                              })
+                            }
+                          >
+                            <PencilIcon data-icon="inline-start" />
+                            <span className="hidden sm:inline">编辑</span>
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label={`删除方案 ${profile.name}`}
+                            onClick={() => setPendingProfileDelete(profile)}
+                          >
+                            <Trash2Icon data-icon="inline-start" />
+                            <span className="hidden sm:inline">删除</span>
+                          </Button>
+                        </div>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
@@ -851,12 +874,14 @@ export function RoutingPage() {
                   策略是一份规则清单，每个方案在矩阵里为它选一个出口。
                 </EmptyDescription>
               </EmptyHeader>
-              <EmptyContent>
-                <Button onClick={addPolicy}>
-                  <PlusIcon data-icon="inline-start" />
-                  新建策略
-                </Button>
-              </EmptyContent>
+              {!readOnly && (
+                <EmptyContent>
+                  <Button onClick={addPolicy}>
+                    <PlusIcon data-icon="inline-start" />
+                    新建策略
+                  </Button>
+                </EmptyContent>
+              )}
             </Empty>
           ) : (
           <Table
@@ -879,7 +904,7 @@ export function RoutingPage() {
             // Keep the scroll range stable when the default column shrinks;
             // the spacer before the fixed actions absorbs the released space.
             style={{
-              width: `calc(var(--policy-width) + var(--default-expanded-width) + ${profiles.length * 16}rem + var(--actions-width))`,
+              width: `calc(var(--policy-width) + var(--default-expanded-width) + ${profiles.length * 16}rem${readOnly ? "" : " + var(--actions-width)"})`,
             }}
           >
             <TableHeader>
@@ -904,9 +929,11 @@ export function RoutingPage() {
                   </TableHead>
                 ))}
                 <TableHead aria-hidden="true" className="p-0" />
-                <TableHead className="sticky right-0 z-20 w-(--actions-width) border-l bg-card">
-                  <span className="sr-only">顺序与操作</span>
-                </TableHead>
+                {!readOnly && (
+                  <TableHead className="sticky right-0 z-20 w-(--actions-width) border-l bg-card">
+                    <span className="sr-only">顺序与操作</span>
+                  </TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -974,36 +1001,38 @@ export function RoutingPage() {
                   ))}
 
                   <TableCell aria-hidden="true" className="p-0" />
-                  <TableCell className="sticky right-0 z-20 border-l bg-card">
-                    <div className="flex flex-col items-center justify-end gap-1 sm:flex-row">
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`上移 ${row.policy.name}`}
-                        disabled={index === 0}
-                        onClick={() => patchRows(move(rows, index, -1))}
-                      >
-                        <ArrowUpIcon />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`下移 ${row.policy.name}`}
-                        disabled={index === rows.length - 1}
-                        onClick={() => patchRows(move(rows, index, 1))}
-                      >
-                        <ArrowDownIcon />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`删除策略 ${row.policy.name}`}
-                        onClick={() => setPendingPolicyDelete(index)}
-                      >
-                        <Trash2Icon />
-                      </Button>
-                    </div>
-                  </TableCell>
+                  {!readOnly && (
+                    <TableCell className="sticky right-0 z-20 border-l bg-card">
+                      <div className="flex flex-col items-center justify-end gap-1 sm:flex-row">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`上移 ${row.policy.name}`}
+                          disabled={index === 0}
+                          onClick={() => patchRows(move(rows, index, -1))}
+                        >
+                          <ArrowUpIcon />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`下移 ${row.policy.name}`}
+                          disabled={index === rows.length - 1}
+                          onClick={() => patchRows(move(rows, index, 1))}
+                        >
+                          <ArrowDownIcon />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`删除策略 ${row.policy.name}`}
+                          onClick={() => setPendingPolicyDelete(index)}
+                        >
+                          <Trash2Icon />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
@@ -1018,12 +1047,14 @@ export function RoutingPage() {
           <CardDescription>
             长的域名清单放在这里，策略里用一条「RULE-SET,规则集名称」引用。客户端每 6 小时自动拉取最新内容，套用预设也不会覆盖已有的同名规则集。和矩阵一起保存。
           </CardDescription>
-          <CardAction>
-            <Button variant="outline" size="sm" onClick={addRuleSet}>
-              <PlusIcon data-icon="inline-start" />
-              新建规则集
-            </Button>
-          </CardAction>
+          {!readOnly && (
+            <CardAction>
+              <Button variant="outline" size="sm" onClick={addRuleSet}>
+                <PlusIcon data-icon="inline-start" />
+                新建规则集
+              </Button>
+            </CardAction>
+          )}
         </CardHeader>
         <CardContent className="px-0">
           {ruleSets.length === 0 ? (
@@ -1088,21 +1119,29 @@ export function RoutingPage() {
                           <Button
                             variant="outline"
                             size="sm"
-                            aria-label={`编辑规则集 ${set.name}`}
+                            aria-label={`${readOnly ? "查看" : "编辑"}规则集 ${set.name}`}
                             onClick={() => setRuleSetEditor(index)}
                           >
-                            <PencilIcon data-icon="inline-start" />
-                            <span className="hidden sm:inline">编辑</span>
+                            {readOnly ? (
+                              <EyeIcon data-icon="inline-start" />
+                            ) : (
+                              <PencilIcon data-icon="inline-start" />
+                            )}
+                            <span className="hidden sm:inline">
+                              {readOnly ? "查看" : "编辑"}
+                            </span>
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            aria-label={`删除规则集 ${set.name}`}
-                            onClick={() => setPendingRuleSetDelete(index)}
-                          >
-                            <Trash2Icon data-icon="inline-start" />
-                            <span className="hidden sm:inline">删除</span>
-                          </Button>
+                          {!readOnly && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              aria-label={`删除规则集 ${set.name}`}
+                              onClick={() => setPendingRuleSetDelete(index)}
+                            >
+                              <Trash2Icon data-icon="inline-start" />
+                              <span className="hidden sm:inline">删除</span>
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1210,6 +1249,7 @@ export function RoutingPage() {
       </Card>
 
       <RuleSetDialog
+        readOnly={readOnly}
         set={ruleSetEditor !== null ? (ruleSets[ruleSetEditor] ?? null) : null}
         nameTaken={(name) =>
           ruleSets.some((set, i) => i !== ruleSetEditor && set.name === name)
@@ -1244,6 +1284,7 @@ export function RoutingPage() {
       />
 
       <PolicyDialog
+        readOnly={readOnly}
         row={editingRow}
         options={options}
         ruleSetNames={ruleSets.map((set) => set.name)}
@@ -1271,6 +1312,7 @@ export function RoutingPage() {
       />
 
       <EgressDialog
+        readOnly={readOnly}
         open={cellEditor !== null}
         profileName={
           cellEditor?.profileId === DEFAULT_COLUMN
@@ -1450,12 +1492,14 @@ function CellButton({
 }
 
 function RuleSetDialog({
+  readOnly,
   set,
   nameTaken,
   onClose,
   onChange,
   onRename,
 }: {
+  readOnly: boolean;
   set: RuleSet | null;
   nameTaken: (name: string) => boolean;
   onClose: () => void;
@@ -1476,7 +1520,7 @@ function RuleSetDialog({
     <Dialog open={set !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="flex flex-col sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>编辑规则集</DialogTitle>
+          <DialogTitle>{readOnly ? "查看规则集" : "编辑规则集"}</DialogTitle>
           <DialogDescription>
             客户端按 mihomo rule-provider 拉取这份清单。命中后走哪个出口，由引用它的策略决定。
           </DialogDescription>
@@ -1487,6 +1531,7 @@ function RuleSetDialog({
               <FieldLabel htmlFor="rule-set-name">名称</FieldLabel>
               <Input
                 id="rule-set-name"
+                readOnly={readOnly}
                 value={set.name}
                 aria-invalid={nameError ? true : undefined}
                 onChange={(event) => onRename(event.target.value)}
@@ -1505,6 +1550,7 @@ function RuleSetDialog({
               </FieldLabel>
               <CodeTextarea
                 id="rule-set-payload"
+                readOnly={readOnly}
                 rows={14}
                 className="max-h-[50dvh] min-h-48"
                 placeholder={"# Hugging Face\nGEOSITE,huggingface\nDOMAIN-SUFFIX,githubusercontent.com"}
@@ -1519,6 +1565,7 @@ function RuleSetDialog({
               <FieldLabel htmlFor="rule-set-remark">备注</FieldLabel>
               <Input
                 id="rule-set-remark"
+                readOnly={readOnly}
                 value={set.remark}
                 onChange={(event) => onChange({ remark: event.target.value })}
               />
@@ -1534,6 +1581,7 @@ function RuleSetDialog({
 }
 
 function PolicyDialog({
+  readOnly,
   row,
   options,
   ruleSetNames,
@@ -1542,6 +1590,7 @@ function PolicyDialog({
   onRename,
   onSetFinal,
 }: {
+  readOnly: boolean;
   row: Row | null;
   options: RoutingMatrix["options"];
   ruleSetNames: string[];
@@ -1565,7 +1614,7 @@ function PolicyDialog({
     >
       <DialogContent className="flex flex-col sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>编辑分流策略</DialogTitle>
+          <DialogTitle>{readOnly ? "查看分流策略" : "编辑分流策略"}</DialogTitle>
           <DialogDescription>
             这份规则清单对所有方案都一样；每个方案走哪条线路，由矩阵里的出口决定。
           </DialogDescription>
@@ -1577,6 +1626,7 @@ function PolicyDialog({
                 <FieldLabel htmlFor="policy-icon">图标</FieldLabel>
                 <Input
                   id="policy-icon"
+                  readOnly={readOnly}
                   placeholder="🤖"
                   value={policy.icon}
                   onChange={(event) =>
@@ -1588,6 +1638,7 @@ function PolicyDialog({
                 <FieldLabel htmlFor="policy-name">名称</FieldLabel>
                 <Input
                   id="policy-name"
+                  readOnly={readOnly}
                   value={policy.name}
                   aria-invalid={nameError ? true : undefined}
                   onChange={(event) => onRename(event.target.value)}
@@ -1607,6 +1658,7 @@ function PolicyDialog({
                 <FieldLabel htmlFor="policy-enabled">启用</FieldLabel>
                 <Switch
                   id="policy-enabled"
+                  readOnly={readOnly}
                   checked={policy.enabled}
                   onCheckedChange={(enabled) =>
                     onChange({ ...policy, enabled })
@@ -1619,6 +1671,7 @@ function PolicyDialog({
                 </FieldLabel>
                 <Switch
                   id="policy-final"
+                  readOnly={readOnly}
                   checked={policy.isFinal}
                   onCheckedChange={() => onSetFinal()}
                 />
@@ -1647,6 +1700,7 @@ function PolicyDialog({
                     >
                       <Switch
                         aria-label={`规则 ${index + 1} ${rule.disabled ? "已停用" : "已启用"}`}
+                        readOnly={readOnly}
                         checked={!rule.disabled}
                         onCheckedChange={(enabled) =>
                           onChange({
@@ -1658,6 +1712,7 @@ function PolicyDialog({
                         }
                       />
                       <Select
+                        readOnly={readOnly}
                         items={options.ruleTypes.map((value) => ({
                           value,
                           label: value,
@@ -1694,6 +1749,7 @@ function PolicyDialog({
                           rule.disabled && "line-through opacity-60",
                         )}
                         aria-label={`规则 ${index + 1} 的内容`}
+                        readOnly={readOnly}
                         placeholder={
                           rule.type === RULE_SET_TYPE
                             ? "规则集名称"
@@ -1727,6 +1783,7 @@ function PolicyDialog({
                         <Checkbox
                           id={`policy-rule-${index}-no-resolve`}
                           aria-label={`规则 ${index + 1} 不解析域名`}
+                          readOnly={readOnly}
                           disabled={!options.noResolveTypes[rule.type]}
                           checked={
                             rule.noResolve &&
@@ -1750,74 +1807,78 @@ function PolicyDialog({
                           no-resolve
                         </FieldLabel>
                       </Field>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`上移规则 ${index + 1}`}
-                          disabled={index === 0}
-                          onClick={() =>
-                            onChange({
-                              ...policy,
-                              rules: move(policy.rules, index, -1),
-                            })
-                          }
-                        >
-                          <ArrowUpIcon />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`下移规则 ${index + 1}`}
-                          disabled={index === policy.rules.length - 1}
-                          onClick={() =>
-                            onChange({
-                              ...policy,
-                              rules: move(policy.rules, index, 1),
-                            })
-                          }
-                        >
-                          <ArrowDownIcon />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`删除规则 ${index + 1}`}
-                          onClick={() =>
-                            onChange({
-                              ...policy,
-                              rules: policy.rules.filter((_, i) => i !== index),
-                            })
-                          }
-                        >
-                          <Trash2Icon />
-                        </Button>
-                      </div>
+                      {!readOnly && (
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`上移规则 ${index + 1}`}
+                            disabled={index === 0}
+                            onClick={() =>
+                              onChange({
+                                ...policy,
+                                rules: move(policy.rules, index, -1),
+                              })
+                            }
+                          >
+                            <ArrowUpIcon />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`下移规则 ${index + 1}`}
+                            disabled={index === policy.rules.length - 1}
+                            onClick={() =>
+                              onChange({
+                                ...policy,
+                                rules: move(policy.rules, index, 1),
+                              })
+                            }
+                          >
+                            <ArrowDownIcon />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`删除规则 ${index + 1}`}
+                            onClick={() =>
+                              onChange({
+                                ...policy,
+                                rules: policy.rules.filter((_, i) => i !== index),
+                              })
+                            }
+                          >
+                            <Trash2Icon />
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   ))}
-                  <div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        onChange({
-                          ...policy,
-                          rules: [
-                            ...policy.rules,
-                            {
-                              type: "GEOSITE",
-                              value: "",
-                              noResolve: false,
-                              disabled: false,
-                            },
-                          ],
-                        })
-                      }
-                    >
-                      <PlusIcon data-icon="inline-start" />
-                      添加规则
-                    </Button>
-                  </div>
+                  {!readOnly && (
+                    <div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          onChange({
+                            ...policy,
+                            rules: [
+                              ...policy.rules,
+                              {
+                                type: "GEOSITE",
+                                value: "",
+                                noResolve: false,
+                                disabled: false,
+                              },
+                            ],
+                          })
+                        }
+                      >
+                        <PlusIcon data-icon="inline-start" />
+                        添加规则
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </ScrollArea>
             </FieldSet>
@@ -1826,6 +1887,7 @@ function PolicyDialog({
               <FieldLabel htmlFor="policy-remark">备注</FieldLabel>
               <Input
                 id="policy-remark"
+                readOnly={readOnly}
                 value={policy.remark}
                 onChange={(event) =>
                   onChange({ ...policy, remark: event.target.value })
@@ -1843,6 +1905,7 @@ function PolicyDialog({
 }
 
 function EgressDialog({
+  readOnly,
   open,
   policyName,
   profileName,
@@ -1859,6 +1922,7 @@ function EgressDialog({
   onChange,
   onConfirm,
 }: {
+  readOnly: boolean;
   open: boolean;
   policyName: string;
   profileName: string;
@@ -1911,6 +1975,7 @@ function EgressDialog({
             <Field>
               <FieldLabel htmlFor="egress-mode">这一格</FieldLabel>
               <Select
+                readOnly={readOnly}
                 items={[
                   { value: "inherit", label: "跟随默认" },
                   { value: "custom", label: "自定义出口" },
@@ -1972,6 +2037,7 @@ function EgressDialog({
                 </FieldContent>
                 <Switch
                   id="egress-client-hidden"
+                  readOnly={readOnly}
                   checked={current.clientHidden ?? false}
                   aria-describedby="egress-client-hidden-description"
                   onCheckedChange={(checked) => patch({ clientHidden: checked })}
@@ -1981,6 +2047,7 @@ function EgressDialog({
                 <Field>
                   <FieldLabel htmlFor="egress-type">选择方式</FieldLabel>
                   <Select
+                    readOnly={readOnly}
                     items={options.groupTypes.map((value) => ({
                       value,
                       label: value,
@@ -2009,6 +2076,7 @@ function EgressDialog({
                     </FieldLabel>
                     <Input
                       id="egress-interval"
+                      readOnly={readOnly}
                       type="number"
                       min={0}
                       value={current.interval}
@@ -2025,6 +2093,7 @@ function EgressDialog({
                     <FieldLabel htmlFor="egress-test-url">测速地址</FieldLabel>
                     <Input
                       id="egress-test-url"
+                      readOnly={readOnly}
                       placeholder="留空用 gstatic generate_204"
                       value={current.testUrl}
                       onChange={(event) =>
@@ -2039,6 +2108,7 @@ function EgressDialog({
                       </FieldLabel>
                       <Input
                         id="egress-tolerance"
+                        readOnly={readOnly}
                         type="number"
                         min={0}
                         value={current.tolerance}
@@ -2064,7 +2134,7 @@ function EgressDialog({
                     <Badge
                       key={index}
                       variant={memberMissing(member) ? "destructive" : "secondary"}
-                      className="pr-0.5"
+                      className={readOnly ? undefined : "pr-0.5"}
                       title={
                         memberMissing(member)
                           ? "找不到这个成员，渲染时会跳过"
@@ -2075,43 +2145,49 @@ function EgressDialog({
                         <TriangleAlertIcon data-icon="inline-start" />
                       )}
                       {memberLabel(member)}
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        className="size-4"
-                        aria-label={`把成员 ${index + 1} 前移`}
-                        disabled={index === 0}
-                        onClick={() =>
-                          patch({ members: move(current.members, index, -1) })
-                        }
-                      >
-                        <ArrowLeftIcon />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        className="size-4"
-                        aria-label={`移除成员 ${index + 1}`}
-                        onClick={() =>
-                          patch({
-                            members: current.members.filter(
-                              (_, i) => i !== index,
-                            ),
-                          })
-                        }
-                      >
-                        <XIcon />
-                      </Button>
+                      {!readOnly && (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            className="size-4"
+                            aria-label={`把成员 ${index + 1} 前移`}
+                            disabled={index === 0}
+                            onClick={() =>
+                              patch({ members: move(current.members, index, -1) })
+                            }
+                          >
+                            <ArrowLeftIcon />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            className="size-4"
+                            aria-label={`移除成员 ${index + 1}`}
+                            onClick={() =>
+                              patch({
+                                members: current.members.filter(
+                                  (_, i) => i !== index,
+                                ),
+                              })
+                            }
+                          >
+                            <XIcon />
+                          </Button>
+                        </>
+                      )}
                     </Badge>
                   ))}
-                  <MemberPicker
-                    groups={groups}
-                    policies={policies.filter((p) => p.name !== policyName)}
-                    builtins={options.builtins}
-                    onPick={(member) =>
-                      patch({ members: [...current.members, member] })
-                    }
-                  />
+                  {!readOnly && (
+                    <MemberPicker
+                      groups={groups}
+                      policies={policies.filter((p) => p.name !== policyName)}
+                      builtins={options.builtins}
+                      onPick={(member) =>
+                        patch({ members: [...current.members, member] })
+                      }
+                    />
+                  )}
                 </div>
                 {current.members.length === 0 && (
                   <FieldDescription>
@@ -2131,8 +2207,14 @@ function EgressDialog({
         </FieldGroup>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>取消</Button>
-          <Button onClick={onConfirm}>确认</Button>
+          {readOnly ? (
+            <Button onClick={onClose}>关闭</Button>
+          ) : (
+            <>
+              <Button variant="outline" onClick={onClose}>取消</Button>
+              <Button onClick={onConfirm}>确认</Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

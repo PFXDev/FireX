@@ -1,6 +1,7 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
+  EyeIcon,
   PencilIcon,
   PlugZapIcon,
   PlusIcon,
@@ -16,6 +17,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
 import { PanelStatusBadge, StatusBadge } from '@/components/status-badge'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -41,6 +43,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { errorMessage, formatTime } from '@/lib/format'
+import { useSession } from '@/lib/session'
 
 type Draft = {
   id?: number
@@ -96,6 +99,7 @@ export function PanelsPage() {
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
   const [discovering, setDiscovering] = useState<Set<number>>(new Set())
   const [pendingDelete, setPendingDelete] = useState<Panel | null>(null)
+  const { readOnly } = useSession()
 
   const load = useCallback(async () => {
     setLoadState('loading')
@@ -231,10 +235,17 @@ export function PanelsPage() {
         title="面板"
         description="每个面板是一台独立的 3x-ui。FireX 用面板的 API Token（admin 作用域）下发配置。"
       >
-        <Button type="button" onClick={openCreate}>
-          <PlusIcon data-icon="inline-start" />
-          添加面板
-        </Button>
+        {readOnly ? (
+          <Badge variant="outline">
+            <EyeIcon data-icon="inline-start" />
+            只读
+          </Badge>
+        ) : (
+          <Button type="button" onClick={openCreate}>
+            <PlusIcon data-icon="inline-start" />
+            添加面板
+          </Button>
+        )}
       </PageHeader>
 
       <Card>
@@ -275,14 +286,18 @@ export function PanelsPage() {
                   <ServerOffIcon />
                 </EmptyMedia>
                 <EmptyTitle>还没有面板</EmptyTitle>
-                <EmptyDescription>添加一台 3x-ui，FireX 会自动拉取它的入站。</EmptyDescription>
+                <EmptyDescription>
+                  {readOnly ? '超级管理员添加 3x-ui 后，它的入站会出现在这里。' : '添加一台 3x-ui，FireX 会自动拉取它的入站。'}
+                </EmptyDescription>
               </EmptyHeader>
-              <EmptyContent>
-                <Button type="button" onClick={openCreate}>
-                  <PlusIcon data-icon="inline-start" />
-                  添加面板
-                </Button>
-              </EmptyContent>
+              {!readOnly && (
+                <EmptyContent>
+                  <Button type="button" onClick={openCreate}>
+                    <PlusIcon data-icon="inline-start" />
+                    添加面板
+                  </Button>
+                </EmptyContent>
+              )}
             </Empty>
           ) : (
             <Table>
@@ -294,9 +309,11 @@ export function PanelsPage() {
                   <TableHead className="hidden md:table-cell">入站</TableHead>
                   <TableHead className="hidden xl:table-cell">Xray</TableHead>
                   <TableHead className="hidden lg:table-cell">最近连通</TableHead>
-                  <TableHead>
-                    <span className="sr-only">操作</span>
-                  </TableHead>
+                  {!readOnly && (
+                    <TableHead>
+                      <span className="sr-only">操作</span>
+                    </TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -336,47 +353,49 @@ export function PanelsPage() {
                       </TableCell>
                       <TableCell className="hidden text-muted-foreground xl:table-cell">{panel.xrayVersion || '—'}</TableCell>
                       <TableCell className="hidden text-muted-foreground lg:table-cell">{formatTime(panel.lastSeenAt)}</TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            aria-label={`拉取 ${panel.name} 的入站`}
-                            disabled={discoveringPanel || pendingAction !== null}
-                            onClick={() => void discover(panel)}
-                          >
-                            {discoveringPanel ? (
-                              <Spinner data-icon="inline-start" />
-                            ) : (
-                              <RefreshCwIcon data-icon="inline-start" />
-                            )}
-                            <span className="hidden 2xl:inline">{discoveringPanel ? '同步中…' : '拉取入站'}</span>
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            aria-label={`编辑 ${panel.name}`}
-                            disabled={discoveringPanel || pendingAction !== null}
-                            onClick={() => openEditor(panel)}
-                          >
-                            <PencilIcon data-icon="inline-start" />
-                            <span className="hidden sm:inline">编辑</span>
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            aria-label={`删除 ${panel.name}`}
-                            disabled={discoveringPanel || pendingAction !== null}
-                            onClick={() => setPendingDelete(panel)}
-                          >
-                            <Trash2Icon data-icon="inline-start" />
-                            <span className="hidden sm:inline">删除</span>
-                          </Button>
-                        </div>
-                      </TableCell>
+                      {!readOnly && (
+                        <TableCell>
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              aria-label={`拉取 ${panel.name} 的入站`}
+                              disabled={discoveringPanel || pendingAction !== null}
+                              onClick={() => void discover(panel)}
+                            >
+                              {discoveringPanel ? (
+                                <Spinner data-icon="inline-start" />
+                              ) : (
+                                <RefreshCwIcon data-icon="inline-start" />
+                              )}
+                              <span className="hidden 2xl:inline">{discoveringPanel ? '同步中…' : '拉取入站'}</span>
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              aria-label={`编辑 ${panel.name}`}
+                              disabled={discoveringPanel || pendingAction !== null}
+                              onClick={() => openEditor(panel)}
+                            >
+                              <PencilIcon data-icon="inline-start" />
+                              <span className="hidden sm:inline">编辑</span>
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              aria-label={`删除 ${panel.name}`}
+                              disabled={discoveringPanel || pendingAction !== null}
+                              onClick={() => setPendingDelete(panel)}
+                            >
+                              <Trash2Icon data-icon="inline-start" />
+                              <span className="hidden sm:inline">删除</span>
+                            </Button>
+                          </div>
+                        </TableCell>
+                      )}
                     </TableRow>
                   )
                 })}

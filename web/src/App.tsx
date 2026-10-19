@@ -109,7 +109,7 @@ function Shell() {
   const isSuperAdmin = admin.role === 'super_admin'
   // A hash typed by hand must not open a page the role cannot use; the server
   // would answer 403 and the page would look broken.
-  const visibleRoute = canAccess(route, isSuperAdmin) ? route : DEFAULT_ROUTE
+  const visibleRoute = canAccess(route, { isSuperAdmin, canViewConfig: admin.canViewConfig }) ? route : DEFAULT_ROUTE
 
   return (
     <SessionProvider value={admin}>

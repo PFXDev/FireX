@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { CloudUploadIcon, FileCogIcon, HistoryIcon, LayersIcon, LayoutTemplateIcon, MousePointerClickIcon, RefreshCwIcon, SaveIcon, ServerIcon, ShieldCheckIcon, TriangleAlertIcon, UnlinkIcon } from 'lucide-react'
+import { CloudUploadIcon, EyeIcon, FileCogIcon, HistoryIcon, LayersIcon, LayoutTemplateIcon, MousePointerClickIcon, RefreshCwIcon, SaveIcon, ServerIcon, ShieldCheckIcon, TriangleAlertIcon, UnlinkIcon } from 'lucide-react'
 
 import { api, type Inbound, type InboundDeployment } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -23,6 +23,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { confirmUnsavedNavigation, useUnsavedGuard } from '@/hooks/use-unsaved-guard'
 import { errorMessage, formatTime } from '@/lib/format'
 import { hashID, inboundLabel as label, inboundTitle } from '@/lib/inbound'
+import { useSession } from '@/lib/session'
 import { reportSyncError } from '@/lib/sync'
 
 type Detail = {
@@ -45,6 +46,7 @@ type Preview = {
 const modeLabels: Record<InboundDeployment['mode'], string> = { update: '更新', create: '新建', rebind: '重新绑定' }
 
 export function InboundConfigsPage() {
+  const { readOnly } = useSession()
   const [inbounds, setInbounds] = useState<Inbound[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -266,12 +268,14 @@ export function InboundConfigsPage() {
                 <EmptyTitle>还没有入站</EmptyTitle>
                 <EmptyDescription>先添加面板，FireX 会自动发现它的入站。</EmptyDescription>
               </EmptyHeader>
-              <EmptyContent>
-                <Button render={<a href="#/panels" />} nativeButton={false}>
-                  <ServerIcon data-icon="inline-start" />
-                  前往面板
-                </Button>
-              </EmptyContent>
+              {!readOnly && (
+                <EmptyContent>
+                  <Button render={<a href="#/panels" />} nativeButton={false}>
+                    <ServerIcon data-icon="inline-start" />
+                    前往面板
+                  </Button>
+                </EmptyContent>
+              )}
             </Empty>
           )
         ) : (
@@ -306,7 +310,14 @@ export function InboundConfigsPage() {
       <PageHeader
         title="入站配置"
         description="FireX 为每个接管的入站保存一份完整配置。面板被改动、入站被删除或重新编号时，可预览差异后完整下发恢复。"
-      />
+      >
+        {readOnly && (
+          <Badge variant="outline">
+            <EyeIcon data-icon="inline-start" />
+            只读
+          </Badge>
+        )}
+      </PageHeader>
 
       {inbounds.length === 0 ? (
         listCard
@@ -351,7 +362,7 @@ export function InboundConfigsPage() {
                       {managed && <Badge variant="outline">版本 {detail.config?.revision}</Badge>}
                       {dirty && <Badge variant="secondary">未保存</Badge>}
                     </CardDescription>
-                    {managed && (
+                    {managed && !readOnly && (
                       <CardAction className="flex flex-wrap justify-end gap-2">
                         <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => setReleasing(true)}>
                           <UnlinkIcon data-icon="inline-start" />
@@ -390,11 +401,13 @@ export function InboundConfigsPage() {
                     )}
                     {managed ? (
                       <FieldGroup>
-                        <Field orientation="horizontal">
-                          <FieldLabel htmlFor="reveal-config">显示密钥</FieldLabel>
-                          <Switch id="reveal-config" checked={reveal} onCheckedChange={setReveal} />
-                        </Field>
-                        <ConfigEditor key={selected.id} parameters={draft} onChange={setDraft} onInvalidChange={setInvalid} disabled={busy} reveal={reveal} />
+                        {!readOnly && (
+                          <Field orientation="horizontal">
+                            <FieldLabel htmlFor="reveal-config">显示密钥</FieldLabel>
+                            <Switch id="reveal-config" checked={reveal} onCheckedChange={setReveal} />
+                          </Field>
+                        )}
+                        <ConfigEditor key={selected.id} parameters={draft} onChange={setDraft} onInvalidChange={setInvalid} disabled={readOnly || busy} reveal={reveal} />
                       </FieldGroup>
                     ) : (
                       <Empty className="border">
@@ -409,7 +422,7 @@ export function InboundConfigsPage() {
                               : `接管会把最近同步的面板配置（${formatTime(selected.lastSeenAt)}）保存为 FireX 的配置。请先确认面板当前配置正确。`}
                           </EmptyDescription>
                         </EmptyHeader>
-                        {!selected.missing && (
+                        {!readOnly && !selected.missing && (
                           <EmptyContent>
                             <Button type="button" disabled={busy} onClick={() => void takeOver()}>
                               {pending === 'takeover' ? <Spinner data-icon="inline-start" /> : <ShieldCheckIcon data-icon="inline-start" />}
@@ -462,7 +475,7 @@ export function InboundConfigsPage() {
                               </TableCell>
                               <TableCell>
                                 <div className="flex justify-end">
-                                  {row.hasBackup && (
+                                  {!readOnly && row.hasBackup && (
                                     <Button type="button" variant="outline" size="sm" disabled={busy || dirty} onClick={() => (managed ? restore(row) : void takeOver(row))}>
                                       <HistoryIcon data-icon="inline-start" />
                                       {managed ? '载入下发前配置' : '从此备份接管'}

@@ -102,32 +102,35 @@ func (s *Server) routes() {
 	agent.POST("/preview", s.agentPreview)
 	agent.PUT("/submission", s.agentSubmit)
 
-	authed.GET("/panels", s.superAdminOnly, s.listPanels)
+	// Configuration is written by super admins only. Reads also open to an
+	// operator whose "view configuration" switch is on, with inbound secrets
+	// masked; see redactForViewer.
+	authed.GET("/panels", s.configViewer, s.listPanels)
 	authed.POST("/panels", s.superAdminOnly, s.createPanel)
 	authed.PUT("/panels/:id", s.superAdminOnly, s.updatePanel)
 	authed.DELETE("/panels/:id", s.superAdminOnly, s.deletePanel)
 	authed.POST("/panels/:id/discover", s.superAdminOnly, s.discoverPanel)
 	authed.POST("/panels/test", s.superAdminOnly, s.testPanel)
 
-	authed.GET("/inbounds", s.superAdminOnly, s.listInbounds)
-	authed.GET("/inbounds/:id", s.superAdminOnly, s.getInbound)
+	authed.GET("/inbounds", s.configViewer, s.listInbounds)
+	authed.GET("/inbounds/:id", s.configViewer, s.getInbound)
 	authed.PUT("/inbounds/:id", s.superAdminOnly, s.updateInbound)
 	authed.POST("/inbounds/bulk", s.superAdminOnly, s.bulkUpdateInbounds)
 	authed.DELETE("/inbounds/:id", s.superAdminOnly, s.deleteInbound)
-	authed.GET("/inbounds/:id/config", s.superAdminOnly, s.getInboundConfig)
+	authed.GET("/inbounds/:id/config", s.configViewer, s.getInboundConfig)
 	authed.POST("/inbounds/:id/config", s.superAdminOnly, s.adoptInboundConfig)
 	authed.PUT("/inbounds/:id/config", s.superAdminOnly, s.updateInboundConfig)
 	authed.DELETE("/inbounds/:id/config", s.superAdminOnly, s.releaseInboundConfig)
 	authed.POST("/inbounds/:id/config/preview", s.superAdminOnly, s.previewInboundConfig)
 	authed.POST("/inbounds/:id/config/deploy", s.superAdminOnly, s.deployInboundConfig)
-	authed.GET("/inbound-templates", s.superAdminOnly, s.listInboundTemplates)
+	authed.GET("/inbound-templates", s.configViewer, s.listInboundTemplates)
 	authed.POST("/inbound-templates", s.superAdminOnly, s.createInboundTemplate)
-	authed.GET("/inbound-templates/:id", s.superAdminOnly, s.getInboundTemplate)
+	authed.GET("/inbound-templates/:id", s.configViewer, s.getInboundTemplate)
 	authed.PUT("/inbound-templates/:id", s.superAdminOnly, s.updateInboundTemplate)
 	authed.DELETE("/inbound-templates/:id", s.superAdminOnly, s.deleteInboundTemplate)
 	authed.POST("/inbound-templates/:id/instantiate", s.superAdminOnly, s.instantiateInboundTemplate)
 
-	authed.GET("/node-groups", s.superAdminOnly, s.listNodeGroups)
+	authed.GET("/node-groups", s.configViewer, s.listNodeGroups)
 	authed.POST("/node-groups", s.superAdminOnly, s.createNodeGroup)
 	authed.PUT("/node-groups/:id", s.superAdminOnly, s.updateNodeGroup)
 	authed.DELETE("/node-groups/:id", s.superAdminOnly, s.deleteNodeGroup)
@@ -140,9 +143,9 @@ func (s *Server) routes() {
 
 	// The matrix is read and written whole: partial saves would let a rule
 	// point at a policy the same edit removed.
-	authed.GET("/routing", s.superAdminOnly, s.getRouting)
+	authed.GET("/routing", s.configViewer, s.getRouting)
 	authed.PUT("/routing", s.superAdminOnly, s.setRouting)
-	authed.GET("/routing/preview", s.superAdminOnly, s.previewRouting)
+	authed.GET("/routing/preview", s.configViewer, s.previewRouting)
 	authed.POST("/routing/presets/:key", s.superAdminOnly, s.applyRoutingPreset)
 
 	authed.GET("/plans", s.listPlans)
@@ -158,7 +161,7 @@ func (s *Server) routes() {
 	authed.POST("/users/:id/resetTraffic", s.resetUserTraffic)
 	authed.GET("/users/:id/subscription", s.previewSubscription)
 
-	authed.GET("/settings/clashTemplate", s.superAdminOnly, s.getClashTemplate)
+	authed.GET("/settings/clashTemplate", s.configViewer, s.getClashTemplate)
 	authed.PUT("/settings/clashTemplate", s.superAdminOnly, s.setClashTemplate)
 	authed.GET("/settings/server", s.superAdminOnly, s.getServerConfig)
 	authed.PUT("/settings/server", s.superAdminOnly, s.setServerConfig)

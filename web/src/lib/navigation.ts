@@ -39,6 +39,8 @@ export type NavItem = {
   items?: NavSubItem[]
   /** Super-admin-only pages are hidden from operators everywhere in the UI. */
   superAdminOnly?: boolean
+  /** Configuration pages an operator may open read-only when granted. */
+  configView?: boolean
 }
 
 export type NavGroup = { title: string; items: NavItem[] }
@@ -53,19 +55,20 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: '资源管理',
     items: [
-      { route: 'panels', title: '面板', icon: ServerIcon, superAdminOnly: true },
+      { route: 'panels', title: '面板', icon: ServerIcon, superAdminOnly: true, configView: true },
       {
         route: 'inbounds',
         title: '入站',
         icon: LayersIcon,
         superAdminOnly: true,
+        configView: true,
         items: [
           { route: 'inbounds', title: '入站列表' },
           { route: 'inbound-configs', title: '入站配置' },
           { route: 'inbound-templates', title: '入站模板' },
         ],
       },
-      { route: 'node-groups', title: '节点组', icon: BoxesIcon, superAdminOnly: true },
+      { route: 'node-groups', title: '节点组', icon: BoxesIcon, superAdminOnly: true, configView: true },
       { route: 'plans', title: '套餐', icon: TicketIcon },
       { route: 'users', title: '用户', icon: UsersIcon },
     ],
@@ -73,7 +76,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: '运维配置',
     items: [
-      { route: 'routing', title: '分流', icon: SplitIcon, superAdminOnly: true },
+      { route: 'routing', title: '分流', icon: SplitIcon, superAdminOnly: true, configView: true },
       { route: 'agent', title: 'Agent 修改', icon: BotIcon, superAdminOnly: true },
       { route: 'audit', title: '操作日志', icon: HistoryIcon, superAdminOnly: true },
       { route: 'settings', title: '设置', icon: SettingsIcon },
@@ -109,22 +112,25 @@ export function isRouteWithin(item: NavItem, route: RouteKey) {
   return item.route === route || Boolean(item.items?.some((sub) => sub.route === route))
 }
 
+export type Access = { isSuperAdmin: boolean; canViewConfig: boolean }
+
 /**
- * The navigation one role sees. Operators keep the overview, plans (read-only)
- * and users; every infrastructure page is dropped entirely rather than shown
- * disabled, since the server would refuse it anyway.
+ * The navigation one admin sees. Operators keep the overview, plans (read-only)
+ * and users, plus the configuration pages read-only when granted; every other
+ * infrastructure page is dropped entirely rather than shown disabled, since the
+ * server would refuse it anyway.
  */
-export function navGroupsFor(isSuperAdmin: boolean): NavGroup[] {
+export function navGroupsFor({ isSuperAdmin, canViewConfig }: Access): NavGroup[] {
   if (isSuperAdmin) return NAV_GROUPS
   return NAV_GROUPS.map((group) => ({
     ...group,
-    items: group.items.filter((item) => !item.superAdminOnly),
+    items: group.items.filter((item) => !item.superAdminOnly || (canViewConfig && item.configView)),
   })).filter((group) => group.items.length > 0)
 }
 
-/** Whether a role may open a route; used to bounce a hand-typed hash. */
-export function canAccess(route: RouteKey, isSuperAdmin: boolean): boolean {
-  return navGroupsFor(isSuperAdmin).some((group) =>
+/** Whether an admin may open a route; used to bounce a hand-typed hash. */
+export function canAccess(route: RouteKey, access: Access): boolean {
+  return navGroupsFor(access).some((group) =>
     group.items.some((item) => isRouteWithin(item, route)),
   )
 }
