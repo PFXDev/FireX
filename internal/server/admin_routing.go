@@ -185,11 +185,11 @@ func (s *Server) createNodeGroup(c *gin.Context) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.setGroupTags(g.ID, req.Tags); err != nil {
+	if err := setGroupTags(s.db.DB, g.ID, req.Tags); err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	if _, err := s.setGroupMembers(g.ID, req.InboundIDs); err != nil {
+	if _, err := setGroupMembers(s.db.DB, g.ID, req.InboundIDs); err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -225,11 +225,11 @@ func (s *Server) updateNodeGroup(c *gin.Context) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.setGroupTags(g.ID, req.Tags); err != nil {
+	if err := setGroupTags(s.db.DB, g.ID, req.Tags); err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	membersChanged, err := s.setGroupMembers(g.ID, req.InboundIDs)
+	membersChanged, err := setGroupMembers(s.db.DB, g.ID, req.InboundIDs)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
@@ -266,12 +266,8 @@ func (s *Server) deleteNodeGroup(c *gin.Context) {
 	// Capture the affected plans before the rows that link them are gone.
 	plans := routing.PlansUsingNodeGroup(s.db, g.ID)
 
-	s.db.Where("group_id = ?", g.ID).Delete(&model.NodeGroupInbound{})
-	s.db.Where("group_id = ?", g.ID).Delete(&model.NodeGroupTag{})
-	s.db.Where("group_id = ?", g.ID).Delete(&model.ProfileNodeGroup{})
-	dropped := s.db.Where("kind = ? AND ref = ?", model.MemberNodeGroup, g.Name).
-		Delete(&model.EgressMember{}).RowsAffected
-	if err := s.db.Delete(&model.NodeGroup{}, g.ID).Error; err != nil {
+	dropped, err := deleteNodeGroupRows(s.db.DB, g)
+	if err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -280,19 +276,30 @@ func (s *Server) deleteNodeGroup(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "droppedMembers": dropped, "syncError": errString(syncErr)})
 }
 
+// deleteNodeGroupRows removes a group with its membership, tags and grants,
+// and drops the egress members that named it. It returns how many it dropped.
+func deleteNodeGroupRows(handle *gorm.DB, g model.NodeGroup) (int64, error) {
+	handle.Where("group_id = ?", g.ID).Delete(&model.NodeGroupInbound{})
+	handle.Where("group_id = ?", g.ID).Delete(&model.NodeGroupTag{})
+	handle.Where("group_id = ?", g.ID).Delete(&model.ProfileNodeGroup{})
+	dropped := handle.Where("kind = ? AND ref = ?", model.MemberNodeGroup, g.Name).
+		Delete(&model.EgressMember{}).RowsAffected
+	return dropped, handle.Delete(&model.NodeGroup{}, g.ID).Error
+}
+
 // setGroupMembers replaces a group's membership wholesale; the editor always
 // sends the complete list. It reports whether the set actually changed, so the
 // caller can skip a fleet-wide reconcile for a relabel.
-func (s *Server) setGroupMembers(groupID uint, inboundIDs []uint) (bool, error) {
+func setGroupMembers(handle *gorm.DB, groupID uint, inboundIDs []uint) (bool, error) {
 	var before []uint
-	s.db.Model(&model.NodeGroupInbound{}).Where("group_id = ?", groupID).Order("inbound_id ASC").Pluck("inbound_id", &before)
+	handle.Model(&model.NodeGroupInbound{}).Where("group_id = ?", groupID).Order("inbound_id ASC").Pluck("inbound_id", &before)
 
-	if err := s.db.Where("group_id = ?", groupID).Delete(&model.NodeGroupInbound{}).Error; err != nil {
+	if err := handle.Where("group_id = ?", groupID).Delete(&model.NodeGroupInbound{}).Error; err != nil {
 		return false, err
 	}
 	var existing []uint
 	if len(inboundIDs) > 0 {
-		s.db.Model(&model.Inbound{}).Where("id IN ?", inboundIDs).Pluck("id", &existing)
+		handle.Model(&model.Inbound{}).Where("id IN ?", inboundIDs).Pluck("id", &existing)
 	}
 	valid := map[uint]bool{}
 	for _, id := range existing {
@@ -314,11 +321,11 @@ func (s *Server) setGroupMembers(groupID uint, inboundIDs []uint) (bool, error) 
 	if len(links) == 0 {
 		return changed, nil
 	}
-	return changed, s.db.Create(&links).Error
+	return changed, handle.Create(&links).Error
 }
 
-func (s *Server) setGroupTags(groupID uint, tags []nodeGroupTag) error {
-	if err := s.db.Where("group_id = ?", groupID).Delete(&model.NodeGroupTag{}).Error; err != nil {
+func setGroupTags(handle *gorm.DB, groupID uint, tags []nodeGroupTag) error {
+	if err := handle.Where("group_id = ?", groupID).Delete(&model.NodeGroupTag{}).Error; err != nil {
 		return err
 	}
 	seen := map[string]bool{}
@@ -329,7 +336,7 @@ func (s *Server) setGroupTags(groupID uint, tags []nodeGroupTag) error {
 			continue
 		}
 		seen[key] = true
-		if err := s.db.Create(&model.NodeGroupTag{GroupID: groupID, Key: key, Value: value}).Error; err != nil {
+		if err := handle.Create(&model.NodeGroupTag{GroupID: groupID, Key: key, Value: value}).Error; err != nil {
 			return err
 		}
 	}
@@ -413,7 +420,7 @@ func (s *Server) createProfile(c *gin.Context) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.setProfileGroups(p.ID, req.GroupIDs); err != nil {
+	if err := setProfileGroups(s.db.DB, p.ID, req.GroupIDs); err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -443,7 +450,7 @@ func (s *Server) updateProfile(c *gin.Context) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.setProfileGroups(p.ID, req.GroupIDs); err != nil {
+	if err := setProfileGroups(s.db.DB, p.ID, req.GroupIDs); err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -467,30 +474,36 @@ func (s *Server) deleteProfile(c *gin.Context) {
 		failMsg(c, http.StatusConflict, "还有套餐绑定这个分流方案，先改掉它们")
 		return
 	}
-	s.db.Where("profile_id = ?", id).Delete(&model.ProfileNodeGroup{})
-	// The profile's column of overrides goes with it; the default column stays.
-	var egressIDs []uint
-	s.db.Model(&model.Egress{}).Where("profile_id = ?", id).Pluck("id", &egressIDs)
-	if len(egressIDs) > 0 {
-		s.db.Where("egress_id IN ?", egressIDs).Delete(&model.EgressMember{})
-		s.db.Where("id IN ?", egressIDs).Delete(&model.Egress{})
-	}
-	if err := s.db.Delete(&model.Profile{}, id).Error; err != nil {
+	if err := deleteProfileRows(s.db.DB, id); err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-func (s *Server) setProfileGroups(profileID uint, groupIDs []uint) error {
-	if err := s.db.Where("profile_id = ?", profileID).Delete(&model.ProfileNodeGroup{}).Error; err != nil {
+// deleteProfileRows removes a profile with its whitelist. The profile's column
+// of overrides goes with it; the default column stays. Callers check first
+// that no plan binds it.
+func deleteProfileRows(handle *gorm.DB, id uint) error {
+	handle.Where("profile_id = ?", id).Delete(&model.ProfileNodeGroup{})
+	var egressIDs []uint
+	handle.Model(&model.Egress{}).Where("profile_id = ?", id).Pluck("id", &egressIDs)
+	if len(egressIDs) > 0 {
+		handle.Where("egress_id IN ?", egressIDs).Delete(&model.EgressMember{})
+		handle.Where("id IN ?", egressIDs).Delete(&model.Egress{})
+	}
+	return handle.Delete(&model.Profile{}, id).Error
+}
+
+func setProfileGroups(handle *gorm.DB, profileID uint, groupIDs []uint) error {
+	if err := handle.Where("profile_id = ?", profileID).Delete(&model.ProfileNodeGroup{}).Error; err != nil {
 		return err
 	}
 	if len(groupIDs) == 0 {
 		return nil
 	}
 	var existing []uint
-	s.db.Model(&model.NodeGroup{}).Where("id IN ?", groupIDs).Pluck("id", &existing)
+	handle.Model(&model.NodeGroup{}).Where("id IN ?", groupIDs).Pluck("id", &existing)
 	valid := map[uint]bool{}
 	for _, id := range existing {
 		valid[id] = true
@@ -507,7 +520,7 @@ func (s *Server) setProfileGroups(profileID uint, groupIDs []uint) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	return s.db.Create(&rows).Error
+	return handle.Create(&rows).Error
 }
 
 // ------------------------------------------------------------------- matrix
@@ -799,7 +812,7 @@ func writeMatrix(handle *gorm.DB, doc *matrixDoc) error {
 			SortOrder: (i + 1) * 10,
 		}
 		if policy.ID == 0 {
-			if err := handle.Create(&policy).Error; err != nil {
+			if err := createRow(handle, &policy); err != nil {
 				return err
 			}
 		} else if err := handle.Model(&model.Policy{}).Where("id = ?", policy.ID).Updates(map[string]any{

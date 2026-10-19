@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"github.com/PFXDev/FireX/internal/model"
 	"github.com/PFXDev/FireX/internal/panel"
@@ -159,36 +160,48 @@ func (s *Server) deletePanel(c *gin.Context) {
 		return
 	}
 
-	// Best-effort cleanup of the clients FireX created there; a panel that is
-	// already unreachable must not block removing it from FireX.
+	var emails []string
+	s.db.Model(&model.UserPanel{}).Where("panel_id = ?", p.ID).Pluck("email", &emails)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), discoverTimeout)
 	defer cancel()
-	var records []model.UserPanel
-	s.db.Where("panel_id = ?", p.ID).Find(&records)
-	client := s.mgr.ClientFor(&p)
-	remoteErrors := 0
-	for _, rec := range records {
-		if err := client.DeleteClient(ctx, rec.Email); err != nil {
-			remoteErrors++
-		}
-	}
+	remoteErrors := s.deleteRemoteClients(ctx, &p, emails)
 
-	var inboundIDs []uint
-	s.db.Model(&model.Inbound{}).Where("panel_id = ?", p.ID).Pluck("id", &inboundIDs)
-	// Group membership has to go with the inbounds; a dangling row would keep
-	// inflating every group's member count for good.
-	if len(inboundIDs) > 0 {
-		s.db.Where("inbound_id IN ?", inboundIDs).Delete(&model.NodeGroupInbound{})
-	}
-	s.db.Where("panel_id = ?", p.ID).Delete(&model.Inbound{})
-	s.db.Where("panel_id = ?", p.ID).Delete(&model.UserPanel{})
-	if err := s.db.Delete(&model.Panel{}, p.ID).Error; err != nil {
+	if err := deletePanelRows(s.db.DB, p.ID); err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
 	s.mgr.Invalidate(p.ID)
 	s.subs.InvalidateAll()
 	c.JSON(http.StatusOK, gin.H{"ok": true, "remoteCleanupFailures": remoteErrors})
+}
+
+// deleteRemoteClients is the best-effort cleanup of the clients FireX created
+// on a panel being removed; a panel that is already unreachable must not block
+// removing it from FireX. It returns how many deletions failed.
+func (s *Server) deleteRemoteClients(ctx context.Context, p *model.Panel, emails []string) int {
+	client := s.mgr.ClientFor(p)
+	failures := 0
+	for _, email := range emails {
+		if err := client.DeleteClient(ctx, email); err != nil {
+			failures++
+		}
+	}
+	return failures
+}
+
+// deletePanelRows removes a panel and everything FireX keeps about it.
+func deletePanelRows(handle *gorm.DB, panelID uint) error {
+	var inboundIDs []uint
+	handle.Model(&model.Inbound{}).Where("panel_id = ?", panelID).Pluck("id", &inboundIDs)
+	// Group membership has to go with the inbounds; a dangling row would keep
+	// inflating every group's member count for good.
+	if len(inboundIDs) > 0 {
+		handle.Where("inbound_id IN ?", inboundIDs).Delete(&model.NodeGroupInbound{})
+		handle.Where("inbound_id IN ?", inboundIDs).Delete(&model.InboundConfig{})
+	}
+	handle.Where("panel_id = ?", panelID).Delete(&model.Inbound{})
+	handle.Where("panel_id = ?", panelID).Delete(&model.UserPanel{})
+	return handle.Delete(&model.Panel{}, panelID).Error
 }
 
 func (s *Server) discoverPanel(c *gin.Context) {
@@ -493,15 +506,21 @@ func (s *Server) deleteInbound(c *gin.Context) {
 		return
 	}
 	plans := routing.PlansUsingInbound(s.db, inbound.ID)
-	s.db.Where("inbound_id = ?", inbound.ID).Delete(&model.NodeGroupInbound{})
-	s.db.Where("inbound_id = ?", inbound.ID).Delete(&model.InboundConfig{})
-	if err := s.db.Delete(&model.Inbound{}, inbound.ID).Error; err != nil {
+	if err := deleteInboundRows(s.db.DB, inbound.ID); err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
 	s.subs.InvalidateAll()
 	syncErr := s.reconcilePlans(plans)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "syncError": errString(syncErr)})
+}
+
+// deleteInboundRows removes an inbound with its group membership and owned
+// configuration. Callers check first that it is gone upstream.
+func deleteInboundRows(handle *gorm.DB, inboundID uint) error {
+	handle.Where("inbound_id = ?", inboundID).Delete(&model.NodeGroupInbound{})
+	handle.Where("inbound_id = ?", inboundID).Delete(&model.InboundConfig{})
+	return handle.Delete(&model.Inbound{}, inboundID).Error
 }
 
 // reconcileInbound re-pushes everyone whose profile reaches this inbound.

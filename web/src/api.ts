@@ -366,6 +366,19 @@ export interface VersionInfo {
   updateRepo: string
 }
 
+/** A bearer token for scripts and agents. The secret itself is shown once, at creation. */
+export interface ApiToken {
+  id: number
+  name: string
+  /** The token's first characters, to tell tokens apart. */
+  prefix: string
+  readOnly: boolean
+  /** ms epoch, 0 = never. */
+  expiresAt: number
+  lastUsedAt: number
+  createdAt: number
+}
+
 export interface ServerConfig {
   listen: string
   dataDir: string

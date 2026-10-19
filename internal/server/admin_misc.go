@@ -114,6 +114,22 @@ func (s *Server) getClashTemplate(c *gin.Context) {
 	})
 }
 
+// checkClashTemplate renders a template against a stand-in so a broken one is
+// rejected when saved rather than when a client next fetches its subscription.
+// Empty means the built-in default.
+func checkClashTemplate(template string) error {
+	if template == "" {
+		return nil
+	}
+	probe := clash.Input{
+		Proxies: []clash.Proxy{{Name: "probe", Entry: clash.NewOrdered().Set("name", "probe")}},
+		Groups:  []clash.Group{{Name: "probe-group", Type: "select", Members: []string{"probe"}}},
+		Rules:   []string{"MATCH,probe-group"},
+	}
+	_, err := clash.Render(template, probe)
+	return err
+}
+
 type clashTemplateRequest struct {
 	Template string `json:"template"`
 }
@@ -125,18 +141,9 @@ func (s *Server) setClashTemplate(c *gin.Context) {
 		return
 	}
 	template := strings.TrimSpace(req.Template)
-	if template != "" {
-		// Render against a stand-in so a broken template is rejected here rather
-		// than when a client next fetches its subscription.
-		probe := clash.Input{
-			Proxies: []clash.Proxy{{Name: "probe", Entry: clash.NewOrdered().Set("name", "probe")}},
-			Groups:  []clash.Group{{Name: "probe-group", Type: "select", Members: []string{"probe"}}},
-			Rules:   []string{"MATCH,probe-group"},
-		}
-		if _, err := clash.Render(template, probe); err != nil {
-			fail(c, http.StatusBadRequest, err)
-			return
-		}
+	if err := checkClashTemplate(template); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
 	}
 	// A RULE-SET rule may name a provider only this template declares.
 	err := s.db.Transaction(func(handle *gorm.DB) error {

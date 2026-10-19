@@ -62,10 +62,23 @@ func (s *Server) routes() {
 
 	authed := api.Group("", s.requireAdmin)
 	authed.GET("/auth/me", s.handleMe)
-	authed.POST("/auth/password", s.handleChangePassword)
+
+	// Credentials are managed from a signed-in session only; an API token can
+	// do everything else but cannot mint, list or revoke tokens.
+	session := authed.Group("", requireSession)
+	session.POST("/auth/password", s.handleChangePassword)
+	session.GET("/tokens", s.listAPITokens)
+	session.POST("/tokens", s.createAPIToken)
+	session.DELETE("/tokens/:id", s.deleteAPIToken)
 
 	authed.GET("/overview", s.handleOverview)
 	authed.POST("/sync", s.handleSyncNow)
+
+	// A snapshot is the configuration keyed by name for agents and scripts:
+	// read it, edit it, preview the diff, apply it in one transaction.
+	authed.GET("/snapshot", s.getSnapshot)
+	authed.POST("/snapshot/preview", s.previewSnapshot)
+	authed.PUT("/snapshot", s.applySnapshot)
 
 	authed.GET("/panels", s.listPanels)
 	authed.POST("/panels", s.createPanel)

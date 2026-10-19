@@ -142,6 +142,12 @@ func randomToken(nBytes int) string {
 }
 
 func (s *Server) requireAdmin(c *gin.Context) {
+	// A bearer header is an API token and never falls back to the cookie, so a
+	// script with a revoked token fails instead of borrowing a browser session.
+	if header := c.GetHeader("Authorization"); header != "" {
+		s.requireAPIToken(c, header)
+		return
+	}
 	token, err := c.Cookie(sessionCookie)
 	if err != nil || token == "" {
 		failMsg(c, http.StatusUnauthorized, "not signed in")

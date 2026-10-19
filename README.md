@@ -235,6 +235,74 @@ POST   /api/inbound-templates/:id/instantiate  # revision, panelId, listen, port
                                                # acceptProxyProtocol, publicAddress, publicPort
 ```
 
+## API tokens and snapshots
+
+Scripts and local agents call the same `/api` as the UI, with a bearer token
+instead of a session cookie. Create one under **Settings → API 令牌**; it is
+shown once, and FireX keeps only its hash.
+
+```bash
+curl -H "Authorization: Bearer fxt_…" https://firex.example.com/api/snapshot
+```
+
+A token acts as the admin who created it, with two limits: it can never manage
+credentials (tokens and the password need a signed-in session, so a leaked
+token cannot mint itself a successor), and a **read-only** token may only make
+`GET` requests and preview a snapshot. A request carrying an `Authorization`
+header never falls back to the session cookie. Tokens may expire; revoking
+one takes effect on the next request.
+
+```
+GET    /api/tokens       # session only
+POST   /api/tokens       # { name, readOnly, expiresInDays } → { token, apiToken }
+DELETE /api/tokens/:id
+```
+
+A **snapshot** is the configuration as one JSON document keyed by name rather
+than row id, so the same document means the same thing on any install. The
+intended loop is: read it, edit it, preview, apply.
+
+```
+GET  /api/snapshot           # { revision, panels, inbounds, inboundTemplates,
+                             #   nodeGroups, profiles, routing, clashTemplate }
+POST /api/snapshot/preview   # same body as PUT; returns the diff, writes nothing
+PUT  /api/snapshot           # { revision, ...sections, allowPanelRemoval }
+```
+
+- **Sections are optional; a present section is the whole truth.** A section
+  left out is untouched. A section that is present replaces what is stored:
+  rows it does not list are deleted, and a field left out of a row takes the
+  value a new row would get.
+- **One transaction.** The whole document is written and run through the same
+  routing validation as a matrix save, then committed or rolled back as a
+  unit. Preview runs exactly the same path and rolls back, so a preview that
+  succeeds is an apply that will.
+- **Optimistic concurrency.** `revision` is required and must match the
+  current configuration, or the apply returns `409`. The apply response
+  carries the revision to build the next edit on.
+- **References are names.** Inbounds are addressed as `{ panel, remoteId }`;
+  node groups, profiles, policies and rule sets by bare name, as everywhere
+  else in FireX.
+- **Panels.** `apiToken` is never exported. It is required for a new panel and
+  optional for an existing one (empty keeps the stored token). Dropping a panel
+  deletes every FireX client on it, so it is refused unless the request sets
+  `allowPanelRemoval: true`; the preview lists it under `removedPanels`. New
+  panels are discovered after the commit, so their inbounds can only be
+  referenced by the next apply.
+- **Inbounds** are discovered, not created. A snapshot sets FireX's own fields
+  and the managed configuration (`managedConfig`, `null` to stop managing).
+  Leaving out an inbound that still exists on its panel is refused; one
+  marked missing is deleted. Discovery-owned fields (`tag`, `port`, …) are
+  shown for reading and ignored on apply.
+- **Panels are written only for clients.** If the apply changed which inbounds
+  a profile reaches, the affected users are pushed before the response
+  returns (`reconciledPlans`, `syncError`). A changed managed configuration is
+  **not** deployed: it becomes pending and is listed in `pendingDeployments`,
+  to be deployed through the inbound config preview/deploy endpoints.
+- **Users and plans are out of scope.** They carry live traffic counters and
+  subscription tokens that a configuration push must never rewind. A profile
+  still bound by a plan cannot be deleted by a snapshot.
+
 ## Updates
 
 FireX updates itself from its own GitHub releases. The **System** page shows the

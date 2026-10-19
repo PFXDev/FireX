@@ -26,6 +26,24 @@ type Session struct {
 	CreatedAt int64  `json:"createdAt"`
 }
 
+// APIToken lets a script or agent call the admin API with a bearer header
+// instead of a browser session. Only a hash is stored; the token itself is
+// shown once, when it is created.
+type APIToken struct {
+	ID      uint   `json:"id" gorm:"primaryKey;autoIncrement"`
+	AdminID uint   `json:"-" gorm:"index"`
+	Name    string `json:"name" gorm:"not null"`
+	Hash    string `json:"-" gorm:"uniqueIndex;not null"`
+	// Prefix is the token's first characters, enough to tell tokens apart in
+	// a list and in a leaked log line.
+	Prefix string `json:"prefix"`
+	// ReadOnly tokens may only read, plus preview a snapshot.
+	ReadOnly   bool  `json:"readOnly"`
+	ExpiresAt  int64 `json:"expiresAt"` // ms epoch, 0 = never
+	LastUsedAt int64 `json:"lastUsedAt"`
+	CreatedAt  int64 `json:"createdAt"`
+}
+
 // PanelStatus values for Panel.Status.
 const (
 	PanelStatusUnknown = "unknown"
@@ -477,7 +495,7 @@ type InboundDeployment struct {
 // AllModels is the AutoMigrate list.
 func AllModels() []any {
 	return []any{
-		&Admin{}, &Session{}, &Panel{}, &Inbound{},
+		&Admin{}, &Session{}, &APIToken{}, &Panel{}, &Inbound{},
 		&NodeGroup{}, &NodeGroupTag{}, &NodeGroupInbound{},
 		&Policy{}, &Rule{}, &RuleSet{},
 		&Profile{}, &ProfileNodeGroup{}, &Egress{}, &EgressMember{},
