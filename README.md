@@ -322,6 +322,32 @@ The Agent page lists past sessions under **历史记录**. Opening one shows the
 task, the agent's summary, the last feedback and the diff that was merged (or,
 for an unmerged session, its last submission).
 
+## Admins and roles
+
+FireX has two admin roles. A **super admin** has unrestricted access: panels,
+inbounds, node groups, routing, templates, server settings, self-update, agent
+sessions, the audit log, and other admin accounts. An **operator** manages
+users only — creating, editing and deleting them, resetting traffic,
+resyncing, and previewing subscriptions — and may read the overview, plan
+list and profiles.
+
+The role is checked on every request by the server; the UI only hides what
+would be refused. Operators are signed in normally and see a smaller sidebar.
+
+```
+GET    /api/admins                     # id, username, role, isSelf
+POST   /api/admins                     # { username, password, role }
+PUT    /api/admins/:id                 # { username, role }
+DELETE /api/admins/:id                 # also signs the account out
+POST   /api/admins/:id/resetPassword   # { password }; signs the account out
+```
+
+The bootstrap admin created on first start is a super admin, and admins that
+predate roles are promoted to super admin on upgrade. The last super admin
+cannot be demoted or deleted, and an admin cannot delete their own account or
+reset their own password through this API — use **设置 → 账号安全** for that,
+which requires the current password.
+
 ## Audit log
 
 Every successful write through the admin API is recorded on the **操作日志**

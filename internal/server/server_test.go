@@ -116,8 +116,17 @@ func (h *harness) mustDo(method, path string, body any) []byte {
 
 func (h *harness) login() {
 	h.t.Helper()
+	h.loginAs("admin", "password123")
+}
+
+// loginAs starts a fresh session as another admin, so tests can compare what
+// each role sees without signing the other one out.
+func (h *harness) loginAs(username, password string) {
+	h.t.Helper()
+	jar, _ := cookiejar.New(nil)
+	h.client.Jar = jar
 	h.mustDo(http.MethodPost, "/api/auth/login", map[string]string{
-		"username": "admin", "password": "password123",
+		"username": username, "password": password,
 	})
 }
 

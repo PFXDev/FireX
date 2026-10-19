@@ -380,3 +380,32 @@ func TestMigrationDropsLegacyColumns(t *testing.T) {
 		}
 	}
 }
+
+// Admins that predate roles all had full access, so they stay super admins.
+func TestMigrationPromotesAdminsWithoutARole(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "firex.db")
+	db, err := store.Open(path, false)
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+	if err := db.Exec(`INSERT INTO admins (username, password_hash, role, created_at, updated_at)
+		VALUES ('legacy', 'x', '', 0, 0)`).Error; err != nil {
+		t.Fatalf("insert legacy admin: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	db, err = store.Open(path, false)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+	var role string
+	if err := db.Table("admins").Select("role").Where("username = ?", "legacy").Scan(&role).Error; err != nil {
+		t.Fatalf("read role: %v", err)
+	}
+	if role != model.AdminRoleSuperAdmin {
+		t.Errorf("role = %q, want %q", role, model.AdminRoleSuperAdmin)
+	}
+}

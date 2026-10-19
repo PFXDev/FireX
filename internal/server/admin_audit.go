@@ -26,6 +26,10 @@ const (
 // is still logged, under its method and path.
 var auditActions = map[string]string{
 	"POST /api/auth/password":                     "修改管理员密码",
+	"POST /api/admins":                            "新增管理员",
+	"PUT /api/admins/:id":                         "修改管理员",
+	"DELETE /api/admins/:id":                      "删除管理员",
+	"POST /api/admins/:id/resetPassword":          "重置管理员密码",
 	"POST /api/sync":                              "立即同步",
 	"POST /api/agent-sessions":                    "生成 agent 会话",
 	"POST /api/agent-sessions/:id/merge":          "合并 agent 修改",
@@ -86,6 +90,7 @@ var auditNames = map[string]struct{ table, column string }{
 	"plans":             {"plans", "name"},
 	"users":             {"users", "username"},
 	"agent-sessions":    {"agent_sessions", "task"},
+	"admins":            {"admins", "username"},
 }
 
 func (s *Server) audit(c *gin.Context) {

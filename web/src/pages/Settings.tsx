@@ -33,6 +33,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { errorMessage } from '@/lib/format'
+import { useSession } from '@/lib/session'
 
 interface TemplatePreset {
   key: string
@@ -49,6 +50,7 @@ interface TemplateResponse {
 }
 
 export function SettingsPage() {
+  const { isSuperAdmin } = useSession()
   const [tpl, setTpl] = useState<TemplateResponse | null>(null)
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(true)
@@ -57,16 +59,14 @@ export function SettingsPage() {
   const [restoring, setRestoring] = useState(false)
   const [restoreOpen, setRestoreOpen] = useState(false)
 
-  const [current, setCurrent] = useState('')
-  const [next, setNext] = useState('')
-  const [passwordAttempted, setPasswordAttempted] = useState(false)
-  const [passwordBusy, setPasswordBusy] = useState(false)
   const loadPromiseRef = useRef<Promise<boolean> | null>(null)
   const savedTemplate = tpl ? tpl.template || tpl.default : ''
   const dirty = Boolean(tpl) && text !== savedTemplate
   useUnsavedGuard(dirty)
 
   const load = useCallback(() => {
+    // Operators have no access to this endpoint, so do not ask.
+    if (!isSuperAdmin) return Promise.resolve(false)
     if (loadPromiseRef.current) return loadPromiseRef.current
 
     const request = (async () => {
@@ -88,7 +88,7 @@ export function SettingsPage() {
 
     loadPromiseRef.current = request
     return request
-  }, [])
+  }, [isSuperAdmin])
 
   useEffect(() => {
     void load()
@@ -134,23 +134,15 @@ export function SettingsPage() {
     }
   }
 
-  const currentInvalid = passwordAttempted && current.length === 0
-  const nextInvalid = passwordAttempted && next.length < 8
-
-  const changePassword = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setPasswordAttempted(true)
-    if (!current || next.length < 8) return
-
-    setPasswordBusy(true)
-    try {
-      await api.post('/auth/password', { current, new: next })
-      toast.success('密码已修改，请重新登录')
-      setTimeout(() => window.location.reload(), 1200)
-    } catch (err) {
-      toast.error(err instanceof ApiError && err.status === 401 ? '当前密码不正确' : errorMessage(err, '修改失败'))
-      setPasswordBusy(false)
-    }
+  // Operators manage users, not the subscription template; their settings page
+  // is only the password form.
+  if (!isSuperAdmin) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="设置" description="管理员账号安全" />
+        <PasswordCard />
+      </div>
+    )
   }
 
   if (!tpl) {
@@ -312,59 +304,7 @@ export function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="security">
-          <form noValidate aria-busy={passwordBusy} onSubmit={changePassword}>
-            <Card>
-              <CardHeader>
-                <CardTitle>修改管理员密码</CardTitle>
-                <CardDescription>密码修改后，所有已登录会话都会失效并需要重新登录。</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <FieldGroup className="max-w-md">
-                  <Field data-invalid={currentInvalid || undefined}>
-                    <FieldLabel htmlFor="pw-current">当前密码</FieldLabel>
-                    <Input
-                      id="pw-current"
-                      type="password"
-                      autoComplete="current-password"
-                      required
-                      aria-invalid={currentInvalid || undefined}
-                      aria-describedby={currentInvalid ? 'pw-current-error' : undefined}
-                      disabled={passwordBusy}
-                      value={current}
-                      onChange={(event) => setCurrent(event.target.value)}
-                    />
-                    {currentInvalid && <FieldError id="pw-current-error">请输入当前密码。</FieldError>}
-                  </Field>
-                  <Field data-invalid={nextInvalid || undefined}>
-                    <FieldLabel htmlFor="pw-new">新密码</FieldLabel>
-                    <Input
-                      id="pw-new"
-                      type="password"
-                      autoComplete="new-password"
-                      required
-                      minLength={8}
-                      aria-invalid={nextInvalid || undefined}
-                      aria-describedby={nextInvalid ? 'pw-new-error' : 'pw-new-description'}
-                      disabled={passwordBusy}
-                      value={next}
-                      onChange={(event) => setNext(event.target.value)}
-                    />
-                    {nextInvalid ? (
-                      <FieldError id="pw-new-error">新密码至少需要 8 位。</FieldError>
-                    ) : (
-                      <FieldDescription id="pw-new-description">至少 8 位字符。</FieldDescription>
-                    )}
-                  </Field>
-                </FieldGroup>
-              </CardContent>
-              <CardFooter className="flex-col items-stretch sm:flex-row sm:items-center">
-                <Button type="submit" className="w-full sm:w-auto" disabled={passwordBusy}>
-                  {passwordBusy && <Spinner data-icon="inline-start" />}
-                  {passwordBusy ? '修改中…' : '修改密码'}
-                </Button>
-              </CardFooter>
-            </Card>
-          </form>
+          <PasswordCard />
         </TabsContent>
       </Tabs>
 
@@ -377,5 +317,89 @@ export function SettingsPage() {
         onConfirm={restoreTemplate}
       />
     </div>
+  )
+}
+
+
+/** PasswordCard is the account-security form both roles share. */
+function PasswordCard() {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [attempted, setAttempted] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const currentInvalid = attempted && current.length === 0
+  const nextInvalid = attempted && next.length < 8
+
+  const changePassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setAttempted(true)
+    if (!current || next.length < 8) return
+
+    setBusy(true)
+    try {
+      await api.post('/auth/password', { current, new: next })
+      toast.success('密码已修改，请重新登录')
+      setTimeout(() => window.location.reload(), 1200)
+    } catch (err) {
+      toast.error(err instanceof ApiError && err.status === 401 ? '当前密码不正确' : errorMessage(err, '修改失败'))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form noValidate aria-busy={busy} onSubmit={changePassword}>
+      <Card>
+        <CardHeader>
+          <CardTitle>修改管理员密码</CardTitle>
+          <CardDescription>密码修改后，所有已登录会话都会失效并需要重新登录。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup className="max-w-md">
+            <Field data-invalid={currentInvalid || undefined}>
+              <FieldLabel htmlFor="pw-current">当前密码</FieldLabel>
+              <Input
+                id="pw-current"
+                type="password"
+                autoComplete="current-password"
+                required
+                aria-invalid={currentInvalid || undefined}
+                aria-describedby={currentInvalid ? 'pw-current-error' : undefined}
+                disabled={busy}
+                value={current}
+                onChange={(event) => setCurrent(event.target.value)}
+              />
+              {currentInvalid && <FieldError id="pw-current-error">请输入当前密码。</FieldError>}
+            </Field>
+            <Field data-invalid={nextInvalid || undefined}>
+              <FieldLabel htmlFor="pw-new">新密码</FieldLabel>
+              <Input
+                id="pw-new"
+                type="password"
+                autoComplete="new-password"
+                required
+                minLength={8}
+                aria-invalid={nextInvalid || undefined}
+                aria-describedby={nextInvalid ? 'pw-new-error' : 'pw-new-description'}
+                disabled={busy}
+                value={next}
+                onChange={(event) => setNext(event.target.value)}
+              />
+              {nextInvalid ? (
+                <FieldError id="pw-new-error">新密码至少需要 8 位。</FieldError>
+              ) : (
+                <FieldDescription id="pw-new-description">至少 8 位字符。</FieldDescription>
+              )}
+            </Field>
+          </FieldGroup>
+        </CardContent>
+        <CardFooter className="flex-col items-stretch sm:flex-row sm:items-center">
+          <Button type="submit" className="w-full sm:w-auto" disabled={busy}>
+            {busy && <Spinner data-icon="inline-start" />}
+            {busy ? '修改中…' : '修改密码'}
+          </Button>
+        </CardFooter>
+      </Card>
+    </form>
   )
 }

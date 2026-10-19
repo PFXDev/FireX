@@ -16,10 +16,12 @@ import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from '@/c
 import { confirmUnsavedNavigation } from '@/hooks/use-unsaved-guard'
 import { errorMessage } from '@/lib/format'
 import { routeHref } from '@/lib/navigation'
+import { useSession, type Admin } from '@/lib/session'
 
-export function NavUser({ username, onSignedOut }: { username: string; onSignedOut: () => void }) {
+export function NavUser({ admin, onSignedOut }: { admin: Admin; onSignedOut: () => void }) {
   const { isMobile, setOpenMobile } = useSidebar()
-  const initials = username.slice(0, 2).toUpperCase()
+  const { isSuperAdmin } = useSession()
+  const initials = admin.username.slice(0, 2).toUpperCase()
 
   const signOut = async () => {
     if (!confirmUnsavedNavigation()) return
@@ -39,8 +41,10 @@ export function NavUser({ username, onSignedOut }: { username: string; onSignedO
         </AvatarFallback>
       </Avatar>
       <div className="grid flex-1 text-left text-sm leading-tight">
-        <span className="truncate font-medium">{username}</span>
-        <span className="truncate text-xs text-muted-foreground">管理员</span>
+        <span className="truncate font-medium">{admin.username}</span>
+        <span className="truncate text-xs text-muted-foreground">
+          {isSuperAdmin ? '超级管理员' : '普通管理员'}
+        </span>
       </div>
     </>
   )
@@ -77,7 +81,7 @@ export function NavUser({ username, onSignedOut }: { username: string; onSignedO
                 }
               >
                 <SettingsIcon />
-                设置
+                {isSuperAdmin ? '设置' : '账号安全'}
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />

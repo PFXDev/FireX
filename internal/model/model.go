@@ -11,12 +11,22 @@
 // which inbounds a user is provisioned onto.
 package model
 
+// Admin roles. A super admin can do everything, including managing other
+// admins; an operator manages users and may only read the overview and plans.
+const (
+	AdminRoleSuperAdmin = "super_admin"
+	AdminRoleOperator   = "operator"
+)
+
 type Admin struct {
 	ID           uint   `json:"id" gorm:"primaryKey;autoIncrement"`
 	Username     string `json:"username" gorm:"uniqueIndex;not null"`
 	PasswordHash string `json:"-" gorm:"not null"`
-	CreatedAt    int64  `json:"createdAt"`
-	UpdatedAt    int64  `json:"updatedAt"`
+	// Role is AdminRoleSuperAdmin or AdminRoleOperator. Rows from before roles
+	// existed migrate in blank and are promoted, since they had full access.
+	Role      string `json:"role" gorm:"not null;default:''"`
+	CreatedAt int64  `json:"createdAt"`
+	UpdatedAt int64  `json:"updatedAt"`
 }
 
 type Session struct {

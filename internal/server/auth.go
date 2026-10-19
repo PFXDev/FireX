@@ -38,11 +38,11 @@ func BootstrapAdmin(db *store.DB, cfg *config.Config, configPath string) error {
 	}
 	switch {
 	case created && generated != "":
-		log.Printf("firex: created admin %q with generated password: %s", cfg.AdminUser, generated)
+		log.Printf("firex: created super admin %q with generated password: %s", cfg.AdminUser, generated)
 		log.Printf("firex: this password is shown once; change it after signing in")
 		return nil
 	case created:
-		log.Printf("firex: created admin %q with the password in %s", cfg.AdminUser, configPath)
+		log.Printf("firex: created super admin %q with the password in %s", cfg.AdminUser, configPath)
 	case cfg.AdminPassword == "":
 		return nil
 	default:
@@ -71,8 +71,8 @@ func BootstrapAdmin(db *store.DB, cfg *config.Config, configPath string) error {
 	return nil
 }
 
-// ensureAdmin creates the bootstrap admin on first run. A blank password means
-// one is generated and returned so it can be printed once to the operator.
+// ensureAdmin creates the bootstrap super admin on first run. A blank password
+// means one is generated and returned so it can be printed once to the operator.
 func ensureAdmin(db *store.DB, username, password string) (created bool, generated string, err error) {
 	var count int64
 	if err := db.Model(&model.Admin{}).Count(&count).Error; err != nil {
@@ -93,7 +93,13 @@ func ensureAdmin(db *store.DB, username, password string) (created bool, generat
 		return false, "", err
 	}
 	now := time.Now().UnixMilli()
-	admin := model.Admin{Username: username, PasswordHash: string(hash), CreatedAt: now, UpdatedAt: now}
+	admin := model.Admin{
+		Username:     username,
+		PasswordHash: string(hash),
+		Role:         model.AdminRoleSuperAdmin,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
 	if err := db.Create(&admin).Error; err != nil {
 		return false, "", err
 	}
@@ -166,6 +172,30 @@ func (s *Server) requireAdmin(c *gin.Context) {
 	c.Next()
 }
 
+// isSuperAdmin reports whether an admin has unrestricted access.
+func isSuperAdmin(admin *model.Admin) bool {
+	return admin != nil && admin.Role == model.AdminRoleSuperAdmin
+}
+
+// superAdminOnly refuses the request unless the session's admin is a super
+// admin. It sits after requireAdmin in the chain, so the admin is already set.
+func (s *Server) superAdminOnly(c *gin.Context) {
+	if !isSuperAdmin(currentAdmin(c)) {
+		failMsg(c, http.StatusForbidden, "需要超级管理员权限")
+		return
+	}
+	c.Next()
+}
+
+// requireSuperAdmin is the group form of superAdminOnly.
+func (s *Server) requireSuperAdmin(c *gin.Context) {
+	if !isSuperAdmin(currentAdmin(c)) {
+		failMsg(c, http.StatusForbidden, "需要超级管理员权限")
+		return
+	}
+	c.Next()
+}
+
 func currentAdmin(c *gin.Context) *model.Admin {
 	value, ok := c.Get(ctxAdminKey)
 	if !ok {
@@ -224,7 +254,7 @@ func (s *Server) handleLogin(c *gin.Context) {
 		SameSite: http.SameSiteLaxMode,
 		Expires:  now.Add(sessionTTL),
 	})
-	c.JSON(http.StatusOK, gin.H{"username": admin.Username})
+	c.JSON(http.StatusOK, gin.H{"username": admin.Username, "role": admin.Role})
 }
 
 func (s *Server) handleLogout(c *gin.Context) {
@@ -237,7 +267,7 @@ func (s *Server) handleLogout(c *gin.Context) {
 
 func (s *Server) handleMe(c *gin.Context) {
 	admin := currentAdmin(c)
-	c.JSON(http.StatusOK, gin.H{"username": admin.Username})
+	c.JSON(http.StatusOK, gin.H{"username": admin.Username, "role": admin.Role})
 }
 
 type changePasswordRequest struct {

@@ -17,6 +17,7 @@ import { api } from '@/api'
 import type { Overview } from '@/api'
 import { CodeText } from '@/components/code-display'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
+import { useSession } from '@/lib/session'
 import { PageHeader } from '@/components/page-header'
 import { PanelStatusBadge, StatusBadge } from '@/components/status-badge'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -60,6 +61,8 @@ export function OverviewPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
   const [syncing, setSyncing] = useState(false)
+  // A full sync discovers panels and rewrites routing, which operators cannot do.
+  const { isSuperAdmin } = useSession()
   const [syncProblems, setSyncProblems] = useState<SyncProblem[]>([])
   const activeRefresh = useRef<Promise<boolean> | null>(null)
 
@@ -181,10 +184,12 @@ export function OverviewPage() {
               ? `更新于 ${formatRefreshTime(lastUpdated)}`
               : '等待刷新'}
         </Badge>
-        <Button onClick={() => void syncNow()} disabled={syncing}>
-          {syncing ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
-          {syncing ? '同步中…' : '立即同步'}
-        </Button>
+        {isSuperAdmin && (
+          <Button onClick={() => void syncNow()} disabled={syncing}>
+            {syncing ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
+            {syncing ? '同步中…' : '立即同步'}
+          </Button>
+        )}
       </PageHeader>
 
       {loadError && (

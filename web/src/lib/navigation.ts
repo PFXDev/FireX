@@ -7,6 +7,7 @@ import {
   LayersIcon,
   ServerIcon,
   SettingsIcon,
+  ShieldIcon,
   SplitIcon,
   TicketIcon,
   UsersIcon,
@@ -15,6 +16,7 @@ import {
 
 export type RouteKey =
   | 'overview'
+  | 'admins'
   | 'panels'
   | 'inbounds'
   | 'inbound-configs'
@@ -35,6 +37,8 @@ export type NavItem = {
   title: string
   icon: LucideIcon
   items?: NavSubItem[]
+  /** Super-admin-only pages are hidden from operators everywhere in the UI. */
+  superAdminOnly?: boolean
 }
 
 export type NavGroup = { title: string; items: NavItem[] }
@@ -49,18 +53,19 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: '资源管理',
     items: [
-      { route: 'panels', title: '面板', icon: ServerIcon },
+      { route: 'panels', title: '面板', icon: ServerIcon, superAdminOnly: true },
       {
         route: 'inbounds',
         title: '入站',
         icon: LayersIcon,
+        superAdminOnly: true,
         items: [
           { route: 'inbounds', title: '入站列表' },
           { route: 'inbound-configs', title: '入站配置' },
           { route: 'inbound-templates', title: '入站模板' },
         ],
       },
-      { route: 'node-groups', title: '节点组', icon: BoxesIcon },
+      { route: 'node-groups', title: '节点组', icon: BoxesIcon, superAdminOnly: true },
       { route: 'plans', title: '套餐', icon: TicketIcon },
       { route: 'users', title: '用户', icon: UsersIcon },
     ],
@@ -68,12 +73,16 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: '运维配置',
     items: [
-      { route: 'routing', title: '分流', icon: SplitIcon },
-      { route: 'agent', title: 'Agent 修改', icon: BotIcon },
-      { route: 'audit', title: '操作日志', icon: HistoryIcon },
+      { route: 'routing', title: '分流', icon: SplitIcon, superAdminOnly: true },
+      { route: 'agent', title: 'Agent 修改', icon: BotIcon, superAdminOnly: true },
+      { route: 'audit', title: '操作日志', icon: HistoryIcon, superAdminOnly: true },
       { route: 'settings', title: '设置', icon: SettingsIcon },
-      { route: 'system', title: '系统', icon: CpuIcon },
+      { route: 'system', title: '系统', icon: CpuIcon, superAdminOnly: true },
     ],
+  },
+  {
+    title: '账号',
+    items: [{ route: 'admins', title: '管理员', icon: ShieldIcon, superAdminOnly: true }],
   },
 ]
 
@@ -100,14 +109,38 @@ export function isRouteWithin(item: NavItem, route: RouteKey) {
   return item.route === route || Boolean(item.items?.some((sub) => sub.route === route))
 }
 
+/**
+ * The navigation one role sees. Operators keep the overview, plans (read-only)
+ * and users; every infrastructure page is dropped entirely rather than shown
+ * disabled, since the server would refuse it anyway.
+ */
+export function navGroupsFor(isSuperAdmin: boolean): NavGroup[] {
+  if (isSuperAdmin) return NAV_GROUPS
+  return NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !item.superAdminOnly),
+  })).filter((group) => group.items.length > 0)
+}
+
+/** Whether a role may open a route; used to bounce a hand-typed hash. */
+export function canAccess(route: RouteKey, isSuperAdmin: boolean): boolean {
+  return navGroupsFor(isSuperAdmin).some((group) =>
+    group.items.some((item) => isRouteWithin(item, route)),
+  )
+}
+
 /** Breadcrumb trail for the header: group, then parent menu (linked) for sub-pages, then the page. */
-export function routeTrail(route: RouteKey): Crumb[] {
-  for (const group of NAV_GROUPS) {
+export function trailIn(groups: NavGroup[], route: RouteKey): Crumb[] {
+  for (const group of groups) {
     for (const item of group.items) {
       const sub = item.items?.find((candidate) => candidate.route === route)
       if (sub) return [{ title: group.title }, { title: item.title, route: item.route }, { title: sub.title }]
       if (item.route === route) return [{ title: group.title }, { title: item.title }]
     }
   }
-  return routeTrail(DEFAULT_ROUTE)
+  return trailIn(NAV_GROUPS, DEFAULT_ROUTE)
+}
+
+export function routeTrail(route: RouteKey): Crumb[] {
+  return trailIn(NAV_GROUPS, route)
 }

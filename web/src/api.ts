@@ -442,6 +442,18 @@ export interface AgentHistoryItem {
 }
 
 /** One configuration change made through the admin API. */
+export type AdminRole = 'super_admin' | 'operator'
+
+export interface AdminAccount {
+  id: number
+  username: string
+  role: AdminRole
+  createdAt: number
+  updatedAt: number
+  /** Whether this is the signed-in admin, whose own account cannot be removed. */
+  isSelf: boolean
+}
+
 export interface AuditLog {
   id: number
   actor: string

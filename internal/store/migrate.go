@@ -57,6 +57,12 @@ func (d *DB) migrate(path string) error {
 	if err := d.AutoMigrate(model.AllModels()...); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
+	// Admins from before roles existed all had full access, so they stay super
+	// admins rather than losing it on upgrade.
+	if err := d.Model(&model.Admin{}).Where("role = ''").
+		Update("role", model.AdminRoleSuperAdmin).Error; err != nil {
+		return fmt.Errorf("migrate admin roles: %w", err)
+	}
 	// Long-lived API tokens were replaced by reviewed agent sessions; dropping
 	// the table revokes any token a build that had them issued.
 	if d.Migrator().HasTable("api_tokens") {

@@ -14,19 +14,21 @@ import {
   SidebarRail,
   useSidebar,
 } from '@/components/ui/sidebar'
-import { DEFAULT_ROUTE, NAV_GROUPS, routeHref, type RouteKey } from '@/lib/navigation'
+import { DEFAULT_ROUTE, navGroupsFor, routeHref, type RouteKey } from '@/lib/navigation'
+import type { Admin } from '@/lib/session'
 
 export function AppSidebar({
   route,
-  username,
+  admin,
   onSignedOut,
   ...props
 }: ComponentProps<typeof Sidebar> & {
   route: RouteKey
-  username: string
+  admin: Admin
   onSignedOut: () => void
 }) {
   const { isMobile, setOpenMobile } = useSidebar()
+  const groups = navGroupsFor(admin.role === 'super_admin')
 
   return (
     <Sidebar collapsible="icon" variant="inset" {...props}>
@@ -57,10 +59,10 @@ export function AppSidebar({
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent role="navigation" aria-label="主导航">
-        <NavMain groups={NAV_GROUPS} route={route} />
+        <NavMain groups={groups} route={route} />
       </SidebarContent>
       <SidebarFooter>
-        <NavUser username={username} onSignedOut={onSignedOut} />
+        <NavUser admin={admin} onSignedOut={onSignedOut} />
       </SidebarFooter>
       <SidebarRail aria-label="切换侧边栏" title="切换侧边栏" />
     </Sidebar>

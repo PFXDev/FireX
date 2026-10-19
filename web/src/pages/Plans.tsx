@@ -37,6 +37,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { bytesToGb, errorMessage, formatQuota, gbToBytes } from '@/lib/format'
 import { reportSyncError } from '@/lib/sync'
+import { useSession } from '@/lib/session'
 
 type Draft = {
   id?: number
@@ -64,6 +65,9 @@ const emptyDraft: Draft = {
 }
 
 export function PlansPage() {
+  // Operators keep a read-only view: plans decide quota and routing, so only a
+  // super admin may change them.
+  const { isSuperAdmin } = useSession()
   const [plans, setPlans] = useState<Plan[]>([])
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [loading, setLoading] = useState(true)
@@ -189,10 +193,12 @@ export function PlansPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="套餐" description="把节点、流量与有效期组合成可复用的交付方案。">
-        <Button onClick={openCreate}>
-          <PlusIcon data-icon="inline-start" />
-          新建套餐
-        </Button>
+        {isSuperAdmin && (
+          <Button onClick={openCreate}>
+            <PlusIcon data-icon="inline-start" />
+            新建套餐
+          </Button>
+        )}
       </PageHeader>
 
       <Card>
@@ -234,12 +240,14 @@ export function PlansPage() {
                 <EmptyTitle>还没有套餐</EmptyTitle>
                 <EmptyDescription>创建第一个套餐，给它绑一个分流方案，再把用户放进来。</EmptyDescription>
               </EmptyHeader>
-              <EmptyContent>
-                <Button onClick={openCreate}>
-                  <PlusIcon data-icon="inline-start" />
-                  新建套餐
-                </Button>
-              </EmptyContent>
+              {isSuperAdmin && (
+                <EmptyContent>
+                  <Button onClick={openCreate}>
+                    <PlusIcon data-icon="inline-start" />
+                    新建套餐
+                  </Button>
+                </EmptyContent>
+              )}
             </Empty>
           ) : (
             <div className="flex flex-col gap-3">
@@ -298,17 +306,19 @@ export function PlansPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-1">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            aria-label={`编辑 ${plan.name}`}
-                            onClick={() => openEdit(plan)}
-                          >
-                            <PencilIcon data-icon="inline-start" />
-                            <span className="hidden sm:inline">编辑</span>
-                          </Button>
-                          {plan.userCount > 0 ? (
+                          {isSuperAdmin && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              aria-label={`编辑 ${plan.name}`}
+                              onClick={() => openEdit(plan)}
+                            >
+                              <PencilIcon data-icon="inline-start" />
+                              <span className="hidden sm:inline">编辑</span>
+                            </Button>
+                          )}
+                          {!isSuperAdmin ? null : plan.userCount > 0 ? (
                             <Tooltip>
                               <TooltipTrigger render={<span tabIndex={0} />}>
                                 <Button type="button" variant="ghost" size="sm" disabled aria-label={`删除 ${plan.name}`}>

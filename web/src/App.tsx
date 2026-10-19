@@ -22,7 +22,8 @@ import { Spinner } from '@/components/ui/spinner'
 import { Toaster } from '@/components/ui/sonner'
 import { useHashRoute } from '@/hooks/use-hash-route'
 import { errorMessage } from '@/lib/format'
-import type { RouteKey } from '@/lib/navigation'
+import { canAccess, DEFAULT_ROUTE, type RouteKey } from '@/lib/navigation'
+import { SessionProvider, type Admin } from '@/lib/session'
 import { OverviewPage } from '@/pages/Overview'
 import { PanelsPage } from '@/pages/Panels'
 import { InboundsPage } from '@/pages/Inbounds'
@@ -35,6 +36,7 @@ import { UsersPage } from '@/pages/Users'
 import { SettingsPage } from '@/pages/Settings'
 import { SystemPage } from '@/pages/System'
 import { AgentPage } from '@/pages/Agent'
+import { AdminsPage } from '@/pages/Admins'
 import { AuditPage } from '@/pages/Audit'
 
 /** Restores the collapsed state that the sidebar persists in its cookie. */
@@ -52,7 +54,7 @@ export function App() {
 }
 
 function Shell() {
-  const [username, setUsername] = useState<string | null>(null)
+  const [admin, setAdmin] = useState<Admin | null>(null)
   const [checking, setChecking] = useState(true)
   const route = useHashRoute()
   const insetRef = useRef<HTMLElement>(null)
@@ -65,12 +67,12 @@ function Shell() {
 
   const check = useCallback(async () => {
     try {
-      const me = await api.get<{ username: string }>('/auth/me', {
+      const me = await api.get<Admin>('/auth/me', {
         unauthorized: 'session-invalid',
       })
-      setUsername(me.username)
+      setAdmin(me)
     } catch (err) {
-      setUsername(null)
+      setAdmin(null)
       throw err
     } finally {
       setChecking(false)
@@ -82,7 +84,7 @@ function Shell() {
   }, [check])
 
   useEffect(() => {
-    const onUnauthorized = () => setUsername(null)
+    const onUnauthorized = () => setAdmin(null)
     window.addEventListener(FIREX_UNAUTHORIZED_EVENT, onUnauthorized)
     return () => window.removeEventListener(FIREX_UNAUTHORIZED_EVENT, onUnauthorized)
   }, [])
@@ -102,26 +104,33 @@ function Shell() {
     )
   }
 
-  if (!username) return <Login onSignedIn={check} />
+  if (!admin) return <Login onSignedIn={check} />
+
+  const isSuperAdmin = admin.role === 'super_admin'
+  // A hash typed by hand must not open a page the role cannot use; the server
+  // would answer 403 and the page would look broken.
+  const visibleRoute = canAccess(route, isSuperAdmin) ? route : DEFAULT_ROUTE
 
   return (
+    <SessionProvider value={admin}>
     <SidebarProvider defaultOpen={sidebarDefaultOpen()}>
-      <AppSidebar route={route} username={username} onSignedOut={() => setUsername(null)} />
+      <AppSidebar route={visibleRoute} admin={admin} onSignedOut={() => setAdmin(null)} />
       {/* On desktop the inset panel is its own scroll container, so the sticky
           header stays inside the rounded frame instead of riding over its margin. */}
       <SidebarInset
         ref={insetRef}
         className="md:h-[calc(100svh-1rem)] md:overflow-y-auto md:border md:border-sidebar-border"
       >
-        <SiteHeader route={route} />
+        <SiteHeader route={visibleRoute} />
         <div
-          key={route}
+          key={visibleRoute}
           className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-6 p-4 animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out motion-reduce:animate-none md:p-6 lg:p-8"
         >
-          <Page route={route} />
+          <Page route={visibleRoute} />
         </div>
       </SidebarInset>
     </SidebarProvider>
+    </SessionProvider>
   )
 }
 
@@ -145,6 +154,8 @@ function Page({ route }: { route: RouteKey }) {
       return <RoutingPage />
     case 'agent':
       return <AgentPage />
+    case 'admins':
+      return <AdminsPage />
     case 'audit':
       return <AuditPage />
     case 'settings':

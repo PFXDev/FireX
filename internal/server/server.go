@@ -68,19 +68,30 @@ func (s *Server) routes() {
 	authed.GET("/auth/me", s.handleMe)
 	authed.POST("/auth/password", s.handleChangePassword)
 
+	// Admins manage other admins, so the group is closed to operators.
+	admins := authed.Group("/admins", s.requireSuperAdmin)
+	admins.GET("", s.listAdmins)
+	admins.POST("", s.createAdmin)
+	admins.PUT("/:id", s.updateAdmin)
+	admins.DELETE("/:id", s.deleteAdmin)
+	admins.POST("/:id/resetPassword", s.resetAdminPasswordHandler)
+
+	// Overview and the plan list are the operator's window into the install;
+	// everything that changes infrastructure, routing or accounts is closed to
+	// them. Users are the one thing both roles manage.
 	authed.GET("/overview", s.handleOverview)
-	authed.POST("/sync", s.handleSyncNow)
+	authed.POST("/sync", s.superAdminOnly, s.handleSyncNow)
 
 	// An agent session hands the configuration to an outside agent: it edits
 	// a snapshot with a single-use token, and an admin reviews the diff before
 	// anything takes effect.
-	authed.GET("/agent-sessions", s.listAgentSessions)
-	authed.POST("/agent-sessions", s.createAgentSession)
-	authed.GET("/agent-sessions/current", s.currentAgentSession)
-	authed.GET("/agent-sessions/:id", s.getAgentSession)
-	authed.POST("/agent-sessions/:id/merge", s.mergeAgentSession)
-	authed.POST("/agent-sessions/:id/return", s.returnAgentSession)
-	authed.POST("/agent-sessions/:id/cancel", s.cancelAgentSession)
+	authed.GET("/agent-sessions", s.superAdminOnly, s.listAgentSessions)
+	authed.POST("/agent-sessions", s.superAdminOnly, s.createAgentSession)
+	authed.GET("/agent-sessions/current", s.superAdminOnly, s.currentAgentSession)
+	authed.GET("/agent-sessions/:id", s.superAdminOnly, s.getAgentSession)
+	authed.POST("/agent-sessions/:id/merge", s.superAdminOnly, s.mergeAgentSession)
+	authed.POST("/agent-sessions/:id/return", s.superAdminOnly, s.returnAgentSession)
+	authed.POST("/agent-sessions/:id/cancel", s.superAdminOnly, s.cancelAgentSession)
 
 	// The agent's own surface. Its token works nowhere else and only while
 	// the session is live.
@@ -91,52 +102,53 @@ func (s *Server) routes() {
 	agent.POST("/preview", s.agentPreview)
 	agent.PUT("/submission", s.agentSubmit)
 
-	authed.GET("/panels", s.listPanels)
-	authed.POST("/panels", s.createPanel)
-	authed.PUT("/panels/:id", s.updatePanel)
-	authed.DELETE("/panels/:id", s.deletePanel)
-	authed.POST("/panels/:id/discover", s.discoverPanel)
-	authed.POST("/panels/test", s.testPanel)
+	authed.GET("/panels", s.superAdminOnly, s.listPanels)
+	authed.POST("/panels", s.superAdminOnly, s.createPanel)
+	authed.PUT("/panels/:id", s.superAdminOnly, s.updatePanel)
+	authed.DELETE("/panels/:id", s.superAdminOnly, s.deletePanel)
+	authed.POST("/panels/:id/discover", s.superAdminOnly, s.discoverPanel)
+	authed.POST("/panels/test", s.superAdminOnly, s.testPanel)
 
-	authed.GET("/inbounds", s.listInbounds)
-	authed.GET("/inbounds/:id", s.getInbound)
-	authed.PUT("/inbounds/:id", s.updateInbound)
-	authed.POST("/inbounds/bulk", s.bulkUpdateInbounds)
-	authed.DELETE("/inbounds/:id", s.deleteInbound)
-	authed.GET("/inbounds/:id/config", s.getInboundConfig)
-	authed.POST("/inbounds/:id/config", s.adoptInboundConfig)
-	authed.PUT("/inbounds/:id/config", s.updateInboundConfig)
-	authed.DELETE("/inbounds/:id/config", s.releaseInboundConfig)
-	authed.POST("/inbounds/:id/config/preview", s.previewInboundConfig)
-	authed.POST("/inbounds/:id/config/deploy", s.deployInboundConfig)
-	authed.GET("/inbound-templates", s.listInboundTemplates)
-	authed.POST("/inbound-templates", s.createInboundTemplate)
-	authed.GET("/inbound-templates/:id", s.getInboundTemplate)
-	authed.PUT("/inbound-templates/:id", s.updateInboundTemplate)
-	authed.DELETE("/inbound-templates/:id", s.deleteInboundTemplate)
-	authed.POST("/inbound-templates/:id/instantiate", s.instantiateInboundTemplate)
+	authed.GET("/inbounds", s.superAdminOnly, s.listInbounds)
+	authed.GET("/inbounds/:id", s.superAdminOnly, s.getInbound)
+	authed.PUT("/inbounds/:id", s.superAdminOnly, s.updateInbound)
+	authed.POST("/inbounds/bulk", s.superAdminOnly, s.bulkUpdateInbounds)
+	authed.DELETE("/inbounds/:id", s.superAdminOnly, s.deleteInbound)
+	authed.GET("/inbounds/:id/config", s.superAdminOnly, s.getInboundConfig)
+	authed.POST("/inbounds/:id/config", s.superAdminOnly, s.adoptInboundConfig)
+	authed.PUT("/inbounds/:id/config", s.superAdminOnly, s.updateInboundConfig)
+	authed.DELETE("/inbounds/:id/config", s.superAdminOnly, s.releaseInboundConfig)
+	authed.POST("/inbounds/:id/config/preview", s.superAdminOnly, s.previewInboundConfig)
+	authed.POST("/inbounds/:id/config/deploy", s.superAdminOnly, s.deployInboundConfig)
+	authed.GET("/inbound-templates", s.superAdminOnly, s.listInboundTemplates)
+	authed.POST("/inbound-templates", s.superAdminOnly, s.createInboundTemplate)
+	authed.GET("/inbound-templates/:id", s.superAdminOnly, s.getInboundTemplate)
+	authed.PUT("/inbound-templates/:id", s.superAdminOnly, s.updateInboundTemplate)
+	authed.DELETE("/inbound-templates/:id", s.superAdminOnly, s.deleteInboundTemplate)
+	authed.POST("/inbound-templates/:id/instantiate", s.superAdminOnly, s.instantiateInboundTemplate)
 
-	authed.GET("/node-groups", s.listNodeGroups)
-	authed.POST("/node-groups", s.createNodeGroup)
-	authed.PUT("/node-groups/:id", s.updateNodeGroup)
-	authed.DELETE("/node-groups/:id", s.deleteNodeGroup)
+	authed.GET("/node-groups", s.superAdminOnly, s.listNodeGroups)
+	authed.POST("/node-groups", s.superAdminOnly, s.createNodeGroup)
+	authed.PUT("/node-groups/:id", s.superAdminOnly, s.updateNodeGroup)
+	authed.DELETE("/node-groups/:id", s.superAdminOnly, s.deleteNodeGroup)
 
+	// Operators read profiles to render the plan list, but never reshape them.
 	authed.GET("/profiles", s.listProfiles)
-	authed.POST("/profiles", s.createProfile)
-	authed.PUT("/profiles/:id", s.updateProfile)
-	authed.DELETE("/profiles/:id", s.deleteProfile)
+	authed.POST("/profiles", s.superAdminOnly, s.createProfile)
+	authed.PUT("/profiles/:id", s.superAdminOnly, s.updateProfile)
+	authed.DELETE("/profiles/:id", s.superAdminOnly, s.deleteProfile)
 
 	// The matrix is read and written whole: partial saves would let a rule
 	// point at a policy the same edit removed.
-	authed.GET("/routing", s.getRouting)
-	authed.PUT("/routing", s.setRouting)
-	authed.GET("/routing/preview", s.previewRouting)
-	authed.POST("/routing/presets/:key", s.applyRoutingPreset)
+	authed.GET("/routing", s.superAdminOnly, s.getRouting)
+	authed.PUT("/routing", s.superAdminOnly, s.setRouting)
+	authed.GET("/routing/preview", s.superAdminOnly, s.previewRouting)
+	authed.POST("/routing/presets/:key", s.superAdminOnly, s.applyRoutingPreset)
 
 	authed.GET("/plans", s.listPlans)
-	authed.POST("/plans", s.createPlan)
-	authed.PUT("/plans/:id", s.updatePlan)
-	authed.DELETE("/plans/:id", s.deletePlan)
+	authed.POST("/plans", s.superAdminOnly, s.createPlan)
+	authed.PUT("/plans/:id", s.superAdminOnly, s.updatePlan)
+	authed.DELETE("/plans/:id", s.superAdminOnly, s.deletePlan)
 
 	authed.GET("/users", s.listUsers)
 	authed.POST("/users", s.createUser)
@@ -146,21 +158,21 @@ func (s *Server) routes() {
 	authed.POST("/users/:id/resetTraffic", s.resetUserTraffic)
 	authed.GET("/users/:id/subscription", s.previewSubscription)
 
-	authed.GET("/settings/clashTemplate", s.getClashTemplate)
-	authed.PUT("/settings/clashTemplate", s.setClashTemplate)
-	authed.GET("/settings/server", s.getServerConfig)
-	authed.PUT("/settings/server", s.setServerConfig)
+	authed.GET("/settings/clashTemplate", s.superAdminOnly, s.getClashTemplate)
+	authed.PUT("/settings/clashTemplate", s.superAdminOnly, s.setClashTemplate)
+	authed.GET("/settings/server", s.superAdminOnly, s.getServerConfig)
+	authed.PUT("/settings/server", s.superAdminOnly, s.setServerConfig)
 
 	// Self-update sits behind the admin session like everything else. The
 	// session lives in the database, so it survives the restart an update
 	// causes and the UI keeps polling straight through.
-	authed.GET("/audit-logs", s.listAuditLogs)
+	authed.GET("/audit-logs", s.superAdminOnly, s.listAuditLogs)
 
-	authed.GET("/version", s.handleVersion)
-	authed.GET("/update/status", s.handleUpdateStatus)
-	authed.POST("/update/check", s.handleUpdateCheck)
-	authed.POST("/update/apply", s.handleUpdateApply)
-	authed.POST("/update/dismiss", s.handleUpdateDismiss)
+	authed.GET("/version", s.superAdminOnly, s.handleVersion)
+	authed.GET("/update/status", s.superAdminOnly, s.handleUpdateStatus)
+	authed.POST("/update/check", s.superAdminOnly, s.handleUpdateCheck)
+	authed.POST("/update/apply", s.superAdminOnly, s.handleUpdateApply)
+	authed.POST("/update/dismiss", s.superAdminOnly, s.handleUpdateDismiss)
 
 	s.mountUI()
 }
