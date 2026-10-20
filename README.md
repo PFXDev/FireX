@@ -580,12 +580,13 @@ The stock layouts are built on these choices:
   whatever the template says. A proxied domain is handed to the exit node
   unresolved, so the client never looks it up — no leak, and the CDN answer
   is the one nearest the exit.
-- **Split DNS.** Mainland and private domains, node addresses and every
-  DIRECT dial resolve through AliDNS DoH (`direct-nameserver`,
-  `proxy-server-nameserver`, `nameserver-policy`). Anything else that needs a
-  client-side answer goes to Cloudflare DoH, which `respect-rules` sends
-  through the proxy. Every upstream is an IP literal, so nothing needs a
-  bootstrap lookup.
+- **Split DNS.** Mainland domains, node addresses and every DIRECT dial
+  resolve through AliDNS DoH (`direct-nameserver`,
+  `proxy-server-nameserver`, `nameserver-policy`). LAN names such as
+  `.lan` and `.home.arpa` ask the system resolver, normally the LAN router.
+  Anything else that needs a client-side answer goes to Cloudflare DoH, which
+  `respect-rules` sends through the proxy. Every remote upstream is an IP
+  literal, so nothing needs a bootstrap lookup.
 - **IPv6-first node connections.** Generated nodes carry
   `ip-version: ipv6-prefer`. TCP prefers IPv6 with IPv4 fallback; literal IP
   endpoints keep using that address. The `ipv4-only` template still disables

@@ -68,10 +68,27 @@ app ──TCP──▶ 198.18.x.x ─▶ mihomo maps it back to the domain, then
   UDP-based transports follow mihomo's address selection; an IPv6 handshake
   failure does not guarantee IPv4 fallback.
 
-Every upstream is an IP literal (`https://223.5.5.5/dns-query`,
+- **LAN names** (`+.lan`, `+.local`, `+.home.arpa`, `+.internal`,
+  `+.localdomain`) are exempt from fake-ip and resolve through `system`, the
+  resolver in the OS configuration, which is normally the LAN router. No
+  public resolver knows `nas.lan`, so AliDNS would answer NXDOMAIN. mihomo
+  skips its own TUN DNS address when it reads the system list
+  (`reference/mihomo/dns/system_common.go`), so this cannot loop back. When
+  the OS resolver is something else (a GUI that points system DNS at the TUN,
+  or another VPN), the lookup fails just as it did on AliDNS, so nothing
+  regresses. The rest of `geosite:private`, such as router login hosts and
+  `localhost.ptlogin2.qq.com`, resolves publicly and stays on AliDNS.
+  `direct-nameserver-follow-policy` makes DIRECT dials use the same policy,
+  so a LAN name that reaches DIRECT unresolved, for example through the mixed
+  port, also asks the router. Other names still dial through
+  `direct-nameserver`.
+
+Every remote upstream is an IP literal (`https://223.5.5.5/dns-query`,
 `https://1.1.1.1/dns-query`), so no DoH hostname ever needs a bootstrap lookup.
 `fake-ip-filter` only exempts names that must resolve for real: LAN suffixes,
-NTP, STUN, console NAT tests and OS connectivity probes.
+NTP, STUN, console NAT tests and OS connectivity probes. The DNS listener is
+bound to `127.0.0.1`; TUN's DNS hijack does not need it, and `allow-lan` is
+off.
 
 ## The rows
 

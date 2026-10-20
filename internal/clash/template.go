@@ -21,11 +21,17 @@ type TemplatePreset struct {
 //   - fake-ip for everything but LAN and connectivity probes, so a proxied
 //     domain is never resolved on the client at all — the exit node resolves
 //     it, which is both leak-free and the CDN answer nearest the exit.
-//   - mainland and private domains, and every DIRECT dial, resolve through
-//     AliDNS DoH; anything else that does need a client-side answer (the
-//     trailing GEOIP,cn check) asks Cloudflare, routed through the proxy by
+//   - mainland domains, and every DIRECT dial, resolve through AliDNS DoH;
+//     anything else that does need a client-side answer (the trailing
+//     GEOIP,cn check) asks Cloudflare, routed through the proxy by
 //     respect-rules.
-//   - every upstream is an IP literal, so no bootstrap lookup can leak.
+//   - LAN-only suffixes (.lan, .home.arpa and the like) ask the system
+//     resolver, normally the LAN router, since no public resolver knows them.
+//     DIRECT dials follow the same policy, so they reach the router too. The
+//     rest of geosite:private (router login hosts, localhost.ptlogin2.qq.com)
+//     resolves publicly and stays on AliDNS.
+//   - every remote upstream is an IP literal, so no bootstrap lookup can
+//     leak.
 //
 // IPv6 is on: domestic traffic leaves through DIRECT, which races both
 // families for TCP, or through the opt-in DIRECT-V6 (ipv6-prefer). Proxied
@@ -53,14 +59,14 @@ var TemplatePresets = []TemplatePreset{
 const dualStackTemplate = templateHead + `ipv6: true
 ` + templateBody + `dns:
   enable: true
-  listen: 0.0.0.0:1053
+  listen: 127.0.0.1:1053
   ipv6: true
 ` + templateDNS
 
 const ipv4OnlyTemplate = templateHead + `ipv6: false
 ` + templateBody + `dns:
   enable: true
-  listen: 0.0.0.0:1053
+  listen: 127.0.0.1:1053
   ipv6: false
 ` + templateDNS
 
@@ -140,7 +146,10 @@ const templateDNS = `  prefer-h3: false
   direct-nameserver:
     - https://223.5.5.5/dns-query
     - https://223.6.6.6/dns-query
+  direct-nameserver-follow-policy: true
   nameserver-policy:
+    '+.lan,+.local,+.home.arpa,+.internal,+.localdomain':
+      - system
     'geosite:cn,private':
       - https://223.5.5.5/dns-query
       - https://223.6.6.6/dns-query
