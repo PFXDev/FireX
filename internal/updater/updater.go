@@ -82,6 +82,9 @@ type Updater struct {
 	status Status
 
 	bgCtx context.Context
+	// reload wakes the background loop when the settings change, so a new
+	// interval or a switched-on check does not wait out the old interval.
+	reload chan struct{}
 
 	pendingBinaryPath string
 	pendingTag        string
@@ -128,6 +131,7 @@ func New(cfg func() Config, dataDir func() string, logger *log.Logger, hooks Res
 		dataDir: dataDir,
 		logger:  logger,
 		hooks:   hooks,
+		reload:  make(chan struct{}, 1),
 		status: Status{
 			State:          "idle",
 			CurrentVersion: version.Version,
@@ -240,15 +244,28 @@ func (u *Updater) DismissPending() {
 
 // StartBackground begins periodic checks. ctx also becomes the context for
 // manually triggered updates, which outlive the request that started them.
+// StartBackground runs the periodic check. The loop runs even while automatic
+// updates are off, because the setting can be switched on without a restart.
 func (u *Updater) StartBackground(ctx context.Context) {
 	u.bgCtx = ctx
-	cfg := normalizeConfig(u.cfg())
+	u.logState(normalizeConfig(u.cfg()))
+	go u.loop(ctx)
+}
+
+// Reload tells the background loop the settings changed.
+func (u *Updater) Reload() {
+	select {
+	case u.reload <- struct{}{}:
+	default:
+	}
+}
+
+func (u *Updater) logState(cfg Config) {
 	if !cfg.Enabled {
 		u.logger.Printf("firex: automatic updates disabled")
 		return
 	}
 	u.logger.Printf("firex: automatic updates enabled, channel=%s source=%s interval=%ds", cfg.Channel, cfg.Source, cfg.CheckInterval)
-	go u.loop(ctx)
 }
 
 func (u *Updater) bgContext() context.Context {
@@ -267,17 +284,34 @@ func (u *Updater) loop(ctx context.Context) {
 	}
 
 	u.checkAndUpdate(ctx)
+	last := time.Now()
+	prev := normalizeConfig(u.cfg())
 
 	for {
-		cfg := normalizeConfig(u.cfg())
-		interval := time.Duration(cfg.CheckInterval) * time.Second
+		interval := time.Duration(prev.CheckInterval) * time.Second
 		if interval < time.Minute {
 			interval = time.Minute
 		}
+		timer := time.NewTimer(time.Until(last.Add(interval)))
 		select {
-		case <-time.After(interval):
+		case <-timer.C:
 			u.checkAndUpdate(ctx)
+			last = time.Now()
+		case <-u.reload:
+			timer.Stop()
+			cfg := normalizeConfig(u.cfg())
+			if cfg != prev {
+				u.logState(cfg)
+			}
+			// Switching the check on is asking for one, not for the next
+			// one an interval from now.
+			if cfg.Enabled && !prev.Enabled {
+				u.checkAndUpdate(ctx)
+				last = time.Now()
+			}
+			prev = cfg
 		case <-ctx.Done():
+			timer.Stop()
 			return
 		}
 	}

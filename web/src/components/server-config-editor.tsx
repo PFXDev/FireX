@@ -6,6 +6,7 @@ import { ApiError, api, type ServerConfig, type ServerConfigResponse } from '@/a
 import { CodeText } from '@/components/code-display'
 import { FieldsSkeleton, LoadErrorAlert } from '@/components/load-state'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '@/components/ui/field'
@@ -20,6 +21,10 @@ const channelItems = [
   { value: 'stable', label: 'stable · 正式版' },
   { value: 'dev', label: 'dev · 预发布' },
 ]
+// Settings the process binds once at startup; the server applies everything
+// else as soon as it is saved.
+const restartBound = new Set<string>(['listen', 'dataDir', 'dbPath', 'adminPassword'])
+
 const sourceItems = [
   { value: 'github', label: 'GitHub 直连' },
   { value: 'proxy', label: '镜像代理' },
@@ -84,7 +89,7 @@ export function ServerConfigEditor() {
         },
       })
       accept(response)
-      toast.success(response.restartRequired ? '配置已保存，重启 FireX 后生效' : '配置已保存，与当前运行配置一致')
+      toast.success(response.restartRequired ? '配置已保存，部分设置需重启 FireX 后生效' : '配置已保存并已生效')
     } catch (err) {
       setSaveError(errorMessage(err, '保存服务端配置失败'))
       if (err instanceof ApiError) setFields(err.fields)
@@ -95,6 +100,7 @@ export function ServerConfigEditor() {
 
   const textField = (key: keyof Omit<ServerConfig, 'update' | 'debug'>, label: string, description: string, placeholder?: string) => (
     <ConfigTextField key={key} name={key} label={label} description={description} placeholder={placeholder}
+      restart={restartBound.has(key)} pending={!!saved?.restartFields.includes(key)}
       value={draft?.[key] ?? ''} error={fields[key]} disabled={busy || (key === 'adminPassword' && clearPassword)}
       password={key === 'adminPassword'}
       onChange={(value) => setDraft((current) => current && { ...current, [key]: value })} />
@@ -112,7 +118,7 @@ export function ServerConfigEditor() {
         <CardHeader>
           <CardTitle>服务端配置</CardTitle>
           <CardDescription>
-            编辑配置文件，保存后需重启 FireX 服务生效。
+            编辑配置文件。保存后立即生效，标有「需重启」的设置除外。
             {saved && <span className="block break-all">文件：<CodeText>{saved.path}</CodeText></span>}
           </CardDescription>
         </CardHeader>
@@ -132,9 +138,9 @@ export function ServerConfigEditor() {
             <>
               <Alert variant={saved.restartRequired ? 'warning' : 'default'}>
                 <InfoIcon />
-                <AlertTitle>{saved.restartRequired ? '有已保存的配置等待重启生效' : '保存后重启生效'}</AlertTitle>
+                <AlertTitle>{saved.restartRequired ? '有已保存的设置等待重启生效' : '大部分设置保存后立即生效'}</AlertTitle>
                 <AlertDescription>
-                  请通过部署环境的服务管理工具重启 FireX。更改监听地址后需使用新地址访问；更改存储路径不会自动迁移数据库。
+                  监听地址、数据目录、数据库路径和密码重置需通过部署环境的服务管理工具重启 FireX 后生效。更改监听地址后需使用新地址访问；更改存储路径不会自动迁移数据库。直接编辑配置文件后，可向进程发送 SIGHUP 使其余设置生效。
                 </AlertDescription>
               </Alert>
               <FieldGroup>
@@ -207,7 +213,7 @@ export function ServerConfigEditor() {
                 </FieldSet>
                 <FieldSet disabled={busy}>
                   <FieldLegend>启动时的管理员设置</FieldLegend>
-                  <FieldDescription>用于首次创建账号或下次启动时重置密码。立即修改密码请前往「设置 → 账号安全」。</FieldDescription>
+                  <FieldDescription>仅在 FireX 启动时使用：首次创建账号，或在下次启动时重置密码。立即修改密码请前往「设置 → 账号安全」。</FieldDescription>
                   <FieldGroup className="grid sm:grid-cols-2">
                     {textField('adminUser', '管理员用户名', '密码重置的目标账号，此项不会重命名已有账号。', 'admin')}
                     {textField('adminPassword', '下次启动时重置密码', '留空保留现状。填写后将在重启时应用并清空，所有旧会话失效。')}
@@ -246,14 +252,14 @@ export function ServerConfigEditor() {
             {loading ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
             {loading ? '加载中…' : '重新加载配置'}
           </Button>
-          {saved && <p role="status" className="text-sm text-muted-foreground">{dirty ? '有未保存的更改' : saved.restartRequired ? '已保存，等待重启' : '与当前运行配置一致'}</p>}
+          {saved && <p role="status" className="text-sm text-muted-foreground">{dirty ? '有未保存的更改' : saved.restartRequired ? '已保存，部分设置等待重启' : '与当前运行配置一致'}</p>}
         </CardFooter>
       </Card>
     </form>
   )
 }
 
-function ConfigTextField({ name, label, description, placeholder, value, onChange, disabled, error, password = false }: {
+function ConfigTextField({ name, label, description, placeholder, value, onChange, disabled, error, password = false, restart = false, pending = false }: {
   name: string
   label: string
   description: string
@@ -263,11 +269,18 @@ function ConfigTextField({ name, label, description, placeholder, value, onChang
   disabled: boolean
   error?: string
   password?: boolean
+  /** The setting binds at startup, so saving it alone does not change the running process. */
+  restart?: boolean
+  /** A saved value is waiting for that restart. */
+  pending?: boolean
 }) {
   const id = `server-${name}`
   return (
     <Field data-invalid={!!error || undefined} data-disabled={disabled || undefined}>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <FieldLabel htmlFor={id}>
+        {label}
+        {restart && <Badge variant={pending ? 'warning' : 'outline'}>{pending ? '等待重启' : '需重启'}</Badge>}
+      </FieldLabel>
       <Input id={id} value={value} type={password ? 'password' : 'text'} autoComplete={password ? 'new-password' : 'off'}
         spellCheck={false} placeholder={placeholder} disabled={disabled} onChange={(event) => onChange(event.target.value)}
         aria-invalid={!!error || undefined} aria-describedby={`${id}-description${error ? ` ${id}-error` : ''}`} />

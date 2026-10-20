@@ -171,15 +171,24 @@ empty on first start and FireX generates one and prints it to the log once. Set
 URLs shown in the UI use whatever `Host` the browser sent.
 
 The **System → Server configuration** section edits this same file from the web
-UI, including a custom `-config` path. It shows the saved values and whether a
-restart is needed. Saves validate addresses, intervals and update settings,
+UI, including a custom `-config` path. It shows the saved values and which of
+them still wait for a restart. Saves validate addresses, intervals and update settings,
 replace the file atomically with mode `0600`, and reject stale edits if another
 browser or an operator has changed the settings since they were loaded.
 
-Changes take effect on restart; restart FireX through your deployment's service
-manager after saving. The listener, background jobs and updater keep their
-startup settings until then. Changing storage paths does not move the existing
-database. The version section continues to show the active update settings.
+Most changes take effect as soon as they are saved: subscription URLs and the
+refresh interval, debug logging, the background job intervals (a shorter one
+cuts the wait already in progress) and every update setting — switching
+`update.enabled` on runs a check straight away. `listen`, `dataDir`, `dbPath`
+and a pending `adminPassword` are bound at startup and wait for a restart
+through your deployment's service manager; the running process keeps its
+startup values for them until then. Changing storage paths does not move the
+existing database.
+
+A file edited by hand is applied the same way on `SIGHUP`
+(`systemctl reload` with `ExecReload=/bin/kill -HUP $MAINPID`, or
+`docker kill -s HUP`). It is completed as on startup, so a value FireX cannot
+act on falls back to its default instead of blocking the rest.
 
 The password field is write-only: leaving it blank preserves any pending reset;
 the cancellation switch clears a previously saved reset. A reset requires an
@@ -188,7 +197,7 @@ is consumed and its old sessions are signed out. Use **Settings → Account
 security** for an immediate password change.
 
 ```
-GET /api/settings/server   # saved config, path, revision and restart status
+GET /api/settings/server   # saved config, path, revision and restartFields
 PUT /api/settings/server   # { "revision": "...", "config": { ...edited fields } }
 ```
 

@@ -27,18 +27,6 @@ func Read(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// RequiresRestart compares the file's effective values to the startup snapshot.
-// A pending password reset needs a restart even if other settings are unchanged.
-func (c Config) RequiresRestart(running *Config) bool {
-	if c.AdminPassword != "" {
-		return true
-	}
-	c.resolve()
-	active := *running
-	active.AdminPassword = ""
-	return c != active
-}
-
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$`)
 
 // Validate checks an explicit edit rather than silently replacing invalid

@@ -22,7 +22,7 @@ import (
 )
 
 type Server struct {
-	cfg        *config.Config
+	cfg        *config.Live
 	db         *store.DB
 	mgr        *provision.Manager
 	subs       *subscription.Service
@@ -37,16 +37,23 @@ type Server struct {
 	http   *http.Server
 }
 
-func New(cfg *config.Config, configPath string, db *store.DB, mgr *provision.Manager, subs *subscription.Service, upd *updater.Updater) *Server {
-	if !cfg.Debug {
+func New(cfg *config.Live, configPath string, db *store.DB, mgr *provision.Manager, subs *subscription.Service, upd *updater.Updater) *Server {
+	if !cfg.Get().Debug {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	s := &Server{cfg: cfg, configPath: configPath, db: db, mgr: mgr, subs: subs, upd: upd}
 	s.engine = gin.New()
 	s.engine.Use(gin.Recovery())
-	if cfg.Debug {
-		s.engine.Use(gin.Logger())
-	}
+	// The request log is always mounted and consults debug per request, so
+	// switching debug in the config takes effect without a restart.
+	requestLog := gin.Logger()
+	s.engine.Use(func(c *gin.Context) {
+		if s.cfg.Get().Debug {
+			requestLog(c)
+			return
+		}
+		c.Next()
+	})
 	s.routes()
 	return s
 }
@@ -209,7 +216,7 @@ func (s *Server) mountUI() {
 
 func (s *Server) Start() error {
 	s.http = &http.Server{
-		Addr:              s.cfg.Listen,
+		Addr:              s.cfg.Get().Listen,
 		Handler:           s.engine,
 		ReadHeaderTimeout: 10 * time.Second,
 	}

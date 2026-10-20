@@ -17,6 +17,7 @@ type configResponse struct {
 	Path                    string        `json:"path"`
 	Revision                string        `json:"revision"`
 	RestartRequired         bool          `json:"restartRequired"`
+	RestartFields           []string      `json:"restartFields"`
 	HasPendingAdminPassword bool          `json:"hasPendingAdminPassword"`
 }
 
@@ -39,11 +40,11 @@ func TestServerConfigRequiresAdmin(t *testing.T) {
 	}
 }
 
-func TestServerConfigPersistsToCustomPathWithoutChangingRuntime(t *testing.T) {
+func TestServerConfigPersistsToCustomPathAndAppliesHotSettings(t *testing.T) {
 	h := newHarness(t)
 	h.login()
 	before := h.serverConfig()
-	if before.Path != h.configPath || before.Config.DBPath != "" || before.RestartRequired {
+	if before.Path != h.configPath || before.Config.DBPath != "" || before.RestartRequired || len(before.RestartFields) != 0 {
 		t.Fatalf("initial file view is incorrect: %+v", before)
 	}
 	patch := map[string]any{
@@ -57,8 +58,24 @@ func TestServerConfigPersistsToCustomPathWithoutChangingRuntime(t *testing.T) {
 	if !after.RestartRequired || after.Config.SubBaseURL != "https://sub.example.com" || after.Config.DBPath != "" {
 		t.Fatalf("saved file view is incorrect: %+v", after)
 	}
-	if h.cfg.Listen != ":8080" || h.cfg.Debug || h.cfg.Update.Enabled {
-		t.Fatal("save mutated running settings")
+	if got := strings.Join(after.RestartFields, ","); got != "listen,dataDir,dbPath" {
+		t.Fatalf("restartFields = %q, want only the startup-bound settings", got)
+	}
+	running := h.cfg.Get()
+	if running.Listen != ":8080" || running.DataDir != "./data" || running.DBPath != "data/firex.db" {
+		t.Fatalf("save moved startup-bound settings of the running process: %+v", running)
+	}
+	if !running.Debug || running.SubBaseURL != "https://sub.example.com" || running.SyncInterval != config.Duration(90*time.Second) ||
+		running.TrafficInterval != config.Duration(30*time.Second) || running.DiscoverInterval != config.Duration(10*time.Minute) ||
+		running.SubUpdateInterval != config.Duration(24*time.Hour) || !running.Update.Enabled || running.Update.Repo != "example/FireX" {
+		t.Fatalf("hot settings did not reach the running process: %+v", running)
+	}
+	var version struct {
+		UpdateEnabled bool   `json:"updateEnabled"`
+		UpdateRepo    string `json:"updateRepo"`
+	}
+	if err := json.Unmarshal(h.mustDo(http.MethodGet, "/api/version", nil), &version); err != nil || !version.UpdateEnabled || version.UpdateRepo != "example/FireX" {
+		t.Fatalf("version endpoint still reports startup update settings: %+v, %v", version, err)
 	}
 	loaded, err := config.Load(h.configPath)
 	if err != nil {
@@ -74,8 +91,36 @@ func TestServerConfigPersistsToCustomPathWithoutChangingRuntime(t *testing.T) {
 	}
 	// Restoring the startup values clears the pending flag without a restart.
 	h.mustDo(http.MethodPut, "/api/settings/server", map[string]any{"revision": after.Revision, "config": before.Config})
-	if h.serverConfig().RestartRequired {
-		t.Fatal("restored startup settings still require restart")
+	if got := h.serverConfig(); got.RestartRequired || len(got.RestartFields) != 0 {
+		t.Fatalf("restored startup settings still require restart: %+v", got)
+	}
+	if h.cfg.Get().Debug {
+		t.Fatal("restoring the file did not switch debug back off")
+	}
+}
+
+func TestServerConfigReloadAppliesHandEdits(t *testing.T) {
+	h := newHarness(t)
+	file, err := config.Read(h.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.SubBaseURL = "https://edited.example.com"
+	file.Listen = ":9191"
+	if err := file.Save(h.configPath); err != nil {
+		t.Fatal(err)
+	}
+	changed := h.cfg.Changed()
+	if err := h.srv.ReloadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	default:
+		t.Fatal("reload did not wake the loops waiting on the config")
+	}
+	if got := h.cfg.Get(); got.SubBaseURL != "https://edited.example.com" || got.Listen != ":8080" {
+		t.Fatalf("reload applied %+v; want the hot edit only", got)
 	}
 }
 

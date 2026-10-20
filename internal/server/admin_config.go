@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -24,13 +26,43 @@ func configRevision(cfg *config.Config) string {
 func (s *Server) configPayload(cfg *config.Config) gin.H {
 	redacted := *cfg
 	redacted.AdminPassword = ""
+	restartFields := cfg.RestartFields(s.cfg.Get())
 	return gin.H{
 		"config":                  redacted,
 		"path":                    s.configPath,
 		"revision":                configRevision(cfg),
-		"restartRequired":         cfg.RequiresRestart(s.cfg),
+		"restartRequired":         len(restartFields) > 0,
+		"restartFields":           restartFields,
 		"hasPendingAdminPassword": cfg.AdminPassword != "",
 	}
+}
+
+// applyConfig puts the file form's hot settings into effect: the loops and
+// handlers read the live config, and the two holders of their own copy are
+// told directly.
+func (s *Server) applyConfig(file *config.Config) {
+	pending := s.cfg.Apply(file)
+	s.db.SetDebug(file.Debug)
+	s.upd.Reload()
+	if len(pending) > 0 {
+		log.Printf("firex: applied config from %s; waiting for a restart: %s", s.configPath, strings.Join(pending, ", "))
+		return
+	}
+	log.Printf("firex: applied config from %s", s.configPath)
+}
+
+// ReloadConfig re-reads the file and applies it, for edits made outside the
+// admin API. The file is completed the way startup completes it, so a value
+// FireX cannot act on falls back to its default rather than blocking the rest.
+func (s *Server) ReloadConfig() error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	file, err := config.Read(s.configPath)
+	if err != nil {
+		return err
+	}
+	s.applyConfig(file)
+	return nil
 }
 
 func (s *Server) getServerConfig(c *gin.Context) {
@@ -101,7 +133,6 @@ func (s *Server) setServerConfig(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	// Keep s.cfg immutable: listeners, database handles and background loops
-	// all continue using the startup snapshot until the next process start.
+	s.applyConfig(&next)
 	c.JSON(http.StatusOK, s.configPayload(&next))
 }

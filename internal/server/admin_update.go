@@ -12,14 +12,15 @@ import (
 // handleVersion reports the running build plus the update settings, so the UI
 // can say where an update would come from without a second request.
 func (s *Server) handleVersion(c *gin.Context) {
+	update := s.cfg.Get().Update
 	c.JSON(http.StatusOK, gin.H{
 		"version":       version.Version,
 		"commit":        version.Commit,
 		"buildTime":     version.BuildTime,
-		"updateEnabled": s.cfg.Update.Enabled,
-		"updateChannel": s.cfg.Update.Channel,
-		"updateSource":  s.cfg.Update.Source,
-		"updateRepo":    s.cfg.Update.Repo,
+		"updateEnabled": update.Enabled,
+		"updateChannel": update.Channel,
+		"updateSource":  update.Source,
+		"updateRepo":    update.Repo,
 	})
 }
 

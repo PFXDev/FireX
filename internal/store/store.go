@@ -4,12 +4,12 @@ package store
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
 	"github.com/PFXDev/FireX/internal/model"
 )
@@ -22,14 +22,12 @@ func Open(path string, debug bool) (*DB, error) {
 			return nil, fmt.Errorf("create data dir: %w", err)
 		}
 	}
-	logLevel := logger.Warn
-	if debug {
-		logLevel = logger.Info
-	}
+	sqlLog := &sqlLogger{out: log.Default()}
+	sqlLog.verbose.Store(debug)
 	// _pragma busy_timeout keeps concurrent sync jobs from failing on SQLITE_BUSY.
 	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
 	gdb, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logLevel),
+		Logger: sqlLog,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)

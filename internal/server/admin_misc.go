@@ -20,8 +20,8 @@ var errBadUsername = errors.New("username must be 2-40 characters of letters, di
 // value wins because FireX usually sits behind a reverse proxy that terminates
 // TLS on a different host than the one it listens on.
 func (s *Server) subBase(c *gin.Context) string {
-	if s.cfg.SubBaseURL != "" {
-		return s.cfg.SubBaseURL
+	if base := s.cfg.Get().SubBaseURL; base != "" {
+		return base
 	}
 	scheme := "http"
 	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {

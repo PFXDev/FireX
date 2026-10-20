@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -32,7 +31,8 @@ type harness struct {
 	client     *http.Client
 	fake       *paneltest.Panel
 	configPath string
-	cfg        *config.Config
+	cfg        *config.Live
+	srv        *Server
 	// agent is the token of the agent session tests drive snapshots through.
 	agent string
 }
@@ -65,10 +65,11 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	live := config.NewLive(cfg)
 	mgr := provision.NewManager(db)
-	srv := New(cfg, configPath, db, mgr, subscription.NewService(db, mgr), updater.New(
-		func() updater.Config { return cfg.Update.Updater() },
-		func() string { return cfg.DataDir },
+	srv := New(live, configPath, db, mgr, subscription.NewService(db, mgr), updater.New(
+		func() updater.Config { return live.Get().Update.Updater() },
+		func() string { return live.Get().DataDir },
 		log.New(io.Discard, "", 0),
 		updater.RestartHooks{},
 	))
@@ -76,7 +77,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(ts.Close)
 
 	jar, _ := cookiejar.New(nil)
-	return &harness{t: t, db: db, server: ts, client: &http.Client{Jar: jar}, fake: fake, configPath: configPath, cfg: cfg}
+	return &harness{t: t, db: db, server: ts, client: &http.Client{Jar: jar}, fake: fake, configPath: configPath, cfg: live, srv: srv}
 }
 
 func (h *harness) do(method, path string, body any) (*http.Response, []byte) {
@@ -855,7 +856,10 @@ func TestInboundPublicEndpointIsValidatedAndServed(t *testing.T) {
 func TestSubscriptionUpdateIntervalFollowsConfig(t *testing.T) {
 	h := newHarness(t)
 	u := h.seed()
-	h.cfg.SubUpdateInterval = config.Duration(24 * time.Hour)
+	// Saved from the admin UI, the interval reaches clients without a restart.
+	h.mustDo(http.MethodPut, "/api/settings/server", map[string]any{
+		"revision": h.serverConfig().Revision, "config": map[string]any{"subUpdateInterval": "24h"},
+	})
 
 	resp, err := h.client.Get(h.server.URL + "/sub/" + u.SubToken)
 	if err != nil {

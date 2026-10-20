@@ -495,6 +495,8 @@ export interface ServerConfigResponse {
   path: string
   revision: string
   restartRequired: boolean
+  /** Saved settings that differ from the running process and only apply on the next start. */
+  restartFields: string[]
   hasPendingAdminPassword: boolean
 }
 
