@@ -284,6 +284,9 @@ export interface RoutingPreset {
   description: string
 }
 
+/** How often a plan's users start their traffic over. */
+export type TrafficReset = 'none' | 'monthly' | 'calendar'
+
 export interface Plan {
   id: number
   name: string
@@ -292,6 +295,7 @@ export interface Plan {
   trafficBytes: number
   durationDays: number
   deviceLimit: number
+  trafficReset: TrafficReset
   speedNote: string
   enabled: boolean
   sortOrder: number
@@ -314,6 +318,10 @@ export interface User {
   upload: number
   download: number
   used: number
+  /** The plan's reset policy, and when this user's usage next starts over (0 = never). */
+  trafficReset: TrafficReset
+  nextTrafficReset: number
+  trafficPeriodStart: number
   remark: string
   lastSubAt: number
   lastSubUa: string

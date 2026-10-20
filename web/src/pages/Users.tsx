@@ -73,6 +73,7 @@ import {
   formatQuota,
   formatTime,
   gbToBytes,
+  TRAFFIC_RESET_LABELS,
 } from '@/lib/format'
 import { reportSyncError } from '@/lib/sync'
 
@@ -85,7 +86,10 @@ type Draft = {
   expiresAt: number
   trafficGb: number
   remark: string
-  inheritPlan: boolean
+  // On create, each limit either follows the plan or is set by hand. An edit
+  // always sets both: the user already has their own values.
+  overrideTraffic: boolean
+  overrideExpiry: boolean
 }
 
 type PendingAction = {
@@ -171,7 +175,8 @@ export function UsersPage() {
       expiresAt: 0,
       trafficGb: 0,
       remark: '',
-      inheritPlan: Boolean(defaultPlan),
+      overrideTraffic: !defaultPlan,
+      overrideExpiry: !defaultPlan,
     }
   }
 
@@ -191,7 +196,8 @@ export function UsersPage() {
       expiresAt: user.expiresAt,
       trafficGb: bytesToGb(user.trafficLimit),
       remark: user.remark,
-      inheritPlan: false,
+      overrideTraffic: true,
+      overrideExpiry: true,
     })
   }
 
@@ -212,10 +218,10 @@ export function UsersPage() {
       enabled: draft.enabled,
       remark: draft.remark,
     }
-    if (!draft.inheritPlan || draft.id) {
-      body.expiresAt = draft.expiresAt
-      body.trafficLimit = gbToBytes(draft.trafficGb)
-    }
+    // Leaving a field out of the create request is what makes the server
+    // take the plan's value for it.
+    if (draft.id || draft.overrideExpiry) body.expiresAt = draft.expiresAt
+    if (draft.id || draft.overrideTraffic) body.trafficLimit = gbToBytes(draft.trafficGb)
 
     try {
       const result = draft.id
@@ -253,8 +259,13 @@ export function UsersPage() {
         await api.del(`/users/${pending.user.id}`)
         toast.success('用户已删除')
       } else {
-        await api.post(`/users/${pending.user.id}/resetTraffic`)
-        toast.success('流量统计已清空')
+        const result = await api.post<{ remoteFailures: number; syncError: string }>(`/users/${pending.user.id}/resetTraffic`)
+        if (result.remoteFailures > 0) {
+          toast.warning(`流量统计已清空，${result.remoteFailures} 个面板暂未响应，稍后会自动重试`)
+        } else {
+          toast.success('流量统计已清空')
+        }
+        reportSyncError(result.syncError)
       }
       await revalidate()
     } catch (err) {
@@ -282,6 +293,15 @@ export function UsersPage() {
 
   const activeUsers = users.filter((user) => user.enabled && !user.depleted && (!user.expiresAt || user.expiresAt > Date.now())).length
   const failedSyncs = users.filter((user) => user.syncState === 'failed').length
+  const selectedPlan = draft ? plans.find((plan) => plan.id === draft.planId) : undefined
+  // Only a new user on a real plan has defaults to fall back on.
+  const canInherit = Boolean(draft && !draft.id && selectedPlan)
+  // Seeds the date picker when a plan's term is switched to a custom one, so
+  // the operator adjusts from the default instead of from a blank field.
+  const planExpiry =
+    selectedPlan && selectedPlan.durationDays > 0
+      ? dateInputToMs(dateInputValue(Date.now() + selectedPlan.durationDays * 86400000))
+      : 0
   const usernameInvalid = Boolean(showErrors && draft && (!draft.username.trim() || !USERNAME_RE.test(draft.username)))
   const uuidInvalid = Boolean(showErrors && draft?.uuid && !UUID_RE.test(draft.uuid))
 
@@ -422,6 +442,11 @@ export function UsersPage() {
                                 <ProgressValue className="sr-only" />
                               </Progress>
                             )}
+                            {user.nextTrafficReset > 0 && (
+                              <span className="text-xs text-muted-foreground">
+                                {new Date(user.nextTrafficReset).toLocaleDateString('zh-CN')} 重置
+                              </span>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell className="hidden text-muted-foreground md:table-cell">{formatExpiry(user.expiresAt)}</TableCell>
@@ -537,7 +562,7 @@ export function UsersPage() {
 
                 <Field data-disabled={saving || undefined}>
                   <FieldLabel htmlFor="user-plan">套餐</FieldLabel>
-                  <Select items={planItems} value={draft.planId} disabled={saving} onValueChange={(value) => setDraft({ ...draft, planId: Number(value), inheritPlan: Number(value) === 0 ? false : draft.inheritPlan })}>
+                  <Select items={planItems} value={draft.planId} disabled={saving} onValueChange={(value) => setDraft({ ...draft, planId: Number(value) })}>
                     <SelectTrigger id="user-plan" className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
@@ -548,26 +573,49 @@ export function UsersPage() {
                   {draft.planId === 0 && <FieldDescription>未分配套餐的用户不会获得任何节点。</FieldDescription>}
                 </Field>
 
-                {!draft.id && draft.planId !== 0 && (
-                  <Field orientation="horizontal" data-disabled={saving || undefined}>
-                    <FieldLabel htmlFor="user-inherit">沿用套餐的流量与到期默认值</FieldLabel>
-                    <Switch id="user-inherit" disabled={saving} checked={draft.inheritPlan} onCheckedChange={(inheritPlan) => setDraft({ ...draft, inheritPlan })} />
-                  </Field>
-                )}
-
-                {(draft.id || !draft.inheritPlan) && (
-                  <FieldGroup className="sm:grid sm:grid-cols-2">
-                    <Field data-disabled={saving || undefined}>
+                <FieldGroup className="sm:grid sm:grid-cols-2">
+                  <Field data-disabled={saving || undefined}>
+                    {canInherit ? (
+                      <Field orientation="horizontal">
+                        <FieldLabel htmlFor="user-override-traffic">自定义流量上限</FieldLabel>
+                        <Switch id="user-override-traffic" disabled={saving} checked={draft.overrideTraffic} onCheckedChange={(overrideTraffic) => setDraft({ ...draft, overrideTraffic, trafficGb: overrideTraffic && !draft.overrideTraffic ? bytesToGb(selectedPlan?.trafficBytes ?? 0) : draft.trafficGb })} />
+                      </Field>
+                    ) : (
                       <FieldLabel htmlFor="user-traffic">流量上限 (GB)</FieldLabel>
-                      <Input id="user-traffic" disabled={saving} type="number" min={0} step="any" value={draft.trafficGb} onChange={(event) => setDraft({ ...draft, trafficGb: Number(event.target.value) })} />
-                      <FieldDescription>0 表示不限。</FieldDescription>
-                    </Field>
-                    <Field data-disabled={saving || undefined}>
+                    )}
+                    {!canInherit || draft.overrideTraffic ? (
+                      <>
+                        <Input id="user-traffic" aria-label={canInherit ? '流量上限 (GB)' : undefined} disabled={saving} type="number" min={0} step="any" value={draft.trafficGb} onChange={(event) => setDraft({ ...draft, trafficGb: Number(event.target.value) })} />
+                        <FieldDescription>单位 GB，0 表示不限。</FieldDescription>
+                      </>
+                    ) : (
+                      <FieldDescription>沿用套餐：{formatQuota(selectedPlan?.trafficBytes ?? 0)}</FieldDescription>
+                    )}
+                  </Field>
+                  <Field data-disabled={saving || undefined}>
+                    {canInherit ? (
+                      <Field orientation="horizontal">
+                        <FieldLabel htmlFor="user-override-expiry">自定义到期日</FieldLabel>
+                        <Switch id="user-override-expiry" disabled={saving} checked={draft.overrideExpiry} onCheckedChange={(overrideExpiry) => setDraft({ ...draft, overrideExpiry, expiresAt: overrideExpiry && !draft.overrideExpiry ? planExpiry : draft.expiresAt })} />
+                      </Field>
+                    ) : (
                       <FieldLabel htmlFor="user-expiry">到期日</FieldLabel>
-                      <Input id="user-expiry" disabled={saving} type="date" value={dateInputValue(draft.expiresAt)} onChange={(event) => setDraft({ ...draft, expiresAt: dateInputToMs(event.target.value) })} />
-                      <FieldDescription>留空表示永久。</FieldDescription>
-                    </Field>
-                  </FieldGroup>
+                    )}
+                    {!canInherit || draft.overrideExpiry ? (
+                      <>
+                        <Input id="user-expiry" aria-label={canInherit ? '到期日' : undefined} disabled={saving} type="date" value={dateInputValue(draft.expiresAt)} onChange={(event) => setDraft({ ...draft, expiresAt: dateInputToMs(event.target.value) })} />
+                        <FieldDescription>留空表示永久。</FieldDescription>
+                      </>
+                    ) : (
+                      <FieldDescription>沿用套餐：{selectedPlan && selectedPlan.durationDays > 0 ? `${selectedPlan.durationDays} 天后到期` : '永久'}</FieldDescription>
+                    )}
+                  </Field>
+                </FieldGroup>
+
+                {selectedPlan && selectedPlan.trafficReset !== 'none' && (
+                  <FieldDescription>
+                    该套餐流量{TRAFFIC_RESET_LABELS[selectedPlan.trafficReset]}重置，上限为每个周期的额度。
+                  </FieldDescription>
                 )}
 
                 <Field data-invalid={uuidInvalid || undefined} data-disabled={saving || undefined}>
@@ -710,7 +758,13 @@ export function UsersPage() {
         open={pending !== null}
         onOpenChange={(open) => !open && setPending(null)}
         title={pending?.kind === 'delete' ? `删除用户「${pending.user.username}」？` : `清空「${pending?.user.username ?? ''}」的流量统计？`}
-        description={pending?.kind === 'delete' ? '会同时从所有面板移除该用户的客户端。' : '面板侧计数会一并重置，用户会重新可用。'}
+        description={
+          pending?.kind === 'delete'
+            ? '会同时从所有面板移除该用户的客户端。'
+            : pending && pending.user.nextTrafficReset > 0
+              ? '面板侧计数会一并重置，用户会重新可用。自动重置日不变。'
+              : '面板侧计数会一并重置，用户会重新可用。'
+        }
         confirmLabel={pending?.kind === 'delete' ? '删除用户' : '清空流量'}
         onConfirm={confirmAction}
       />

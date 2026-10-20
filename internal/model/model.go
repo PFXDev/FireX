@@ -11,6 +11,8 @@
 // which inbounds a user is provisioned onto.
 package model
 
+import "time"
+
 // Admin roles. A super admin can do everything, including managing other
 // admins; an operator manages users and may only read the overview and plans,
 // plus the configuration pages when Admin.CanViewConfig is set.
@@ -355,6 +357,9 @@ type Plan struct {
 	TrafficBytes int64  `json:"trafficBytes"` // 0 = unlimited
 	DurationDays int    `json:"durationDays"` // 0 = no expiry
 	DeviceLimit  int    `json:"deviceLimit"`  // maps to 3x-ui limitIp; 0 = unlimited
+	// TrafficReset is how often a user's usage starts over; see TrafficReset*.
+	// Users follow their plan's current value rather than a copy of it.
+	TrafficReset string `json:"trafficReset" gorm:"default:none"`
 	SpeedNote    string `json:"speedNote"`
 	Enabled      bool   `json:"enabled" gorm:"default:true"`
 	SortOrder    int    `json:"sortOrder" gorm:"default:100"`
@@ -379,6 +384,10 @@ type User struct {
 	TrafficLimit int64 `json:"trafficLimit"` // bytes, 0 = unlimited
 	Upload       int64 `json:"upload"`
 	Download     int64 `json:"download"`
+	// TrafficPeriodStart is when the current traffic period began: the last
+	// reset, or the moment the user's reset policy last changed. 0 means
+	// CreatedAt.
+	TrafficPeriodStart int64 `json:"trafficPeriodStart"`
 
 	// Depleted is set by the traffic collector when the aggregate crosses the
 	// limit, so the reason a user went dark survives a limit bump.
@@ -403,6 +412,59 @@ func (u *User) Active(nowMs int64) bool {
 		return false
 	}
 	return true
+}
+
+// Traffic reset policies for Plan.TrafficReset.
+const (
+	// TrafficResetNone makes the quota last for the whole plan duration.
+	TrafficResetNone = "none"
+	// TrafficResetMonthly starts over at midnight on the day of the month the
+	// user was created, clamped to the month's last day (the 31st becomes the
+	// 30th or the 28th).
+	TrafficResetMonthly = "monthly"
+	// TrafficResetCalendar starts over at midnight on the 1st of every month.
+	TrafficResetCalendar = "calendar"
+)
+
+// ValidTrafficReset reports whether mode is a known reset policy.
+func ValidTrafficReset(mode string) bool {
+	switch mode {
+	case TrafficResetNone, TrafficResetMonthly, TrafficResetCalendar:
+		return true
+	}
+	return false
+}
+
+// NextTrafficReset is when the user's current traffic period ends under mode,
+// as ms epoch at midnight in loc; 0 when the quota never starts over. It is
+// the first boundary after the period start, so one already passed means a
+// reset is due. Boundaries come from the calendar, not from the period start,
+// so an off-schedule reset does not move the next one.
+func (u *User) NextTrafficReset(mode string, loc *time.Location) int64 {
+	start := u.TrafficPeriodStart
+	if start == 0 {
+		start = u.CreatedAt
+	}
+	since := time.UnixMilli(start).In(loc)
+	switch mode {
+	case TrafficResetCalendar:
+		return time.Date(since.Year(), since.Month()+1, 1, 0, 0, 0, 0, loc).UnixMilli()
+	case TrafficResetMonthly:
+		day := time.UnixMilli(u.CreatedAt).In(loc).Day()
+		next := monthDay(since.Year(), since.Month(), day, loc)
+		if !next.After(since) {
+			next = monthDay(since.Year(), since.Month()+1, day, loc)
+		}
+		return next.UnixMilli()
+	}
+	return 0
+}
+
+// monthDay is midnight on day of the given month, or on its last day when the
+// month is shorter.
+func monthDay(year int, month time.Month, day int, loc *time.Location) time.Time {
+	last := time.Date(year, month+1, 0, 0, 0, 0, 0, loc).Day()
+	return time.Date(year, month, min(day, last), 0, 0, 0, 0, loc)
 }
 
 // UserPanel sync states.
@@ -433,6 +495,10 @@ type UserPanel struct {
 	// backwards means the panel reset it, so the new value is the whole delta.
 	LastUp   int64 `json:"lastUp"`
 	LastDown int64 `json:"lastDown"`
+	// ResetPending marks a traffic reset this panel has not yet confirmed. The
+	// baselines stay at the panel's old counters until it does, so usage is not
+	// counted twice, and the traffic loop retries the reset.
+	ResetPending bool `json:"resetPending"`
 
 	UpdatedAt int64 `json:"updatedAt"`
 }

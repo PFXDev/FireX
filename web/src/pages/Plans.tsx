@@ -3,7 +3,7 @@ import { PencilIcon, PlusIcon, TicketIcon, Trash2Icon, TriangleAlertIcon } from 
 import { toast } from 'sonner'
 
 import { api } from '@/api'
-import type { Plan, Profile } from '@/api'
+import type { Plan, Profile, TrafficReset } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
@@ -35,7 +35,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { bytesToGb, errorMessage, formatQuota, gbToBytes } from '@/lib/format'
+import { bytesToGb, errorMessage, formatQuota, gbToBytes, TRAFFIC_RESET_LABELS } from '@/lib/format'
 import { reportSyncError } from '@/lib/sync'
 import { useSession } from '@/lib/session'
 
@@ -45,6 +45,7 @@ type Draft = {
   trafficGb: number
   durationDays: number
   deviceLimit: number
+  trafficReset: TrafficReset
   speedNote: string
   enabled: boolean
   sortOrder: number
@@ -52,11 +53,17 @@ type Draft = {
   profileId: number
 }
 
+const trafficResetItems = (Object.keys(TRAFFIC_RESET_LABELS) as TrafficReset[]).map((value) => ({
+  value,
+  label: TRAFFIC_RESET_LABELS[value],
+}))
+
 const emptyDraft: Draft = {
   name: '',
   trafficGb: 100,
   durationDays: 30,
   deviceLimit: 3,
+  trafficReset: 'none',
   speedNote: '',
   enabled: true,
   sortOrder: 100,
@@ -121,6 +128,7 @@ export function PlansPage() {
       trafficGb: bytesToGb(plan.trafficBytes),
       durationDays: plan.durationDays,
       deviceLimit: plan.deviceLimit,
+      trafficReset: plan.trafficReset || 'none',
       speedNote: plan.speedNote,
       enabled: plan.enabled,
       sortOrder: plan.sortOrder,
@@ -142,6 +150,7 @@ export function PlansPage() {
       trafficBytes: gbToBytes(draft.trafficGb),
       durationDays: draft.durationDays,
       deviceLimit: draft.deviceLimit,
+      trafficReset: draft.trafficReset,
       speedNote: draft.speedNote,
       enabled: draft.enabled,
       sortOrder: draft.sortOrder,
@@ -283,7 +292,14 @@ export function PlansPage() {
                           {plan.speedNote && <span className="text-xs text-muted-foreground">{plan.speedNote}</span>}
                         </div>
                       </TableCell>
-                      <TableCell className="tabular-nums">{formatQuota(plan.trafficBytes)}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-1">
+                          <span className="tabular-nums">{formatQuota(plan.trafficBytes)}</span>
+                          {plan.trafficReset && plan.trafficReset !== 'none' && (
+                            <span className="text-xs text-muted-foreground">{TRAFFIC_RESET_LABELS[plan.trafficReset]}重置</span>
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell className="hidden tabular-nums text-muted-foreground md:table-cell">
                         {plan.durationDays > 0 ? `${plan.durationDays} 天` : '永久'}
                       </TableCell>
@@ -400,6 +416,36 @@ export function PlansPage() {
                     <FieldDescription>0 表示永久；用于计算新用户到期时间。</FieldDescription>
                   </Field>
                 </FieldGroup>
+
+                <Field data-disabled={saving || undefined}>
+                  <FieldLabel htmlFor="plan-reset">流量重置</FieldLabel>
+                  <Select
+                    items={trafficResetItems}
+                    value={draft.trafficReset}
+                    disabled={saving}
+                    onValueChange={(value) => setDraft({ ...draft, trafficReset: value as TrafficReset })}
+                  >
+                    <SelectTrigger id="plan-reset" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {trafficResetItems.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription>
+                    {draft.trafficReset === 'none'
+                      ? '流量上限在整个有效期内只算一次，用完即止。'
+                      : draft.trafficReset === 'monthly'
+                        ? '每月在用户开通日的 0 点清零已用流量（31 日开通的在小月按月末算），流量耗尽的用户会自动恢复。'
+                        : '每月 1 日 0 点清零所有用户的已用流量，流量耗尽的用户会自动恢复。'}
+                    {draft.id && draft.trafficReset !== (plans.find((plan) => plan.id === draft.id)?.trafficReset || 'none') &&
+                      ' 修改后从现在开始按新规则计算，不会立即清零现有用量。'}
+                  </FieldDescription>
+                </Field>
 
                 <FieldGroup className="sm:grid sm:grid-cols-2">
                   <Field data-disabled={saving || undefined}>

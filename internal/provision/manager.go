@@ -42,6 +42,14 @@ type Manager struct {
 	// table to recover from, so instead of resuming interrupted work the
 	// updater simply waits for this to drain before restarting.
 	inFlight atomic.Int64
+
+	// trafficMu keeps a counter poll and a traffic reset from interleaving, so
+	// a poll cannot add pre-reset usage back after the reset zeroed it.
+	trafficMu sync.Mutex
+	// loc is where reset boundaries fall at midnight; now is the reset clock.
+	// Both are fields so tests can pin them.
+	loc *time.Location
+	now func() time.Time
 }
 
 type cachedClient struct {
@@ -50,7 +58,13 @@ type cachedClient struct {
 }
 
 func NewManager(db *store.DB) *Manager {
-	return &Manager{db: db, clients: map[uint]*cachedClient{}, panelWrites: map[uint]*sync.Mutex{}}
+	return &Manager{
+		db:          db,
+		clients:     map[uint]*cachedClient{},
+		panelWrites: map[uint]*sync.Mutex{},
+		loc:         time.Local,
+		now:         time.Now,
+	}
 }
 
 // PanelWrite serializes inbound deployment, discovery and user reconciliation
@@ -395,7 +409,7 @@ func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.
 		record.State = model.SyncStateFailed
 		record.LastError = err.Error()
 		record.UpdatedAt = NowMs()
-		m.db.Save(&record)
+		m.saveRecord(&record)
 		return err
 	}
 
@@ -493,7 +507,14 @@ func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.
 	record.State = model.SyncStateSynced
 	record.LastError = ""
 	record.UpdatedAt = NowMs()
-	return m.db.Save(&record).Error
+	return m.saveRecord(&record)
+}
+
+// saveRecord writes a reconcile's outcome without the traffic columns: the
+// record was read before the panel round-trips, and a poll or reset may have
+// moved the baselines since.
+func (m *Manager) saveRecord(record *model.UserPanel) error {
+	return m.db.Omit("last_up", "last_down", "reset_pending").Save(record).Error
 }
 
 // syncClientFlows addresses the client as remote, its spelling on the panel.
@@ -615,9 +636,12 @@ func (m *Manager) ReconcileUsersOfPlans(ctx context.Context, planIDs []uint) err
 // ------------------------------------------------------------------ traffic
 
 // CollectTraffic folds each panel's per-client counters into the users' global
-// totals and disables anyone who crossed their limit or expiry.
+// totals, starts a new period for anyone whose plan resets their traffic, and
+// disables anyone who crossed their limit or expiry.
 func (m *Manager) CollectTraffic(ctx context.Context) error {
 	defer m.busy()()
+	m.trafficMu.Lock()
+	defer m.trafficMu.Unlock()
 
 	var panels []model.Panel
 	if err := m.db.Where("enabled = ?", true).Find(&panels).Error; err != nil {
@@ -655,12 +679,19 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 			dDown := counterDelta(rec.LastDown, st.Down)
 			rec.LastUp, rec.LastDown = st.Up, st.Down
 			rec.UpdatedAt = NowMs()
+			// A reset the panel missed is retried here. Until it lands the
+			// baselines stay at the old counters, so the delta above was only
+			// what the user spent after the reset.
+			if rec.ResetPending && client.ResetClientTraffic(ctx, rec.Email) == nil {
+				rec.LastUp, rec.LastDown, rec.ResetPending = 0, 0, false
+			}
 			if err := m.db.Model(&model.UserPanel{}).
 				Where("user_id = ? AND panel_id = ?", rec.UserID, rec.PanelID).
 				Updates(map[string]any{
-					"last_up":    rec.LastUp,
-					"last_down":  rec.LastDown,
-					"updated_at": rec.UpdatedAt,
+					"last_up":       rec.LastUp,
+					"last_down":     rec.LastDown,
+					"reset_pending": rec.ResetPending,
+					"updated_at":    rec.UpdatedAt,
 				}).Error; err != nil && firstErr == nil {
 				firstErr = err
 			}
@@ -679,10 +710,112 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 		}
 	}
 
+	// Resets run after the counters are folded in, so the usage that closes a
+	// period is charged to it rather than lost when the panel zeroes.
+	if err := m.resetDueTraffic(ctx); err != nil && firstErr == nil {
+		firstErr = err
+	}
 	if err := m.EnforceLimits(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	return firstErr
+}
+
+// ResetTraffic starts a new traffic period for the user now: FireX's totals go
+// to zero, each panel is asked to zero its counters, and the user is pushed
+// back online if the quota was what held them. It returns how many panels
+// missed the reset; the traffic loop keeps retrying those.
+func (m *Manager) ResetTraffic(ctx context.Context, u *model.User) (int, error) {
+	defer m.busy()()
+	m.trafficMu.Lock()
+	defer m.trafficMu.Unlock()
+	return m.resetTraffic(ctx, u, m.now().UnixMilli())
+}
+
+// resetTraffic needs trafficMu held.
+func (m *Manager) resetTraffic(ctx context.Context, u *model.User, at int64) (int, error) {
+	var records []model.UserPanel
+	if err := m.db.Where("user_id = ?", u.ID).Find(&records).Error; err != nil {
+		return 0, err
+	}
+	missed := 0
+	for _, rec := range records {
+		var p model.Panel
+		err := m.db.First(&p, rec.PanelID).Error
+		if err == nil && p.Enabled {
+			err = m.ClientFor(&p).ResetClientTraffic(ctx, rec.Email)
+		} else if err == nil {
+			err = fmt.Errorf("panel %s is disabled", p.Name)
+		}
+		// Zero the baselines only once the panel has zeroed its counter;
+		// otherwise its next reading would be counted from zero again.
+		updates := map[string]any{"reset_pending": true}
+		if err == nil {
+			updates = map[string]any{"last_up": 0, "last_down": 0, "reset_pending": false}
+		} else {
+			missed++
+		}
+		if err := m.db.Model(&model.UserPanel{}).
+			Where("user_id = ? AND panel_id = ?", rec.UserID, rec.PanelID).
+			Updates(updates).Error; err != nil {
+			return missed, err
+		}
+	}
+
+	u.Upload, u.Download, u.Depleted = 0, 0, false
+	u.TrafficPeriodStart, u.UpdatedAt = at, at
+	if err := m.db.Model(u).
+		Select("upload", "download", "depleted", "traffic_period_start", "updated_at").
+		Updates(u).Error; err != nil {
+		return missed, err
+	}
+	return missed, m.ReconcileUser(ctx, u)
+}
+
+// resetDueTraffic starts a new period for every user whose plan resets
+// traffic and whose current period has ended. A period that ended while
+// FireX was down is reset once, not once per missed boundary.
+func (m *Manager) resetDueTraffic(ctx context.Context) error {
+	var plans []model.Plan
+	if err := m.db.Where("traffic_reset IN ?", []string{model.TrafficResetMonthly, model.TrafficResetCalendar}).
+		Find(&plans).Error; err != nil {
+		return err
+	}
+	if len(plans) == 0 {
+		return nil
+	}
+	modes := make(map[uint]string, len(plans))
+	planIDs := make([]uint, 0, len(plans))
+	for _, p := range plans {
+		modes[p.ID] = p.TrafficReset
+		planIDs = append(planIDs, p.ID)
+	}
+	var users []model.User
+	if err := m.db.Where("plan_id IN ?", planIDs).Find(&users).Error; err != nil {
+		return err
+	}
+	now := m.now().UnixMilli()
+	var firstErr error
+	for i := range users {
+		u := &users[i]
+		next := u.NextTrafficReset(modes[u.PlanID], m.loc)
+		if next == 0 || next > now {
+			continue
+		}
+		if _, err := m.resetTraffic(ctx, u, now); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// NextTrafficReset is when the user's usage next starts over under their
+// plan, or 0 when it does not.
+func (m *Manager) NextTrafficReset(u *model.User, plan *model.Plan) int64 {
+	if plan == nil {
+		return 0
+	}
+	return u.NextTrafficReset(plan.TrafficReset, m.loc)
 }
 
 // counterDelta turns two consecutive readings of a monotonic counter into a

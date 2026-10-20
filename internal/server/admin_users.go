@@ -30,6 +30,7 @@ type planRequest struct {
 	TrafficBytes int64  `json:"trafficBytes"`
 	DurationDays int    `json:"durationDays"`
 	DeviceLimit  int    `json:"deviceLimit"`
+	TrafficReset string `json:"trafficReset"`
 	SpeedNote    string `json:"speedNote"`
 	Enabled      *bool  `json:"enabled"`
 	SortOrder    *int   `json:"sortOrder"`
@@ -69,6 +70,10 @@ func (s *Server) createPlan(c *gin.Context) {
 		failMsg(c, http.StatusBadRequest, "name is required")
 		return
 	}
+	reset, ok := trafficResetOf(c, req.TrafficReset, model.TrafficResetNone)
+	if !ok {
+		return
+	}
 	now := provision.NowMs()
 	plan := model.Plan{
 		Name:         strings.TrimSpace(req.Name),
@@ -76,6 +81,7 @@ func (s *Server) createPlan(c *gin.Context) {
 		TrafficBytes: req.TrafficBytes,
 		DurationDays: req.DurationDays,
 		DeviceLimit:  req.DeviceLimit,
+		TrafficReset: reset,
 		SpeedNote:    req.SpeedNote,
 		Enabled:      req.Enabled == nil || *req.Enabled,
 		SortOrder:    valueOr(req.SortOrder, 100),
@@ -111,6 +117,12 @@ func (s *Server) updatePlan(c *gin.Context) {
 	if req.ProfileID != nil {
 		plan.ProfileID = *req.ProfileID
 	}
+	reset, ok := trafficResetOf(c, req.TrafficReset, plan.TrafficReset)
+	if !ok {
+		return
+	}
+	resetChanged := reset != plan.TrafficReset
+	plan.TrafficReset = reset
 	plan.TrafficBytes = req.TrafficBytes
 	plan.DurationDays = req.DurationDays
 	plan.DeviceLimit = req.DeviceLimit
@@ -126,6 +138,16 @@ func (s *Server) updatePlan(c *gin.Context) {
 	if err := s.db.Save(&plan).Error; err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
+	}
+	if resetChanged {
+		// Count the new schedule from now. Measured from each user's creation
+		// date instead, every long-standing user would be due at once and the
+		// next poll would wipe the plan's usage wholesale.
+		if err := s.db.Model(&model.User{}).Where("plan_id = ?", plan.ID).
+			Update("traffic_period_start", plan.UpdatedAt).Error; err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	s.subs.InvalidateAll()
 
@@ -159,12 +181,16 @@ func (s *Server) deletePlan(c *gin.Context) {
 
 type userRow struct {
 	model.User
-	PlanName     string   `json:"planName"`
-	Used         int64    `json:"used"`
-	InboundCount int      `json:"inboundCount"`
-	SyncState    string   `json:"syncState"`
-	SyncError    []string `json:"syncErrors"`
-	SubURL       string   `json:"subUrl"`
+	PlanName string `json:"planName"`
+	// TrafficReset is the plan's policy, and NextTrafficReset when it next
+	// zeroes this user's usage (0 for never).
+	TrafficReset     string   `json:"trafficReset"`
+	NextTrafficReset int64    `json:"nextTrafficReset"`
+	Used             int64    `json:"used"`
+	InboundCount     int      `json:"inboundCount"`
+	SyncState        string   `json:"syncState"`
+	SyncError        []string `json:"syncErrors"`
+	SubURL           string   `json:"subUrl"`
 }
 
 type userRequest struct {
@@ -183,24 +209,29 @@ func (s *Server) listUsers(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	planNames := map[uint]string{}
+	plansByID := map[uint]*model.Plan{}
 	var plans []model.Plan
 	s.db.Find(&plans)
-	for _, p := range plans {
-		planNames[p.ID] = p.Name
+	for i := range plans {
+		plansByID[plans[i].ID] = &plans[i]
 	}
 
 	base := s.subBase(c)
 	out := make([]userRow, 0, len(users))
 	for i := range users {
 		u := users[i]
+		plan := plansByID[u.PlanID]
 		row := userRow{
-			User:      u,
-			PlanName:  planNames[u.PlanID],
-			Used:      u.Upload + u.Download,
-			SyncState: model.SyncStateSynced,
-			SyncError: []string{},
-			SubURL:    base + "/sub/" + u.SubToken,
+			User:             u,
+			TrafficReset:     model.TrafficResetNone,
+			NextTrafficReset: s.mgr.NextTrafficReset(&u, plan),
+			Used:             u.Upload + u.Download,
+			SyncState:        model.SyncStateSynced,
+			SyncError:        []string{},
+			SubURL:           base + "/sub/" + u.SubToken,
+		}
+		if plan != nil {
+			row.PlanName, row.TrafficReset = plan.Name, resetModeOf(plan)
 		}
 		inbounds, _ := s.mgr.InboundsForUser(&u)
 		row.InboundCount = len(inbounds)
@@ -307,6 +338,19 @@ func (s *Server) updateUser(c *gin.Context) {
 	if strings.TrimSpace(req.UUID) != "" {
 		u.UUID = strings.TrimSpace(req.UUID)
 	}
+	if req.PlanID != u.PlanID {
+		oldPlan, _ := s.planByID(u.PlanID)
+		newPlan, err := s.planByID(req.PlanID)
+		if err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		// Same reasoning as a plan changing its policy: the new schedule
+		// counts from the move, not from when the user was created.
+		if resetModeOf(oldPlan) != resetModeOf(newPlan) {
+			u.TrafficPeriodStart = provision.NowMs()
+		}
+	}
 	u.PlanID = req.PlanID
 	if req.Enabled != nil {
 		u.Enabled = *req.Enabled
@@ -395,31 +439,12 @@ func (s *Server) resetUserTraffic(c *gin.Context) {
 
 	ctx, cancel := opCtx()
 	defer cancel()
-	var records []model.UserPanel
-	s.db.Where("user_id = ?", u.ID).Find(&records)
-	remoteFailures := 0
-	for _, rec := range records {
-		var p model.Panel
-		if err := s.db.First(&p, rec.PanelID).Error; err != nil {
-			continue
-		}
-		if err := s.mgr.ClientFor(&p).ResetClientTraffic(ctx, rec.Email); err != nil {
-			remoteFailures++
-		}
-	}
-	// Zero the baselines too, otherwise the next poll reads the panel's fresh
-	// counter as a delta against the old high-water mark.
-	s.db.Model(&model.UserPanel{}).Where("user_id = ?", u.ID).
-		Updates(map[string]any{"last_up": 0, "last_down": 0})
-
-	u.Upload, u.Download, u.Depleted = 0, 0, false
-	u.UpdatedAt = provision.NowMs()
-	if err := s.db.Save(&u).Error; err != nil {
-		fail(c, http.StatusInternalServerError, err)
-		return
-	}
-	syncErr := s.mgr.ReconcileUser(ctx, &u)
-	c.JSON(http.StatusOK, gin.H{"ok": true, "remoteFailures": remoteFailures, "syncError": errString(syncErr)})
+	// A manual reset also starts a new period, but the scheduled boundaries
+	// stay where they were: a monthly user reset on the 10th still resets on
+	// their usual day.
+	remoteFailures, err := s.mgr.ResetTraffic(ctx, &u)
+	s.subs.InvalidateUser(&u)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "remoteFailures": remoteFailures, "syncError": errString(err)})
 }
 
 func (s *Server) previewSubscription(c *gin.Context) {
@@ -504,6 +529,29 @@ func validateUsername(name string) error {
 		}
 	}
 	return nil
+}
+
+// trafficResetOf validates a plan's reset policy, with empty meaning def.
+func trafficResetOf(c *gin.Context, mode, def string) (string, bool) {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		mode = def
+	}
+	if mode == "" {
+		mode = model.TrafficResetNone
+	}
+	if !model.ValidTrafficReset(mode) {
+		failMsg(c, http.StatusBadRequest, "trafficReset must be none, monthly or calendar")
+		return "", false
+	}
+	return mode, true
+}
+
+func resetModeOf(plan *model.Plan) string {
+	if plan == nil || plan.TrafficReset == "" {
+		return model.TrafficResetNone
+	}
+	return plan.TrafficReset
 }
 
 func valueOr[T any](ptr *T, def T) T {

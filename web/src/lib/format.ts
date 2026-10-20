@@ -32,6 +32,12 @@ export function formatTime(ms: number): string {
   return new Date(ms).toLocaleString('zh-CN', { hour12: false })
 }
 
+export const TRAFFIC_RESET_LABELS = {
+  none: '不重置',
+  monthly: '每月（按开通日）',
+  calendar: '每月 1 日',
+} as const
+
 export function formatExpiry(ms: number): string {
   if (!ms) return '永久'
   const date = new Date(ms).toLocaleDateString('zh-CN')
