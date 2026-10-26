@@ -18,13 +18,16 @@ type TemplatePreset struct {
 //
 // The DNS layout is the one the stock routing presets are written against:
 //
-//   - fake-ip for everything but LAN and connectivity probes, so a proxied
-//     domain is never resolved on the client at all — the exit node resolves
-//     it, which is both leak-free and the CDN answer nearest the exit.
-//   - mainland domains, and every DIRECT dial, resolve through AliDNS DoH;
-//     anything else that does need a client-side answer (the trailing
-//     GEOIP,cn check) asks Cloudflare, routed through the proxy by
-//     respect-rules.
+//   - fake-ip for everything but mainland domains, LAN and connectivity
+//     probes, so a proxied domain that matches a domain rule reaches the exit
+//     unresolved. The exit resolves it, which is both leak-free and gives the
+//     CDN answer nearest the exit.
+//   - mainland domains resolve through AliDNS DoH and bypass fake-ip. The
+//     default resolver also uses AliDNS, so a trailing GEOIP,cn check never
+//     depends on an overseas resolver being reachable from the client.
+//   - DIRECT dials use the domain policy first. Other domains resolve through
+//     Cloudflare DoH via the main proxy selection, while proxied connections
+//     still send their domain to the exit for remote resolution.
 //   - LAN-only suffixes (.lan, .home.arpa and the like) ask the system
 //     resolver, normally the LAN router, since no public resolver knows them.
 //     DIRECT dials follow the same policy, so they reach the router too. The
@@ -120,6 +123,7 @@ const templateDNS = `  prefer-h3: false
   fake-ip-filter-mode: blacklist
   fake-ip-filter:
     - 'geosite:private'
+    - 'geosite:cn'
     - '+.lan'
     - '+.local'
     - '+.home.arpa'
@@ -144,8 +148,8 @@ const templateDNS = `  prefer-h3: false
     - https://223.5.5.5/dns-query
     - https://223.6.6.6/dns-query
   direct-nameserver:
-    - https://223.5.5.5/dns-query
-    - https://223.6.6.6/dns-query
+    - 'https://1.1.1.1/dns-query#🚀 节点选择'
+    - 'https://1.0.0.1/dns-query#🚀 节点选择'
   direct-nameserver-follow-policy: true
   nameserver-policy:
     '+.lan,+.local,+.home.arpa,+.internal,+.localdomain':
@@ -154,6 +158,6 @@ const templateDNS = `  prefer-h3: false
       - https://223.5.5.5/dns-query
       - https://223.6.6.6/dns-query
   nameserver:
-    - https://1.1.1.1/dns-query
-    - https://1.0.0.1/dns-query
+    - https://223.5.5.5/dns-query
+    - https://223.6.6.6/dns-query
 `

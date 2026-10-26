@@ -407,3 +407,37 @@ func TestRenderForcesFakeIP(t *testing.T) {
 		}
 	}
 }
+
+func TestTemplateDNSSplitsMainlandAndDirectResolution(t *testing.T) {
+	for _, preset := range TemplatePresets {
+		t.Run(preset.Key, func(t *testing.T) {
+			cfg := decode(t, mustRenderWith(t, preset.Template, Input{Rules: []string{"MATCH,DIRECT"}}))
+			dns := cfg["dns"].(map[string]any)
+			stringsOf := func(key string) []string {
+				t.Helper()
+				var out []string
+				for _, item := range dns[key].([]any) {
+					out = append(out, item.(string))
+				}
+				return out
+			}
+
+			if filters := stringsOf("fake-ip-filter"); !contains(filters, "geosite:cn") || !contains(filters, "geosite:private") {
+				t.Errorf("fake-ip-filter = %v, want mainland and private domains to use real IP", filters)
+			}
+			if got := strings.Join(stringsOf("nameserver"), ","); got != "https://223.5.5.5/dns-query,https://223.6.6.6/dns-query" {
+				t.Errorf("nameserver = %s, want AliDNS for rule matching", got)
+			}
+			if got := strings.Join(stringsOf("direct-nameserver"), ","); got != "https://1.1.1.1/dns-query#🚀 节点选择,https://1.0.0.1/dns-query#🚀 节点选择" {
+				t.Errorf("direct-nameserver = %s, want Cloudflare through the main proxy selection", got)
+			}
+			if dns["direct-nameserver-follow-policy"] != true {
+				t.Error("direct-nameserver-follow-policy is not enabled")
+			}
+			policy := dns["nameserver-policy"].(map[string]any)
+			if got := policy["geosite:cn,private"].([]any); len(got) != 2 || got[0] != "https://223.5.5.5/dns-query" || got[1] != "https://223.6.6.6/dns-query" {
+				t.Errorf("mainland nameserver policy = %v, want AliDNS", got)
+			}
+		})
+	}
+}
