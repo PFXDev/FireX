@@ -300,96 +300,65 @@ func TestFullFlowServesClashSubscription(t *testing.T) {
 	}
 }
 
-func TestKnownLegacyClientReceivesBase64(t *testing.T) {
+func TestSubscriptionFormatSelection(t *testing.T) {
 	h := newHarness(t)
 	u := h.seed()
 
-	req, _ := http.NewRequest(http.MethodGet, h.server.URL+"/sub/"+u.SubToken, nil)
-	req.Header.Set("User-Agent", "v2rayN/7.0")
-	resp, err := h.client.Do(req)
-	if err != nil {
-		t.Fatalf("fetch subscription: %v", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-
-	decoded, err := base64.StdEncoding.DecodeString(string(body))
-	if err != nil {
-		t.Fatalf("body is not base64: %v\n%s", err, body)
-	}
-	links := strings.Split(strings.TrimSpace(string(decoded)), "\n")
-	if len(links) != 2 {
-		t.Fatalf("links = %d, want 2:\n%s", len(links), decoded)
-	}
-	for _, link := range links {
-		if !strings.HasPrefix(link, "vless://"+u.UUID+"@") {
-			t.Errorf("link %q does not carry the user's uuid", link)
-		}
-	}
-}
-
-func TestSubscriptionDefaultsToMihomo(t *testing.T) {
-	h := newHarness(t)
-	u := h.seed()
-
-	resp, body := h.do(http.MethodGet, "/sub/"+u.SubToken, nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /sub = %d: %s", resp.StatusCode, body)
-	}
-	if !strings.Contains(string(body), "proxy-groups:") {
-		t.Errorf("default subscription is not a mihomo profile:\n%s", body)
-	}
-	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/yaml") {
-		t.Errorf("Content-Type = %q, want text/yaml", got)
-	}
-}
-
-func TestSubscriptionTargetQueryOverridesUserAgent(t *testing.T) {
-	h := newHarness(t)
-	u := h.seed()
-
-	req, _ := http.NewRequest(http.MethodGet, h.server.URL+"/sub/"+u.SubToken+"?target=clash", nil)
-	req.Header.Set("User-Agent", "v2rayN/7.0")
-	resp, err := h.client.Do(req)
-	if err != nil {
-		t.Fatalf("fetch subscription: %v", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "proxy-groups") {
-		t.Errorf("?target=clash did not win over the user agent:\n%s", body)
-	}
-}
-
-func TestMihomoTargetAlias(t *testing.T) {
-	h := newHarness(t)
-	u := h.seed()
-
-	resp, body := h.do(http.MethodGet, "/sub/"+u.SubToken+"?target=mihomo", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /sub?target=mihomo = %d: %s", resp.StatusCode, body)
-	}
-	if !strings.Contains(string(body), "proxy-groups:") {
-		t.Errorf("?target=mihomo did not return a mihomo profile:\n%s", body)
-	}
-}
-
-func TestSingBoxTargetIsDisabled(t *testing.T) {
-	h := newHarness(t)
-	u := h.seed()
-
-	resp, body := h.do(http.MethodGet, "/sub/"+u.SubToken+"?target=sing-box", nil)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("GET /sub?target=sing-box = %d, want 400: %s", resp.StatusCode, body)
-	}
-}
-
-func TestUnknownSubTokenIs404(t *testing.T) {
-	h := newHarness(t)
-	h.seed()
-	resp, _ := h.do(http.MethodGet, "/sub/definitely-not-a-token", nil)
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("unknown token = %d, want 404", resp.StatusCode)
+	for _, tc := range []struct {
+		name, path, userAgent, contentType string
+		status                             int
+	}{
+		{"legacy client", "/sub/" + u.SubToken, "v2rayN/7.0", "text/plain", http.StatusOK},
+		{"default mihomo", "/sub/" + u.SubToken, "", "text/yaml", http.StatusOK},
+		{"query overrides user agent", "/sub/" + u.SubToken + "?target=clash", "v2rayN/7.0", "text/yaml", http.StatusOK},
+		{"mihomo alias", "/sub/" + u.SubToken + "?target=mihomo", "", "text/yaml", http.StatusOK},
+		{"unsupported sing-box", "/sub/" + u.SubToken + "?target=sing-box", "", "", http.StatusBadRequest},
+		{"unknown token", "/sub/definitely-not-a-token", "", "", http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, h.server.URL+tc.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("User-Agent", tc.userAgent)
+			resp, err := h.client.Do(req)
+			if err != nil {
+				t.Fatalf("fetch subscription: %v", err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != tc.status {
+				t.Fatalf("GET %s = %d, want %d: %s", tc.path, resp.StatusCode, tc.status, body)
+			}
+			if tc.status != http.StatusOK {
+				return
+			}
+			if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, tc.contentType) {
+				t.Errorf("Content-Type = %q, want %s", got, tc.contentType)
+			}
+			if tc.contentType == "text/yaml" {
+				if !strings.Contains(string(body), "proxy-groups:") {
+					t.Errorf("subscription is not a mihomo profile:\n%s", body)
+				}
+				return
+			}
+			decoded, err := base64.StdEncoding.DecodeString(string(body))
+			if err != nil {
+				t.Fatalf("body is not base64: %v\n%s", err, body)
+			}
+			links := strings.Split(strings.TrimSpace(string(decoded)), "\n")
+			if len(links) != 2 {
+				t.Fatalf("links = %d, want 2:\n%s", len(links), decoded)
+			}
+			for _, link := range links {
+				if !strings.HasPrefix(link, "vless://"+u.UUID+"@") {
+					t.Errorf("link %q does not carry the user's uuid", link)
+				}
+			}
+		})
 	}
 }
 

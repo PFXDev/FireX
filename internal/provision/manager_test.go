@@ -511,16 +511,6 @@ func TestCounterDelta(t *testing.T) {
 	}
 }
 
-func TestDiffInts(t *testing.T) {
-	missing, extra := diffInts([]int{1, 2, 4}, []int{2, 3})
-	if len(missing) != 2 || missing[0] != 1 || missing[1] != 4 {
-		t.Errorf("missing = %v, want [1 4]", missing)
-	}
-	if len(extra) != 1 || extra[0] != 3 {
-		t.Errorf("extra = %v, want [3]", extra)
-	}
-}
-
 // Clients created under the old @firex suffix must be renamed in place, not
 // duplicated or left unreachable: 3x-ui matches emails case-insensitively when
 // checking for duplicates but finds path-keyed clients only by exact spelling.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -26,13 +27,16 @@ func TestConfigurationPreservesOptionsWithoutClientAccounts(t *testing.T) {
 		if strings.Contains(config, "alice") || strings.Contains(config, "user-secret") || strings.Contains(config, "clientStats") {
 			t.Fatalf("client data in configuration: %s", config)
 		}
-		for _, want := range []string{`"futureTopLevel":true`, `"futureOption":{"value":42}`, `"privateKey":"server-key"`, `"settings":{"decryption":"none"}`} {
+		for _, want := range []string{`"futureTopLevel":true`, `"futureOption":{"value":42}`, `"privateKey":"server-key"`, `"network":"raw"`, `"security":"reality"`, `"settings":{"decryption":"none"}`, `"sniffing":{"enabled":true}`} {
 			if !strings.Contains(config, want) {
 				t.Errorf("missing %s in %s", want, config)
 			}
 		}
 		if inbound.ClientFlows()["alice"] != VisionFlow {
 			t.Error("configuration extraction changed the live clients")
+		}
+		if got := InboundMembership([]Inbound{inbound})["alice"]; !slices.Equal(got, []int{7}) {
+			t.Errorf("membership = %v, want [7]", got)
 		}
 	}
 }
