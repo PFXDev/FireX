@@ -6,6 +6,7 @@ import {
   PlugZapIcon,
   PlusIcon,
   RefreshCwIcon,
+  RotateCcwIcon,
   ServerOffIcon,
   Trash2Icon,
 } from 'lucide-react'
@@ -42,7 +43,8 @@ import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { errorMessage, formatTime } from '@/lib/format'
+import { bytesToGb, errorMessage, formatBytes, formatQuota, formatTime, gbToBytes } from '@/lib/format'
+import { reportSyncError } from '@/lib/sync'
 import { useSession } from '@/lib/session'
 
 type Draft = {
@@ -53,11 +55,13 @@ type Draft = {
   skipTlsVerify: boolean
   enabled: boolean
   remark: string
+  trafficLimitGb: number
+  trafficResetDay: number
 }
 
 type LoadState = 'loading' | 'ready' | 'error'
-type PendingAction = 'test' | 'save' | 'delete'
-type DraftErrors = Partial<Record<'name' | 'baseUrl' | 'apiToken', string>>
+type PendingAction = 'test' | 'save' | 'delete' | 'reset'
+type DraftErrors = Partial<Record<'name' | 'baseUrl' | 'apiToken' | 'trafficLimitGb' | 'trafficResetDay', string>>
 
 const emptyDraft: Draft = {
   name: '',
@@ -66,6 +70,8 @@ const emptyDraft: Draft = {
   skipTlsVerify: false,
   enabled: true,
   remark: '',
+  trafficLimitGb: 0,
+  trafficResetDay: 0,
 }
 
 function validateDraft(draft: Draft): DraftErrors {
@@ -87,6 +93,12 @@ function validateDraft(draft: Draft): DraftErrors {
   if (draft.id === undefined && !draft.apiToken.trim()) {
     errors.apiToken = '新增面板时必须填写 API Token。'
   }
+  if (!Number.isFinite(draft.trafficLimitGb) || draft.trafficLimitGb < 0) {
+    errors.trafficLimitGb = '流量上限不能为负数。'
+  }
+  if (!Number.isInteger(draft.trafficResetDay) || draft.trafficResetDay < 0 || draft.trafficResetDay > 31) {
+    errors.trafficResetDay = '重置日需在 0 到 31 之间。'
+  }
   return errors
 }
 
@@ -99,6 +111,7 @@ export function PanelsPage() {
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
   const [discovering, setDiscovering] = useState<Set<number>>(new Set())
   const [pendingDelete, setPendingDelete] = useState<Panel | null>(null)
+  const [pendingReset, setPendingReset] = useState<Panel | null>(null)
   const { readOnly } = useSession()
 
   const load = useCallback(async () => {
@@ -148,6 +161,8 @@ export function PanelsPage() {
       skipTlsVerify: panel.skipTlsVerify,
       enabled: panel.enabled,
       remark: panel.remark,
+      trafficLimitGb: bytesToGb(panel.trafficLimit),
+      trafficResetDay: panel.trafficResetDay,
     })
   }
 
@@ -158,12 +173,15 @@ export function PanelsPage() {
     if (Object.keys(validateDraft(draft)).length > 0) return
 
     setPendingAction('save')
+    const { trafficLimitGb, ...rest } = draft
+    const body = { ...rest, trafficLimit: gbToBytes(trafficLimitGb) }
     try {
       if (draft.id !== undefined) {
-        await api.put(`/panels/${draft.id}`, draft)
+        const result = await api.put<{ syncError: string }>(`/panels/${draft.id}`, body)
         toast.success('已保存')
+        reportSyncError(result.syncError)
       } else {
-        const result = await api.post<{ discoverError: string }>('/panels', draft)
+        const result = await api.post<{ discoverError: string }>('/panels', body)
         if (result.discoverError) toast.error(`已添加，但拉取节点失败：${result.discoverError}`)
         else toast.success('已添加并同步入站')
       }
@@ -208,6 +226,21 @@ export function PanelsPage() {
         next.delete(panel.id)
         return next
       })
+    }
+  }
+
+  const resetTraffic = async (panel: Panel) => {
+    setPendingAction('reset')
+    try {
+      const result = await api.post<{ syncError: string }>(`/panels/${panel.id}/resetTraffic`)
+      if (result.syncError) toast.error(`已清零，但恢复客户端时出错：${result.syncError}`, { duration: 10000 })
+      else toast.success('已清零本周期流量')
+      await refreshAfterMutation()
+    } catch (err) {
+      toast.error(errorMessage(err, '清零失败'))
+      throw err
+    } finally {
+      setPendingAction(null)
     }
   }
 
@@ -270,7 +303,8 @@ export function PanelsPage() {
                 { label: '地址', className: 'hidden lg:table-cell', width: 'w-48' },
                 { label: '状态', width: 'w-14' },
                 { label: '入站', className: 'hidden md:table-cell', width: 'w-12' },
-                { label: 'Xray', className: 'hidden xl:table-cell', width: 'w-20' },
+                { label: '流量', width: 'w-24' },
+                { label: 'Xray', className: 'hidden 2xl:table-cell', width: 'w-20' },
                 { label: '最近连通', className: 'hidden lg:table-cell', width: 'w-32' },
                 { width: 'w-24' },
               ]}
@@ -307,7 +341,8 @@ export function PanelsPage() {
                   <TableHead className="hidden lg:table-cell">地址</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead className="hidden md:table-cell">入站</TableHead>
-                  <TableHead className="hidden xl:table-cell">Xray</TableHead>
+                  <TableHead>流量</TableHead>
+                  <TableHead className="hidden 2xl:table-cell">Xray</TableHead>
                   <TableHead className="hidden lg:table-cell">最近连通</TableHead>
                   {!readOnly && (
                     <TableHead>
@@ -340,7 +375,7 @@ export function PanelsPage() {
                           <PanelStatusBadge status={panel.status} />
                           {panel.lastError && (
                             <CodeText
-                              className="max-w-40 truncate xl:max-w-72"
+                              className="max-w-40 truncate xl:max-w-56"
                               title={panel.lastError}
                             >
                               {panel.lastError}
@@ -351,7 +386,10 @@ export function PanelsPage() {
                       <TableCell className="hidden tabular-nums md:table-cell">
                         {panel.enabledInbounds} / {panel.inboundCount}
                       </TableCell>
-                      <TableCell className="hidden text-muted-foreground xl:table-cell">{panel.xrayVersion || '—'}</TableCell>
+                      <TableCell>
+                        <PanelTraffic panel={panel} />
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground 2xl:table-cell">{panel.xrayVersion || '—'}</TableCell>
                       <TableCell className="hidden text-muted-foreground lg:table-cell">{formatTime(panel.lastSeenAt)}</TableCell>
                       {!readOnly && (
                         <TableCell>
@@ -370,6 +408,18 @@ export function PanelsPage() {
                                 <RefreshCwIcon data-icon="inline-start" />
                               )}
                               <span className="hidden 2xl:inline">{discoveringPanel ? '同步中…' : '拉取入站'}</span>
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              aria-label={`清零 ${panel.name} 本周期的流量`}
+                              title="清零本周期流量"
+                              disabled={discoveringPanel || pendingAction !== null || panel.used <= 0}
+                              onClick={() => setPendingReset(panel)}
+                            >
+                              <RotateCcwIcon data-icon="inline-start" />
+                              <span className="hidden 2xl:inline">清零流量</span>
                             </Button>
                             <Button
                               type="button"
@@ -492,6 +542,56 @@ export function PanelsPage() {
                     onChange={(event) => setDraft({ ...draft, remark: event.target.value })}
                   />
                 </Field>
+                <FieldGroup className="sm:grid sm:grid-cols-2">
+                  <Field
+                    data-invalid={(validationAttempted && !!draftErrors.trafficLimitGb) || undefined}
+                    data-disabled={dialogPending || undefined}
+                  >
+                    <FieldLabel htmlFor="panel-traffic-limit">流量上限 (GB)</FieldLabel>
+                    <Input
+                      id="panel-traffic-limit"
+                      type="number"
+                      min={0}
+                      step="any"
+                      disabled={dialogPending}
+                      value={draft.trafficLimitGb}
+                      aria-invalid={(validationAttempted && !!draftErrors.trafficLimitGb) || undefined}
+                      onChange={(event) => setDraft({ ...draft, trafficLimitGb: Number(event.target.value) })}
+                    />
+                    {validationAttempted && draftErrors.trafficLimitGb ? (
+                      <FieldError>{draftErrors.trafficLimitGb}</FieldError>
+                    ) : (
+                      <FieldDescription>所有 FireX 用户在此面板的合计用量，0 表示不限。用满后停用全部客户端，直到下个周期。</FieldDescription>
+                    )}
+                  </Field>
+                  <Field
+                    data-invalid={(validationAttempted && !!draftErrors.trafficResetDay) || undefined}
+                    data-disabled={dialogPending || undefined}
+                  >
+                    <FieldLabel htmlFor="panel-reset-day">每月重置日</FieldLabel>
+                    <Input
+                      id="panel-reset-day"
+                      type="number"
+                      min={0}
+                      max={31}
+                      step={1}
+                      disabled={dialogPending}
+                      value={draft.trafficResetDay}
+                      aria-invalid={(validationAttempted && !!draftErrors.trafficResetDay) || undefined}
+                      onChange={(event) => setDraft({ ...draft, trafficResetDay: Number(event.target.value) })}
+                    />
+                    {validationAttempted && draftErrors.trafficResetDay ? (
+                      <FieldError>{draftErrors.trafficResetDay}</FieldError>
+                    ) : (
+                      <FieldDescription>
+                        每月这一天 0 点清零，0 表示只手动清零；小月按月末算。
+                        {draft.id !== undefined &&
+                          draft.trafficResetDay !== panels.find((panel) => panel.id === draft.id)?.trafficResetDay &&
+                          ' 修改后从现在开始计算新周期。'}
+                      </FieldDescription>
+                    )}
+                  </Field>
+                </FieldGroup>
                 <Field orientation="horizontal" data-disabled={dialogPending || undefined}>
                   <FieldLabel htmlFor="panel-skip-tls">跳过 TLS 证书校验</FieldLabel>
                   <Switch
@@ -534,6 +634,17 @@ export function PanelsPage() {
       </Dialog>
 
       <ConfirmDialog
+        open={pendingReset !== null}
+        onOpenChange={(open) => !open && setPendingReset(null)}
+        title={`清零面板「${pendingReset?.name ?? ''}」本周期的流量？`}
+        description="面板合计用量从 0 重新计算，因面板用满而停用的客户端会恢复。用户自己的套餐用量不受影响。"
+        confirmLabel="清零"
+        onConfirm={async () => {
+          if (pendingReset) await resetTraffic(pendingReset)
+        }}
+      />
+
+      <ConfirmDialog
         open={pendingDelete !== null}
         onOpenChange={(open) => !open && setPendingDelete(null)}
         title={`删除面板「${pendingDelete?.name ?? ''}」？`}
@@ -547,3 +658,26 @@ export function PanelsPage() {
   )
 }
 
+
+function PanelTraffic({ panel }: { panel: Panel }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="whitespace-nowrap tabular-nums">
+        {formatBytes(panel.used)}
+        {panel.trafficLimit > 0 && <span className="text-muted-foreground"> / {formatQuota(panel.trafficLimit)}</span>}
+      </span>
+      {panel.overQuota ? (
+        <StatusBadge tone="bad" title="面板的入站已从所有订阅中移除，客户端已停用">
+          已用满
+        </StatusBadge>
+      ) : (
+        <span className="text-xs text-muted-foreground">{panel.userCount} 个用户</span>
+      )}
+      {panel.nextTrafficReset > 0 && (
+        <span className="whitespace-nowrap text-xs text-muted-foreground">
+          {new Date(panel.nextTrafficReset).toLocaleDateString('zh-CN')} 重置
+        </span>
+      )}
+    </div>
+  )
+}

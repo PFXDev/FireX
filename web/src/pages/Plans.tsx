@@ -3,7 +3,7 @@ import { PencilIcon, PlusIcon, TicketIcon, Trash2Icon, TriangleAlertIcon } from 
 import { toast } from 'sonner'
 
 import { api } from '@/api'
-import type { Plan, Profile, TrafficReset } from '@/api'
+import type { Panel, Plan, Profile, TrafficReset } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
@@ -28,7 +28,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
@@ -51,6 +51,8 @@ type Draft = {
   sortOrder: number
   remark: string
   profileId: number
+  /** Per-user cap on each panel in GB, keyed by panel id; 0 or absent = none. */
+  panelLimitsGb: Record<number, number>
 }
 
 const trafficResetItems = (Object.keys(TRAFFIC_RESET_LABELS) as TrafficReset[]).map((value) => ({
@@ -69,6 +71,7 @@ const emptyDraft: Draft = {
   sortOrder: 100,
   remark: '',
   profileId: 0,
+  panelLimitsGb: {},
 }
 
 export function PlansPage() {
@@ -77,6 +80,9 @@ export function PlansPage() {
   const { isSuperAdmin } = useSession()
   const [plans, setPlans] = useState<Plan[]>([])
   const [profiles, setProfiles] = useState<Profile[]>([])
+  // Null when the panel list is unavailable (an operator without config
+  // access); the plan's caps are then shown but never sent back.
+  const [panels, setPanels] = useState<Panel[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -87,12 +93,14 @@ export function PlansPage() {
 
   const load = useCallback(async () => {
     try {
-      const [nextPlans, nextProfiles] = await Promise.all([
+      const [nextPlans, nextProfiles, nextPanels] = await Promise.all([
         api.get<Plan[]>('/plans'),
         api.get<Profile[]>('/profiles'),
+        api.get<Panel[]>('/panels', { unauthorized: 'ignore' }).catch(() => null),
       ])
       setPlans(nextPlans)
       setProfiles(nextProfiles)
+      setPanels(nextPanels)
       setLoadError(null)
       return true
     } catch (err) {
@@ -134,6 +142,7 @@ export function PlansPage() {
       sortOrder: plan.sortOrder,
       remark: plan.remark,
       profileId: plan.profileId,
+      panelLimitsGb: Object.fromEntries(plan.panelLimits.map((limit) => [limit.panelId, bytesToGb(limit.trafficBytes)])),
     })
   }
 
@@ -156,6 +165,11 @@ export function PlansPage() {
       sortOrder: draft.sortOrder,
       remark: draft.remark,
       profileId: draft.profileId,
+      // Only panels that still exist; the server rejects unknown ids and
+      // drops zero caps.
+      panelLimits: panels
+        ?.map((panel) => ({ panelId: panel.id, trafficBytes: gbToBytes(draft.panelLimitsGb[panel.id] ?? 0) }))
+        .filter((limit) => limit.trafficBytes > 0),
     }
 
     try {
@@ -297,6 +311,16 @@ export function PlansPage() {
                           <span className="tabular-nums">{formatQuota(plan.trafficBytes)}</span>
                           {plan.trafficReset && plan.trafficReset !== 'none' && (
                             <span className="text-xs text-muted-foreground">{TRAFFIC_RESET_LABELS[plan.trafficReset]}重置</span>
+                          )}
+                          {plan.panelLimits.length > 0 && (
+                            <span
+                              className="text-xs text-muted-foreground"
+                              title={plan.panelLimits
+                                .map((limit) => `${panels?.find((panel) => panel.id === limit.panelId)?.name ?? `#${limit.panelId}`}：${formatQuota(limit.trafficBytes)}`)
+                                .join('\n')}
+                            >
+                              {plan.panelLimits.length} 个面板单独限额
+                            </span>
                           )}
                         </div>
                       </TableCell>
@@ -446,6 +470,39 @@ export function PlansPage() {
                       ' 修改后从现在开始按新规则计算，不会立即清零现有用量。'}
                   </FieldDescription>
                 </Field>
+
+                {panels && panels.length > 0 && (
+                  <FieldSet data-disabled={saving || undefined}>
+                    <FieldLegend variant="label">单面板流量上限 (GB)</FieldLegend>
+                    <FieldDescription>
+                      每个用户在该面板上的用量上限，0 表示只受套餐总流量约束。用满后只停用这个面板，随用户流量一起重置。
+                    </FieldDescription>
+                    <FieldGroup className="gap-3 sm:grid sm:grid-cols-2">
+                      {panels.map((panel) => (
+                        <Field key={panel.id} orientation="horizontal" data-disabled={saving || undefined}>
+                          <FieldLabel htmlFor={`plan-panel-limit-${panel.id}`} className="min-w-0 flex-1 truncate" title={panel.name}>
+                            {panel.name}
+                          </FieldLabel>
+                          <Input
+                            id={`plan-panel-limit-${panel.id}`}
+                            className="w-28"
+                            type="number"
+                            min={0}
+                            step="any"
+                            disabled={saving}
+                            value={draft.panelLimitsGb[panel.id] ?? 0}
+                            onChange={(event) =>
+                              setDraft({
+                                ...draft,
+                                panelLimitsGb: { ...draft.panelLimitsGb, [panel.id]: Number(event.target.value) },
+                              })
+                            }
+                          />
+                        </Field>
+                      ))}
+                    </FieldGroup>
+                  </FieldSet>
+                )}
 
                 <FieldGroup className="sm:grid sm:grid-cols-2">
                   <Field data-disabled={saving || undefined}>

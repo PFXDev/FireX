@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -79,6 +80,13 @@ func (s *Service) Build(ctx context.Context, u *model.User) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A panel out of quota, the user's or its own, has disabled their client
+	// there; leaving its inbounds in would hand the client dead proxies.
+	blocked, err := s.mgr.BlockedPanels(u)
+	if err != nil {
+		return nil, err
+	}
+	inbounds = slices.DeleteFunc(inbounds, func(n model.Inbound) bool { return blocked[n.PanelID] != "" })
 	result := &Result{User: u}
 	if len(inbounds) == 0 {
 		return result, nil

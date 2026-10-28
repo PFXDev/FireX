@@ -18,7 +18,7 @@ import {
 import { toast } from 'sonner'
 
 import { api } from '@/api'
-import type { Plan, SubscriptionPreview, User } from '@/api'
+import type { Plan, SubscriptionPreview, User, UserPanelUsage } from '@/api'
 import { CodeText, CodeTextarea } from '@/components/code-display'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
@@ -447,6 +447,7 @@ export function UsersPage() {
                                 {new Date(user.nextTrafficReset).toLocaleDateString('zh-CN')} 重置
                               </span>
                             )}
+                            <PanelUsage user={user} />
                           </div>
                         </TableCell>
                         <TableCell className="hidden text-muted-foreground md:table-cell">{formatExpiry(user.expiresAt)}</TableCell>
@@ -799,5 +800,58 @@ function UserStatuses({ user }: { user: User }) {
       )}
       {user.syncState === 'pending' && <StatusBadge tone="warn">待下发</StatusBadge>}
     </div>
+  )
+}
+
+const PANEL_BLOCKED_LABELS: Record<string, string> = {
+  'panel-quota': '面板总流量已用满',
+  'user-panel-quota': '已用满套餐在该面板的限额',
+}
+
+/**
+ * PanelUsage summarizes the user's usage on each panel in one line and puts
+ * the per-panel breakdown in a tooltip, so a closed panel shows in the list.
+ */
+function PanelUsage({ user }: { user: User }) {
+  const panels = user.panels ?? []
+  if (panels.length === 0) return null
+  const blocked = panels.filter((panel) => panel.blocked)
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            className="w-fit text-left text-xs text-muted-foreground underline decoration-dotted underline-offset-2"
+            aria-label={`${user.username} 在各面板的用量`}
+          />
+        }
+      >
+        {panels.length} 个面板
+        {blocked.length > 0 && <span className="text-destructive">，{blocked.length} 个已停用</span>}
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-sm">
+        <ul className="flex flex-col gap-1.5">
+          {panels.map((panel) => (
+            <PanelUsageLine key={panel.panelId} panel={panel} />
+          ))}
+        </ul>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function PanelUsageLine({ panel }: { panel: UserPanelUsage }) {
+  return (
+    <li className="flex flex-col">
+      <span className="flex flex-wrap items-baseline gap-x-2">
+        <span className="font-medium">{panel.panelName || `#${panel.panelId}`}</span>
+        <span className="tabular-nums">
+          {formatBytes(panel.upload + panel.download)}
+          {panel.limit > 0 && ` / ${formatQuota(panel.limit)}`}
+        </span>
+      </span>
+      {panel.blocked && <span>{PANEL_BLOCKED_LABELS[panel.blocked] ?? panel.blocked}，已停用</span>}
+    </li>
   )
 }

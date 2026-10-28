@@ -117,6 +117,7 @@ func (s *Server) routes() {
 	authed.PUT("/panels/:id", s.superAdminOnly, s.updatePanel)
 	authed.DELETE("/panels/:id", s.superAdminOnly, s.deletePanel)
 	authed.POST("/panels/:id/discover", s.superAdminOnly, s.discoverPanel)
+	authed.POST("/panels/:id/resetTraffic", s.superAdminOnly, s.resetPanelTraffic)
 	authed.POST("/panels/test", s.superAdminOnly, s.testPanel)
 
 	authed.GET("/inbounds", s.configViewer, s.listInbounds)

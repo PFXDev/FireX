@@ -275,6 +275,18 @@ func (m *Manager) DesiredFor(u *model.User) (map[uint]desiredClient, error) {
 		return nil, err
 	}
 
+	blocked, err := m.blockedPanels(u, plan)
+	if err != nil {
+		return nil, err
+	}
+	panelLimits, err := m.planPanelLimits(plan)
+	if err != nil {
+		return nil, err
+	}
+
+	// A panel out of quota keeps the user's client, disabled, rather than
+	// deleting it: the panel's counters and FireX's baselines stay intact for
+	// when the period starts over.
 	active := u.Active(NowMs())
 	byPanel := map[uint][]int{}
 	flows := map[uint]map[int]string{}
@@ -289,7 +301,7 @@ func (m *Manager) DesiredFor(u *model.User) (map[uint]desiredClient, error) {
 		flow := ""
 		// Disabling an expired/blocked account must still work if the panel
 		// changed this inbound to a transport that no longer accepts Vision.
-		if *n.Vision && active {
+		if *n.Vision && active && blocked[n.PanelID] == "" {
 			flow = panel.VisionFlow
 		}
 		flows[n.PanelID][n.RemoteID] = flow
@@ -303,24 +315,93 @@ func (m *Manager) DesiredFor(u *model.User) (map[uint]desiredClient, error) {
 	out := make(map[uint]desiredClient, len(byPanel))
 	for panelID, inboundIDs := range byPanel {
 		sort.Ints(inboundIDs)
+		// A per-panel cap equal to the global limit bounds the damage between
+		// traffic polls; FireX still disables globally once the aggregate
+		// across panels crosses the same line. A tighter per-panel quota caps
+		// the panel at that instead.
+		totalGB := u.TrafficLimit
+		if limit := panelLimits[panelID]; limit > 0 && (totalGB == 0 || limit < totalGB) {
+			totalGB = limit
+		}
 		out[panelID] = desiredClient{
 			InboundIDs: inboundIDs,
 			Flows:      flows[panelID],
 			Client: panel.RemoteClient{
-				ID:       u.UUID,
-				Password: u.UUID,
-				Email:    EmailFor(u),
-				LimitIP:  limitIP,
-				// A per-panel cap equal to the global limit bounds the damage
-				// between traffic polls; FireX still disables globally once the
-				// aggregate across panels crosses the same line.
-				TotalGB:    u.TrafficLimit,
+				ID:         u.UUID,
+				Password:   u.UUID,
+				Email:      EmailFor(u),
+				LimitIP:    limitIP,
+				TotalGB:    totalGB,
 				ExpiryTime: u.ExpiresAt,
-				Enable:     active,
+				Enable:     active && blocked[panelID] == "",
 				Group:      ClientGroup,
 				Comment:    "FireX:" + u.Username,
 			},
 		}
+	}
+	return out, nil
+}
+
+// Reasons a granted panel is closed to a user, from BlockedPanels.
+const (
+	// BlockedPanelQuota means the panel used up its own period's traffic.
+	BlockedPanelQuota = "panel-quota"
+	// BlockedUserPanelQuota means the user used up their plan's quota on
+	// this panel.
+	BlockedUserPanelQuota = "user-panel-quota"
+)
+
+// BlockedPanels maps each panel the user may not use right now, although their
+// plan grants it, to the reason. Their client there is disabled and the
+// panel's inbounds are left out of their subscription.
+func (m *Manager) BlockedPanels(u *model.User) (map[uint]string, error) {
+	plan, err := m.planFor(u)
+	if err != nil {
+		return nil, err
+	}
+	return m.blockedPanels(u, plan)
+}
+
+func (m *Manager) blockedPanels(u *model.User, plan *model.Plan) (map[uint]string, error) {
+	out := map[uint]string{}
+	var full []uint
+	if err := m.db.Model(&model.Panel{}).
+		Where("traffic_limit > 0 AND upload + download >= traffic_limit").
+		Pluck("id", &full).Error; err != nil {
+		return nil, err
+	}
+	for _, id := range full {
+		out[id] = BlockedPanelQuota
+	}
+	limits, err := m.planPanelLimits(plan)
+	if err != nil || len(limits) == 0 {
+		return out, err
+	}
+	var records []model.UserPanel
+	if err := m.db.Where("user_id = ?", u.ID).Find(&records).Error; err != nil {
+		return nil, err
+	}
+	for _, rec := range records {
+		limit := limits[rec.PanelID]
+		if limit > 0 && rec.Upload+rec.Download >= limit && out[rec.PanelID] == "" {
+			out[rec.PanelID] = BlockedUserPanelQuota
+		}
+	}
+	return out, nil
+}
+
+// planPanelLimits maps panel id to the plan's per-user quota there.
+func (m *Manager) planPanelLimits(plan *model.Plan) (map[uint]int64, error) {
+	if plan == nil {
+		return nil, nil
+	}
+	var rows []model.PlanPanelLimit
+	if err := m.db.Where("plan_id = ? AND traffic_bytes > 0", plan.ID).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[uint]int64, len(rows))
+	for _, r := range rows {
+		out[r.PanelID] = r.TrafficBytes
 	}
 	return out, nil
 }
@@ -514,7 +595,7 @@ func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.
 // record was read before the panel round-trips, and a poll or reset may have
 // moved the baselines since.
 func (m *Manager) saveRecord(record *model.UserPanel) error {
-	return m.db.Omit("last_up", "last_down", "reset_pending").Save(record).Error
+	return m.db.Omit("last_up", "last_down", "reset_pending", "upload", "download").Save(record).Error
 }
 
 // syncClientFlows addresses the client as remote, its spelling on the panel.
@@ -669,6 +750,7 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 			}
 			continue
 		}
+		var panelUp, panelDown int64
 		for j := range records {
 			rec := &records[j]
 			st, ok := stats[strings.ToLower(rec.Email)]
@@ -677,6 +759,7 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 			}
 			dUp := counterDelta(rec.LastUp, st.Up)
 			dDown := counterDelta(rec.LastDown, st.Down)
+			panelUp, panelDown = panelUp+dUp, panelDown+dDown
 			rec.LastUp, rec.LastDown = st.Up, st.Down
 			rec.UpdatedAt = NowMs()
 			// A reset the panel missed is retried here. Until it lands the
@@ -692,6 +775,8 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 					"last_down":     rec.LastDown,
 					"reset_pending": rec.ResetPending,
 					"updated_at":    rec.UpdatedAt,
+					"upload":        gorm.Expr("upload + ?", dUp),
+					"download":      gorm.Expr("download + ?", dDown),
 				}).Error; err != nil && firstErr == nil {
 				firstErr = err
 			}
@@ -708,6 +793,16 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 				firstErr = err
 			}
 		}
+		if panelUp == 0 && panelDown == 0 {
+			continue
+		}
+		if err := m.db.Model(&model.Panel{}).Where("id = ?", p.ID).
+			UpdateColumns(map[string]any{
+				"upload":   gorm.Expr("upload + ?", panelUp),
+				"download": gorm.Expr("download + ?", panelDown),
+			}).Error; err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 
 	// Resets run after the counters are folded in, so the usage that closes a
@@ -715,6 +810,11 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 	if err := m.resetDueTraffic(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}
+	if err := m.resetDuePanelTraffic(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	// Enforcement also catches panels and per-panel quotas that just filled
+	// up or started over: either changes the client a user should hold there.
 	if err := m.EnforceLimits(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}
@@ -749,9 +849,10 @@ func (m *Manager) resetTraffic(ctx context.Context, u *model.User, at int64) (in
 		}
 		// Zero the baselines only once the panel has zeroed its counter;
 		// otherwise its next reading would be counted from zero again.
-		updates := map[string]any{"reset_pending": true}
+		// The per-panel usage starts over either way, like the user's total.
+		updates := map[string]any{"upload": 0, "download": 0, "reset_pending": true}
 		if err == nil {
-			updates = map[string]any{"last_up": 0, "last_down": 0, "reset_pending": false}
+			updates["last_up"], updates["last_down"], updates["reset_pending"] = 0, 0, false
 		} else {
 			missed++
 		}
@@ -807,6 +908,56 @@ func (m *Manager) resetDueTraffic(ctx context.Context) error {
 		}
 	}
 	return firstErr
+}
+
+// resetDuePanelTraffic starts a new period for every panel whose monthly
+// reset day has passed. Like users, a panel that missed several boundaries
+// while FireX was down resets once. The EnforceLimits pass that follows brings
+// its users back online.
+func (m *Manager) resetDuePanelTraffic() error {
+	var panels []model.Panel
+	if err := m.db.Where("traffic_reset_day > 0").Find(&panels).Error; err != nil {
+		return err
+	}
+	now := m.now().UnixMilli()
+	var firstErr error
+	for i := range panels {
+		next := panels[i].NextTrafficReset(m.loc)
+		if next == 0 || next > now {
+			continue
+		}
+		if err := m.resetPanelTraffic(panels[i].ID, now); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// ResetPanelTraffic starts a new period for the panel now and pushes its users
+// back online if the panel's quota was what held them. Users' own counters,
+// including their usage on this panel, are left alone: those follow each
+// user's plan.
+func (m *Manager) ResetPanelTraffic(ctx context.Context, panelID uint) error {
+	defer m.busy()()
+	m.trafficMu.Lock()
+	err := m.resetPanelTraffic(panelID, m.now().UnixMilli())
+	m.trafficMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return m.EnforceLimits(ctx)
+}
+
+// resetPanelTraffic needs trafficMu held.
+func (m *Manager) resetPanelTraffic(panelID uint, at int64) error {
+	return m.db.Model(&model.Panel{}).Where("id = ?", panelID).Updates(map[string]any{
+		"upload": 0, "download": 0, "traffic_period_start": at, "updated_at": at,
+	}).Error
+}
+
+// NextPanelTrafficReset is when the panel's usage next starts over, or 0.
+func (m *Manager) NextPanelTrafficReset(p *model.Panel) int64 {
+	return p.NextTrafficReset(m.loc)
 }
 
 // NextTrafficReset is when the user's usage next starts over under their

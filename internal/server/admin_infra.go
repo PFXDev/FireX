@@ -48,6 +48,38 @@ type panelRequest struct {
 	SkipTLSVerify bool   `json:"skipTlsVerify"`
 	Enabled       *bool  `json:"enabled"`
 	Remark        string `json:"remark"`
+	// Nil keeps the stored quota, so a client that predates them cannot
+	// clear one by omission.
+	TrafficLimit    *int64 `json:"trafficLimit"`
+	TrafficResetDay *int   `json:"trafficResetDay"`
+}
+
+// applyPanelQuota copies the request's quota onto p, reporting whether it
+// changed anything enforcement depends on.
+func applyPanelQuota(c *gin.Context, p *model.Panel, req panelRequest, now int64) (changed, ok bool) {
+	if req.TrafficLimit != nil {
+		if *req.TrafficLimit < 0 {
+			failMsg(c, http.StatusBadRequest, "trafficLimit must not be negative")
+			return false, false
+		}
+		changed = *req.TrafficLimit != p.TrafficLimit
+		p.TrafficLimit = *req.TrafficLimit
+	}
+	if req.TrafficResetDay != nil {
+		day := *req.TrafficResetDay
+		if day < 0 || day > 31 {
+			failMsg(c, http.StatusBadRequest, "trafficResetDay must be between 0 and 31")
+			return false, false
+		}
+		if day != p.TrafficResetDay {
+			// Count the new schedule from now, as a plan does: measured from
+			// the panel's creation, a passed boundary would wipe the period's
+			// usage on the next poll.
+			p.TrafficPeriodStart = now
+		}
+		p.TrafficResetDay = day
+	}
+	return changed, true
 }
 
 func (s *Server) listPanels(c *gin.Context) {
@@ -60,12 +92,23 @@ func (s *Server) listPanels(c *gin.Context) {
 		model.Panel
 		InboundCount    int64 `json:"inboundCount"`
 		EnabledInbounds int64 `json:"enabledInbounds"`
+		// UserCount is how many FireX users hold a client here.
+		UserCount int64 `json:"userCount"`
+		// Used is Upload+Download; OverQuota means the panel's inbounds are
+		// out of every subscription until NextTrafficReset (0 for never).
+		Used             int64 `json:"used"`
+		OverQuota        bool  `json:"overQuota"`
+		NextTrafficReset int64 `json:"nextTrafficReset"`
 	}
 	out := make([]row, 0, len(panels))
 	for _, p := range panels {
-		r := row{Panel: p}
+		r := row{
+			Panel: p, Used: p.Upload + p.Download, OverQuota: p.OverQuota(),
+			NextTrafficReset: s.mgr.NextPanelTrafficReset(&p),
+		}
 		s.db.Model(&model.Inbound{}).Where("panel_id = ?", p.ID).Count(&r.InboundCount)
 		s.db.Model(&model.Inbound{}).Where("panel_id = ? AND enabled = ? AND missing = ?", p.ID, true, false).Count(&r.EnabledInbounds)
+		s.db.Model(&model.UserPanel{}).Where("panel_id = ?", p.ID).Count(&r.UserCount)
 		// The token is a panel-wide admin credential; never echo it back.
 		r.APIToken = ""
 		out = append(out, r)
@@ -94,6 +137,9 @@ func (s *Server) createPanel(c *gin.Context) {
 		Status:        model.PanelStatusUnknown,
 		CreatedAt:     now,
 		UpdatedAt:     now,
+	}
+	if _, ok := applyPanelQuota(c, &p, req, now); !ok {
+		return
 	}
 	if err := s.db.Create(&p).Error; err != nil {
 		fail(c, http.StatusBadRequest, err)
@@ -139,14 +185,47 @@ func (s *Server) updatePanel(c *gin.Context) {
 	}
 	p.Remark = req.Remark
 	p.UpdatedAt = provision.NowMs()
-	if err := s.db.Save(&p).Error; err != nil {
+	quotaChanged, ok := applyPanelQuota(c, &p, req, p.UpdatedAt)
+	if !ok {
+		return
+	}
+	// The traffic collector owns the usage columns; an edit must not write
+	// back the counters it read before a poll moved them.
+	if err := s.db.Omit("upload", "download").Save(&p).Error; err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
 	s.mgr.Invalidate(p.ID)
 	s.subs.InvalidateAll()
+
+	// A raised or lifted quota has to bring the panel's users back now, and a
+	// lowered one take them off, rather than on the next traffic poll.
+	var syncErr error
+	if quotaChanged {
+		ctx, cancel := opCtx()
+		defer cancel()
+		syncErr = s.mgr.EnforceLimits(ctx)
+	}
 	p.APIToken = ""
-	c.JSON(http.StatusOK, p)
+	c.JSON(http.StatusOK, gin.H{"panel": p, "syncError": errString(syncErr)})
+}
+
+// resetPanelTraffic starts the panel's traffic period over now.
+func (s *Server) resetPanelTraffic(c *gin.Context) {
+	id, ok := paramID(c)
+	if !ok {
+		return
+	}
+	var p model.Panel
+	if err := s.db.First(&p, id).Error; err != nil {
+		failMsg(c, http.StatusNotFound, "panel not found")
+		return
+	}
+	ctx, cancel := opCtx()
+	defer cancel()
+	syncErr := s.mgr.ResetPanelTraffic(ctx, p.ID)
+	s.subs.InvalidateAll()
+	c.JSON(http.StatusOK, gin.H{"ok": true, "syncError": errString(syncErr)})
 }
 
 func (s *Server) deletePanel(c *gin.Context) {
@@ -201,6 +280,7 @@ func deletePanelRows(handle *gorm.DB, panelID uint) error {
 	}
 	handle.Where("panel_id = ?", panelID).Delete(&model.Inbound{})
 	handle.Where("panel_id = ?", panelID).Delete(&model.UserPanel{})
+	handle.Where("panel_id = ?", panelID).Delete(&model.PlanPanelLimit{})
 	return handle.Delete(&model.Panel{}, panelID).Error
 }
 

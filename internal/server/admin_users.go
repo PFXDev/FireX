@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/PFXDev/FireX/internal/model"
 	"github.com/PFXDev/FireX/internal/provision"
@@ -22,6 +23,8 @@ type planRow struct {
 	// routes nowhere is visible without opening the profile.
 	UsableInbounds int   `json:"usableInbounds"`
 	UserCount      int64 `json:"userCount"`
+	// PanelLimits are the plan's per-user caps on single panels.
+	PanelLimits []model.PlanPanelLimit `json:"panelLimits"`
 }
 
 type planRequest struct {
@@ -35,6 +38,50 @@ type planRequest struct {
 	Enabled      *bool  `json:"enabled"`
 	SortOrder    *int   `json:"sortOrder"`
 	Remark       string `json:"remark"`
+	// PanelLimits replaces the plan's per-panel caps when present; nil keeps
+	// them, so a client that predates them cannot clear them by omission.
+	PanelLimits []model.PlanPanelLimit `json:"panelLimits"`
+}
+
+// validPanelLimits drops zero caps, which mean "no cap here", and rejects
+// negative ones, repeated panels and panels that do not exist.
+func (s *Server) validPanelLimits(c *gin.Context, limits []model.PlanPanelLimit) ([]model.PlanPanelLimit, bool) {
+	out := make([]model.PlanPanelLimit, 0, len(limits))
+	seen := map[uint]bool{}
+	for _, l := range limits {
+		if l.TrafficBytes < 0 {
+			failMsg(c, http.StatusBadRequest, "panel traffic limit must not be negative")
+			return nil, false
+		}
+		if seen[l.PanelID] {
+			failMsg(c, http.StatusBadRequest, "panel listed twice in panelLimits")
+			return nil, false
+		}
+		seen[l.PanelID] = true
+		var count int64
+		if s.db.Model(&model.Panel{}).Where("id = ?", l.PanelID).Count(&count); count == 0 {
+			failMsg(c, http.StatusBadRequest, "panelLimits names a panel that does not exist")
+			return nil, false
+		}
+		if l.TrafficBytes > 0 {
+			out = append(out, model.PlanPanelLimit{PanelID: l.PanelID, TrafficBytes: l.TrafficBytes})
+		}
+	}
+	return out, true
+}
+
+// savePanelLimits replaces the plan's per-panel caps.
+func savePanelLimits(tx *gorm.DB, planID uint, limits []model.PlanPanelLimit) error {
+	if err := tx.Where("plan_id = ?", planID).Delete(&model.PlanPanelLimit{}).Error; err != nil {
+		return err
+	}
+	for i := range limits {
+		limits[i].PlanID = planID
+	}
+	if len(limits) == 0 {
+		return nil
+	}
+	return tx.Create(&limits).Error
 }
 
 func (s *Server) listPlans(c *gin.Context) {
@@ -49,9 +96,18 @@ func (s *Server) listPlans(c *gin.Context) {
 	for _, p := range profiles {
 		profileNames[p.ID] = p.Name
 	}
+	var limits []model.PlanPanelLimit
+	s.db.Order("panel_id ASC").Find(&limits)
+	limitsByPlan := map[uint][]model.PlanPanelLimit{}
+	for _, l := range limits {
+		limitsByPlan[l.PlanID] = append(limitsByPlan[l.PlanID], l)
+	}
 	out := make([]planRow, 0, len(plans))
 	for _, p := range plans {
-		row := planRow{Plan: p, ProfileName: profileNames[p.ProfileID]}
+		row := planRow{Plan: p, ProfileName: profileNames[p.ProfileID], PanelLimits: limitsByPlan[p.ID]}
+		if row.PanelLimits == nil {
+			row.PanelLimits = []model.PlanPanelLimit{}
+		}
 		s.db.Model(&model.User{}).Where("plan_id = ?", p.ID).Count(&row.UserCount)
 		inbounds, _ := routing.InboundsForProfile(s.db, p.ProfileID)
 		row.UsableInbounds = len(inbounds)
@@ -74,6 +130,10 @@ func (s *Server) createPlan(c *gin.Context) {
 	if !ok {
 		return
 	}
+	limits, ok := s.validPanelLimits(c, req.PanelLimits)
+	if !ok {
+		return
+	}
 	now := provision.NowMs()
 	plan := model.Plan{
 		Name:         strings.TrimSpace(req.Name),
@@ -89,7 +149,13 @@ func (s *Server) createPlan(c *gin.Context) {
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
-	if err := s.db.Create(&plan).Error; err != nil {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&plan).Error; err != nil {
+			return err
+		}
+		return savePanelLimits(tx, plan.ID, limits)
+	})
+	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
@@ -121,6 +187,12 @@ func (s *Server) updatePlan(c *gin.Context) {
 	if !ok {
 		return
 	}
+	var limits []model.PlanPanelLimit
+	if req.PanelLimits != nil {
+		if limits, ok = s.validPanelLimits(c, req.PanelLimits); !ok {
+			return
+		}
+	}
 	resetChanged := reset != plan.TrafficReset
 	plan.TrafficReset = reset
 	plan.TrafficBytes = req.TrafficBytes
@@ -135,7 +207,16 @@ func (s *Server) updatePlan(c *gin.Context) {
 	}
 	plan.Remark = req.Remark
 	plan.UpdatedAt = provision.NowMs()
-	if err := s.db.Save(&plan).Error; err != nil {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&plan).Error; err != nil {
+			return err
+		}
+		if req.PanelLimits == nil {
+			return nil
+		}
+		return savePanelLimits(tx, plan.ID, limits)
+	})
+	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
@@ -170,7 +251,13 @@ func (s *Server) deletePlan(c *gin.Context) {
 		failMsg(c, http.StatusConflict, "plan still has users; move them to another plan first")
 		return
 	}
-	if err := s.db.Delete(&model.Plan{}, id).Error; err != nil {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("plan_id = ?", id).Delete(&model.PlanPanelLimit{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&model.Plan{}, id).Error
+	})
+	if err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -191,6 +278,19 @@ type userRow struct {
 	SyncState        string   `json:"syncState"`
 	SyncError        []string `json:"syncErrors"`
 	SubURL           string   `json:"subUrl"`
+	// Panels is the user's usage on each panel they hold a client on this
+	// period, with the plan's cap there (0 for none) and, when the panel is
+	// closed to them, why.
+	Panels []userPanelUsage `json:"panels"`
+}
+
+type userPanelUsage struct {
+	PanelID   uint   `json:"panelId"`
+	PanelName string `json:"panelName"`
+	Upload    int64  `json:"upload"`
+	Download  int64  `json:"download"`
+	Limit     int64  `json:"limit"`
+	Blocked   string `json:"blocked"`
 }
 
 type userRequest struct {
@@ -216,6 +316,22 @@ func (s *Server) listUsers(c *gin.Context) {
 		plansByID[plans[i].ID] = &plans[i]
 	}
 
+	panelNames := map[uint]string{}
+	var panels []model.Panel
+	s.db.Select("id", "name").Find(&panels)
+	for _, p := range panels {
+		panelNames[p.ID] = p.Name
+	}
+	var limits []model.PlanPanelLimit
+	s.db.Find(&limits)
+	planLimits := map[uint]map[uint]int64{}
+	for _, l := range limits {
+		if planLimits[l.PlanID] == nil {
+			planLimits[l.PlanID] = map[uint]int64{}
+		}
+		planLimits[l.PlanID][l.PanelID] = l.TrafficBytes
+	}
+
 	base := s.subBase(c)
 	out := make([]userRow, 0, len(users))
 	for i := range users {
@@ -237,7 +353,16 @@ func (s *Server) listUsers(c *gin.Context) {
 		row.InboundCount = len(inbounds)
 
 		var records []model.UserPanel
-		s.db.Where("user_id = ?", u.ID).Find(&records)
+		s.db.Where("user_id = ?", u.ID).Order("panel_id ASC").Find(&records)
+		blocked, _ := s.mgr.BlockedPanels(&u)
+		row.Panels = make([]userPanelUsage, 0, len(records))
+		for _, rec := range records {
+			row.Panels = append(row.Panels, userPanelUsage{
+				PanelID: rec.PanelID, PanelName: panelNames[rec.PanelID],
+				Upload: rec.Upload, Download: rec.Download,
+				Limit: planLimits[u.PlanID][rec.PanelID], Blocked: blocked[rec.PanelID],
+			})
+		}
 		if len(records) == 0 && row.InboundCount > 0 {
 			row.SyncState = model.SyncStatePending
 		}

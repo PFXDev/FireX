@@ -39,6 +39,7 @@ var auditActions = map[string]string{
 	"PUT /api/panels/:id":                         "修改面板",
 	"DELETE /api/panels/:id":                      "删除面板",
 	"POST /api/panels/:id/discover":               "发现面板入站",
+	"POST /api/panels/:id/resetTraffic":           "重置面板流量",
 	"PUT /api/inbounds/:id":                       "修改入站",
 	"POST /api/inbounds/bulk":                     "批量修改入站",
 	"DELETE /api/inbounds/:id":                    "删除入站",

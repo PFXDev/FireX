@@ -102,6 +102,18 @@ export interface Panel {
   xrayVersion: string
   inboundCount: number
   enabledInbounds: number
+  /** Cap on all FireX users' traffic here per period, in bytes (0 = unlimited). */
+  trafficLimit: number
+  /** Day of the month the period starts over (0 = never on its own). */
+  trafficResetDay: number
+  upload: number
+  download: number
+  used: number
+  trafficPeriodStart: number
+  /** Over its cap: the panel's inbounds are out of every subscription. */
+  overQuota: boolean
+  nextTrafficReset: number
+  userCount: number
 }
 
 /** One inbound on one panel. Classification lives on the node group instead. */
@@ -302,6 +314,14 @@ export interface Plan {
   remark: string
   usableInbounds: number
   userCount: number
+  /** Per-user caps on single panels; panels not listed are only held to the plan total. */
+  panelLimits: PlanPanelLimit[]
+}
+
+export interface PlanPanelLimit {
+  planId: number
+  panelId: number
+  trafficBytes: number
 }
 
 export interface User {
@@ -329,6 +349,19 @@ export interface User {
   syncState: string
   syncErrors: string[]
   subUrl: string
+  /** This period's usage on each panel the user holds a client on. */
+  panels: UserPanelUsage[]
+}
+
+export interface UserPanelUsage {
+  panelId: number
+  panelName: string
+  upload: number
+  download: number
+  /** The plan's cap on this panel (0 = none). */
+  limit: number
+  /** Why the panel is closed to the user, empty when it is not. */
+  blocked: string
 }
 
 export interface Overview {

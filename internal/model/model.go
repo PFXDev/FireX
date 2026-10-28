@@ -64,8 +64,49 @@ type Panel struct {
 	LastSeenAt  int64  `json:"lastSeenAt"`
 	XrayVersion string `json:"xrayVersion"`
 
+	// TrafficLimit caps what all FireX users together may move through this
+	// panel in one period, in bytes; 0 is unlimited. Over it, every client
+	// FireX keeps here is disabled and the panel's inbounds leave every
+	// subscription until the period starts over. Clients created on the
+	// panel by hand are not counted.
+	TrafficLimit int64 `json:"trafficLimit" gorm:"not null;default:0"`
+	// TrafficResetDay is the day of the month the period starts over at
+	// midnight, clamped to short months; 0 never resets on its own.
+	TrafficResetDay int `json:"trafficResetDay" gorm:"not null;default:0"`
+	// Upload/Download are FireX clients' usage on this panel in the current
+	// period, folded in by the traffic collector. NOT NULL so that panels
+	// predating the columns count from zero: NULL + n stays NULL.
+	Upload   int64 `json:"upload" gorm:"not null;default:0"`
+	Download int64 `json:"download" gorm:"not null;default:0"`
+	// TrafficPeriodStart is when the current period began; 0 means CreatedAt.
+	TrafficPeriodStart int64 `json:"trafficPeriodStart" gorm:"not null;default:0"`
+
 	CreatedAt int64 `json:"createdAt"`
 	UpdatedAt int64 `json:"updatedAt"`
+}
+
+// OverQuota reports whether the panel used up its period's traffic.
+func (p *Panel) OverQuota() bool {
+	return p.TrafficLimit > 0 && p.Upload+p.Download >= p.TrafficLimit
+}
+
+// NextTrafficReset is when the panel's period ends, as ms epoch at midnight in
+// loc, or 0 when it never resets on its own. Like a user's, it is the first
+// boundary after the period start, so one already passed means a reset is due.
+func (p *Panel) NextTrafficReset(loc *time.Location) int64 {
+	if p.TrafficResetDay <= 0 {
+		return 0
+	}
+	start := p.TrafficPeriodStart
+	if start == 0 {
+		start = p.CreatedAt
+	}
+	since := time.UnixMilli(start).In(loc)
+	next := monthDay(since.Year(), since.Month(), p.TrafficResetDay, loc)
+	if !next.After(since) {
+		next = monthDay(since.Year(), since.Month()+1, p.TrafficResetDay, loc)
+	}
+	return next.UnixMilli()
 }
 
 // Inbound is one inbound on one panel, surfaced to clients as a single proxy.
@@ -369,6 +410,15 @@ type Plan struct {
 	UpdatedAt int64 `json:"updatedAt"`
 }
 
+// PlanPanelLimit caps what each user on a plan may use on one panel per traffic
+// period, on top of the plan's overall quota. Over it, only that user's client
+// on that panel goes dark; their other panels keep working.
+type PlanPanelLimit struct {
+	PlanID       uint  `json:"planId" gorm:"primaryKey"`
+	PanelID      uint  `json:"panelId" gorm:"primaryKey;index"`
+	TrafficBytes int64 `json:"trafficBytes"`
+}
+
 type User struct {
 	ID       uint   `json:"id" gorm:"primaryKey;autoIncrement"`
 	Username string `json:"username" gorm:"uniqueIndex;not null"`
@@ -499,6 +549,12 @@ type UserPanel struct {
 	// baselines stay at the panel's old counters until it does, so usage is not
 	// counted twice, and the traffic loop retries the reset.
 	ResetPending bool `json:"resetPending"`
+	// Upload/Download are the user's usage on this panel in their current
+	// traffic period, so they start over with User.Upload/Download. A plan's
+	// PlanPanelLimit is checked against them. NOT NULL because reconcile
+	// inserts rows without these columns, and NULL + n stays NULL.
+	Upload   int64 `json:"upload" gorm:"not null;default:0"`
+	Download int64 `json:"download" gorm:"not null;default:0"`
 
 	UpdatedAt int64 `json:"updatedAt"`
 }
@@ -629,7 +685,7 @@ func AllModels() []any {
 		&NodeGroup{}, &NodeGroupTag{}, &NodeGroupInbound{},
 		&Policy{}, &Rule{}, &RuleSet{},
 		&Profile{}, &ProfileNodeGroup{}, &Egress{}, &EgressMember{},
-		&Plan{}, &User{}, &UserPanel{}, &Setting{},
+		&Plan{}, &PlanPanelLimit{}, &User{}, &UserPanel{}, &Setting{},
 		&InboundConfig{}, &InboundTemplate{}, &InboundDeployment{},
 	}
 }
