@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/PFXDev/FireX/internal/backup"
 	"github.com/PFXDev/FireX/internal/config"
 	"github.com/PFXDev/FireX/internal/provision"
 	"github.com/PFXDev/FireX/internal/routing"
@@ -61,6 +62,9 @@ func main() {
 	live := config.NewLive(cfg)
 	mgr := provision.NewManager(db)
 	subs := subscription.NewService(db, mgr)
+	// The data directory and database path are bound at startup, so the
+	// backup directory is too; only the schedule follows the live config.
+	backups := backup.New(db, cfg.DBPath, cfg.DataDir, func() config.Backup { return live.Get().Backup }, log.Default())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -99,7 +103,7 @@ func main() {
 			IsBusy: mgr.IsBusy,
 		},
 	)
-	srv = server.New(live, *configPath, db, mgr, subs, upd)
+	srv = server.New(live, *configPath, db, mgr, subs, upd, backups)
 
 	go runLoop(bgCtx, live, "discover", func(c *config.Config) config.Duration { return c.DiscoverInterval }, 0, func(ctx context.Context) error {
 		return mgr.DiscoverAll(ctx)
@@ -112,6 +116,7 @@ func main() {
 	go runLoop(bgCtx, live, "traffic", func(c *config.Config) config.Duration { return c.TrafficInterval }, 30*time.Second, func(ctx context.Context) error {
 		return mgr.CollectTraffic(ctx)
 	})
+	go backups.Run(bgCtx)
 	upd.StartBackground(bgCtx)
 
 	// SIGHUP applies a hand-edited config file without a restart, the same

@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/PFXDev/FireX/internal/backup"
 	"github.com/PFXDev/FireX/internal/config"
 	"github.com/PFXDev/FireX/internal/model"
 	"github.com/PFXDev/FireX/internal/paneltest"
@@ -45,7 +46,9 @@ func newHarness(t *testing.T) *harness {
 	)
 	t.Cleanup(fake.Close)
 
-	db, err := store.Open(filepath.Join(t.TempDir(), "firex.db"), false)
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "firex.db")
+	db, err := store.Open(dbPath, false)
 	if err != nil {
 		t.Fatalf("store.Open() error = %v", err)
 	}
@@ -72,7 +75,8 @@ func newHarness(t *testing.T) *harness {
 		func() string { return live.Get().DataDir },
 		log.New(io.Discard, "", 0),
 		updater.RestartHooks{},
-	))
+	), backup.New(db, dbPath, dataDir, func() config.Backup { return live.Get().Backup }, log.New(io.Discard, "", 0)))
+	srv.restart = func(string) error { return nil }
 	ts := httptest.NewServer(srv.engine)
 	t.Cleanup(ts.Close)
 

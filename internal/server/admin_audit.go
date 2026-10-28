@@ -70,7 +70,15 @@ var auditActions = map[string]string{
 	"PUT /api/settings/clashTemplate":             "修改 Clash 模板",
 	"PUT /api/settings/server":                    "修改服务设置",
 	"POST /api/update/apply":                      "执行更新",
+	"POST /api/backups":                           "创建数据库备份",
+	"POST /api/backups/upload":                    "上传数据库备份",
+	"DELETE /api/backups/:name":                   "删除数据库备份",
+	"POST /api/backups/:name/restore":             "还原数据库备份",
 }
+
+// auditTargetKey lets a handler name its target once it knows it, for writes
+// that create something whose name the request does not carry.
+const auditTargetKey = "auditTarget"
 
 // auditSkip lists writes that change nothing: tests, previews and checks.
 var auditSkip = map[string]bool{
@@ -112,6 +120,9 @@ func (s *Server) audit(c *gin.Context) {
 	if c.Writer.Status() >= http.StatusBadRequest {
 		return
 	}
+	if named := c.GetString(auditTargetKey); named != "" {
+		target = named
+	}
 	action := auditActions[route]
 	if action == "" {
 		action = route
@@ -138,6 +149,9 @@ func (s *Server) auditTarget(c *gin.Context) string {
 	if key := c.Param("key"); key != "" {
 		return key
 	}
+	if name := c.Param("name"); name != "" {
+		return name
+	}
 	if id := c.Param("id"); id != "" {
 		segment := strings.Split(strings.TrimPrefix(c.FullPath(), "/api/"), "/")[0]
 		if ref, ok := auditNames[segment]; ok {
@@ -149,7 +163,8 @@ func (s *Server) auditTarget(c *gin.Context) string {
 		}
 		return "#" + id
 	}
-	if c.Request.Method != http.MethodPost || c.Request.Body == nil {
+	// Only JSON bodies name anything; an upload is not read into memory here.
+	if c.Request.Method != http.MethodPost || c.Request.Body == nil || c.ContentType() != "application/json" {
 		return ""
 	}
 	body, err := io.ReadAll(c.Request.Body)

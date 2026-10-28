@@ -24,6 +24,7 @@ import { useHashRoute } from '@/hooks/use-hash-route'
 import { errorMessage } from '@/lib/format'
 import { canAccess, DEFAULT_ROUTE, type RouteKey } from '@/lib/navigation'
 import { SessionProvider, type Admin } from '@/lib/session'
+import { BackupPage } from '@/pages/Backup'
 import { OverviewPage } from '@/pages/Overview'
 import { PanelsPage } from '@/pages/Panels'
 import { InboundsPage } from '@/pages/Inbounds'
@@ -160,6 +161,8 @@ function Page({ route }: { route: RouteKey }) {
       return <AuditPage />
     case 'settings':
       return <SettingsPage />
+    case 'backup':
+      return <BackupPage />
     case 'system':
       return <SystemPage />
     default:

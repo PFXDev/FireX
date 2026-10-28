@@ -98,7 +98,7 @@ export function ServerConfigEditor() {
     }
   }
 
-  const textField = (key: keyof Omit<ServerConfig, 'update' | 'debug'>, label: string, description: string, placeholder?: string) => (
+  const textField = (key: keyof Omit<ServerConfig, 'update' | 'debug' | 'backup'>, label: string, description: string, placeholder?: string) => (
     <ConfigTextField key={key} name={key} label={label} description={description} placeholder={placeholder}
       restart={restartBound.has(key)} pending={!!saved?.restartFields.includes(key)}
       value={draft?.[key] ?? ''} error={fields[key]} disabled={busy || (key === 'adminPassword' && clearPassword)}
@@ -171,6 +171,32 @@ export function ServerConfigEditor() {
                     {textField('syncInterval', '用户同步间隔', '全量协调用户配置。', '2m')}
                     {textField('trafficInterval', '流量采集间隔', '汇总流量并执行配额限制。', '1m')}
                     {textField('discoverInterval', '入站发现间隔', '从面板发现和刷新入站。', '5m')}
+                  </FieldGroup>
+                </FieldSet>
+                <FieldSet disabled={busy}>
+                  <FieldLegend>数据库备份</FieldLegend>
+                  <FieldGroup>
+                    <Field orientation="horizontal" data-disabled={busy || undefined}>
+                      <FieldContent>
+                        <FieldLabel htmlFor="server-backup-enabled">定时自动备份</FieldLabel>
+                        <FieldDescription id="server-backup-enabled-description">保留最近几份，清除旧备份，存储在数据目录的 backups 子目录。</FieldDescription>
+                      </FieldContent>
+                      <Switch id="server-backup-enabled" checked={draft.backup.enabled} disabled={busy} aria-describedby="server-backup-enabled-description"
+                        onCheckedChange={(enabled) => setDraft({ ...draft, backup: { ...draft.backup, enabled } })} />
+                    </Field>
+                    <FieldGroup className="grid sm:grid-cols-2">
+                      <ConfigTextField name="backup.interval" label="备份间隔" description="至少 10m，例如 6h 或 24h。" placeholder="24h"
+                        value={draft.backup.interval ?? ''} error={fields['backup.interval']} disabled={busy}
+                        onChange={(value) => setDraft({ ...draft, backup: { ...draft.backup, interval: value } })} />
+                      <Field data-invalid={!!fields['backup.keep'] || undefined} data-disabled={busy || undefined}>
+                        <FieldLabel htmlFor="server-backup-keep">保留份数</FieldLabel>
+                        <Input id="server-backup-keep" type="number" min={1} max={1000} value={draft.backup.keep ?? ''} disabled={busy}
+                          onChange={(event) => setDraft({ ...draft, backup: { ...draft.backup, keep: Number(event.target.value) } })}
+                          aria-invalid={!!fields['backup.keep'] || undefined} aria-describedby={fields['backup.keep'] ? 'server-backup-keep-error' : 'server-backup-keep-description'} />
+                        <FieldDescription id="server-backup-keep-description">1–1000 份；手动和上传的备份不参与清理。</FieldDescription>
+                        {fields['backup.keep'] && <FieldError id="server-backup-keep-error">{fields['backup.keep']}</FieldError>}
+                      </Field>
+                    </FieldGroup>
                   </FieldGroup>
                 </FieldSet>
                 <FieldSet disabled={busy}>

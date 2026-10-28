@@ -58,11 +58,13 @@ async function request<T>(
   body?: unknown,
   options: RequestOptions = {},
 ): Promise<T> {
+  // FormData goes out as multipart; the browser sets its boundary header.
+  const multipart = body instanceof FormData
   const res = await fetch(`/api${path}`, {
     method,
     credentials: 'include',
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: body === undefined || multipart ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : multipart ? body : JSON.stringify(body),
   })
   const text = await res.text()
   let data = null
@@ -521,6 +523,11 @@ export interface ServerConfig {
   syncInterval: string
   trafficInterval: string
   discoverInterval: string
+  backup: {
+    enabled: boolean
+    interval: string
+    keep: number
+  }
   update: {
     enabled: boolean
     channel: string
@@ -554,6 +561,23 @@ export interface UpdateStatus {
   error: string
   lastCheck: string
   releaseNotes: string
+}
+
+export interface BackupEntry {
+  name: string
+  kind: 'auto' | 'manual' | 'upload' | 'pre-restore'
+  size: number
+  createdAt: number
+}
+
+export interface BackupList {
+  items: BackupEntry[]
+  dir: string
+  pendingRestore: boolean
+}
+
+export interface RestoreResult {
+  preRestore: string
 }
 
 export interface UpdateCheck {

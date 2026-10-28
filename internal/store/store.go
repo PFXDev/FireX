@@ -22,6 +22,11 @@ func Open(path string, debug bool) (*DB, error) {
 			return nil, fmt.Errorf("create data dir: %w", err)
 		}
 	}
+	// A restore staged by the admin API lands here, before the file is open.
+	restored, err := applyPendingRestore(path)
+	if err != nil {
+		return nil, err
+	}
 	sqlLog := &sqlLogger{out: log.Default()}
 	sqlLog.verbose.Store(debug)
 	// _pragma busy_timeout keeps concurrent sync jobs from failing on SQLITE_BUSY.
@@ -35,6 +40,10 @@ func Open(path string, debug bool) (*DB, error) {
 	db := &DB{gdb}
 	if err := db.migrate(path); err != nil {
 		return nil, err
+	}
+	if restored != nil {
+		log.Printf("firex: restored database from backup %s", restored.Backup)
+		db.recordRestore(restored)
 	}
 	return db, nil
 }

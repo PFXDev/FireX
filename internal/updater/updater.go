@@ -88,6 +88,9 @@ type Updater struct {
 
 	pendingBinaryPath string
 	pendingTag        string
+	// restarting is set once a plain restart is under way, so an update cannot
+	// start tearing the process down a second time.
+	restarting bool
 }
 
 const (
@@ -200,6 +203,10 @@ func (u *Updater) ApplyPending(_ context.Context) error {
 		u.mu.Unlock()
 		return fmt.Errorf("no pending update to apply")
 	}
+	if u.restarting {
+		u.mu.Unlock()
+		return fmt.Errorf("a restart is already in progress")
+	}
 
 	// Claim the pending update synchronously so a second call is rejected and
 	// the next status poll already reads "applying".
@@ -222,6 +229,51 @@ func (u *Updater) ApplyPending(_ context.Context) error {
 		}
 	}()
 	return nil
+}
+
+// Restart re-executes the running binary in the background, for changes that
+// only take effect on a fresh start. It goes through the same teardown and
+// idle wait as an update, and is refused while an update is being installed.
+func (u *Updater) Restart(reason string) error {
+	u.mu.Lock()
+	if u.restarting || u.status.State == "applying" {
+		u.mu.Unlock()
+		return fmt.Errorf("an update or restart is already in progress")
+	}
+	u.restarting = true
+	u.mu.Unlock()
+
+	go func() {
+		// Give the request that asked for this time to send its response.
+		time.Sleep(200 * time.Millisecond)
+		if err := u.waitForIdle(u.bgContext()); err != nil {
+			u.logger.Printf("firex: restart canceled while waiting for idle: %v", err)
+			u.mu.Lock()
+			u.restarting = false
+			u.mu.Unlock()
+			return
+		}
+		u.notifyExecFailure(u.restartSelf(reason))
+	}()
+	return nil
+}
+
+func (u *Updater) restartSelf(reason string) error {
+	if u.hooks.BeforeExec != nil {
+		if err := u.hooks.BeforeExec(reason); err != nil {
+			return fmt.Errorf("prepare restart: %w", err)
+		}
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable path: %w", err)
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return fmt.Errorf("resolve symlinks: %w", err)
+	}
+	u.logger.Printf("firex: restarting for %s", reason)
+	return replaceProcess(execPath, os.Args, os.Environ())
 }
 
 // DismissPending throws away a downloaded pre-release.
@@ -982,6 +1034,10 @@ func fileSHA256(path string) (string, error) {
 
 func (u *Updater) applyUpdate(newBinaryPath, tag string) error {
 	u.mu.Lock()
+	if u.restarting {
+		u.mu.Unlock()
+		return fmt.Errorf("a restart is already in progress")
+	}
 	u.status.State = "applying"
 	u.status.Progress = progressApplying
 	u.mu.Unlock()

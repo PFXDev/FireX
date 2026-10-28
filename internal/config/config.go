@@ -55,7 +55,17 @@ type Config struct {
 	TrafficInterval  Duration `json:"trafficInterval"`
 	DiscoverInterval Duration `json:"discoverInterval"`
 
+	Backup Backup `json:"backup"`
 	Update Update `json:"update"`
+}
+
+// Backup drives the scheduled database snapshots kept under DataDir/backups.
+// Keep only prunes the scheduled ones; manual and uploaded backups stay until
+// an admin deletes them.
+type Backup struct {
+	Enabled  bool     `json:"enabled"`
+	Interval Duration `json:"interval"`
+	Keep     int      `json:"keep"`
 }
 
 // Update drives self-updates from GitHub releases. Enabled only gates the
@@ -84,6 +94,11 @@ func Template() *Config {
 		SyncInterval:      Duration(2 * time.Minute),
 		TrafficInterval:   Duration(time.Minute),
 		DiscoverInterval:  Duration(5 * time.Minute),
+		Backup: Backup{
+			Enabled:  true,
+			Interval: Duration(24 * time.Hour),
+			Keep:     7,
+		},
 		Update: Update{
 			// Self-updating is opt-in: replacing the binary under a running
 			// fleet is the operator's call, not a default.
@@ -199,6 +214,13 @@ func (c *Config) complete() {
 		}
 	}
 
+	if c.Backup.Interval < MinBackupInterval {
+		c.Backup.Interval = def.Backup.Interval
+	}
+	if c.Backup.Keep < 1 || c.Backup.Keep > MaxBackupKeep {
+		c.Backup.Keep = def.Backup.Keep
+	}
+
 	if c.Update.CheckInterval <= 0 {
 		c.Update.CheckInterval = def.Update.CheckInterval
 	}
@@ -211,6 +233,13 @@ func (c *Config) complete() {
 	c.Update.Repo = settled.Repo
 	c.Update.CheckInterval = Duration(time.Duration(settled.CheckInterval) * time.Second)
 }
+
+// Bounds on the backup schedule: more often than this only churns the disk, and
+// more copies than this is a job for real backup tooling.
+const (
+	MinBackupInterval = Duration(10 * time.Minute)
+	MaxBackupKeep     = 1000
+)
 
 // resolve derives the settings that are deliberately absent from the file. It
 // runs after the write so an empty dbPath stays empty on disk: moving dataDir

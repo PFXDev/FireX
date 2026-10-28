@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/PFXDev/FireX/internal/backup"
 	"github.com/PFXDev/FireX/internal/config"
 	"github.com/PFXDev/FireX/internal/provision"
 	"github.com/PFXDev/FireX/internal/store"
@@ -22,11 +23,15 @@ import (
 )
 
 type Server struct {
-	cfg        *config.Live
-	db         *store.DB
-	mgr        *provision.Manager
-	subs       *subscription.Service
-	upd        *updater.Updater
+	cfg  *config.Live
+	db   *store.DB
+	mgr  *provision.Manager
+	subs *subscription.Service
+	upd  *updater.Updater
+	bkup *backup.Service
+	// restart re-executes FireX so a staged restore takes over; tests swap it
+	// out rather than exec the test binary.
+	restart    func(reason string) error
 	configPath string
 	configMu   sync.Mutex
 	// agentMu orders submissions against merges, so a merge never applies a
@@ -37,11 +42,11 @@ type Server struct {
 	http   *http.Server
 }
 
-func New(cfg *config.Live, configPath string, db *store.DB, mgr *provision.Manager, subs *subscription.Service, upd *updater.Updater) *Server {
+func New(cfg *config.Live, configPath string, db *store.DB, mgr *provision.Manager, subs *subscription.Service, upd *updater.Updater, bkup *backup.Service) *Server {
 	if !cfg.Get().Debug {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	s := &Server{cfg: cfg, configPath: configPath, db: db, mgr: mgr, subs: subs, upd: upd}
+	s := &Server{cfg: cfg, configPath: configPath, db: db, mgr: mgr, subs: subs, upd: upd, bkup: bkup, restart: upd.Restart}
 	s.engine = gin.New()
 	s.engine.Use(gin.Recovery())
 	// The request log is always mounted and consults debug per request, so
@@ -178,6 +183,13 @@ func (s *Server) routes() {
 	// session lives in the database, so it survives the restart an update
 	// causes and the UI keeps polling straight through.
 	authed.GET("/audit-logs", s.superAdminOnly, s.listAuditLogs)
+
+	authed.GET("/backups", s.superAdminOnly, s.listBackups)
+	authed.POST("/backups", s.superAdminOnly, s.createBackup)
+	authed.POST("/backups/upload", s.superAdminOnly, s.uploadBackup)
+	authed.GET("/backups/:name/download", s.superAdminOnly, s.downloadBackup)
+	authed.DELETE("/backups/:name", s.superAdminOnly, s.deleteBackup)
+	authed.POST("/backups/:name/restore", s.superAdminOnly, s.restoreBackup)
 
 	authed.GET("/version", s.superAdminOnly, s.handleVersion)
 	authed.GET("/update/status", s.superAdminOnly, s.handleUpdateStatus)

@@ -2,6 +2,7 @@ import {
   BotIcon,
   BoxesIcon,
   CpuIcon,
+  DatabaseIcon,
   HistoryIcon,
   GaugeIcon,
   LayersIcon,
@@ -28,6 +29,7 @@ export type RouteKey =
   | 'agent'
   | 'audit'
   | 'settings'
+  | 'backup'
   | 'system'
 
 export type NavSubItem = { route: RouteKey; title: string }
@@ -80,6 +82,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { route: 'agent', title: 'Agent 修改', icon: BotIcon, superAdminOnly: true },
       { route: 'audit', title: '操作日志', icon: HistoryIcon, superAdminOnly: true },
       { route: 'settings', title: '设置', icon: SettingsIcon },
+      { route: 'backup', title: '备份', icon: DatabaseIcon, superAdminOnly: true },
       { route: 'system', title: '系统', icon: CpuIcon, superAdminOnly: true },
     ],
   },

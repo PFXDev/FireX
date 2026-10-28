@@ -78,6 +78,12 @@ func (c *Config) Validate() map[string]string {
 	if c.SubUpdateInterval < Duration(time.Hour) || c.SubUpdateInterval%Duration(time.Hour) != 0 {
 		fields["subUpdateInterval"] = "订阅更新间隔必须是整小时，至少 1h，例如 12h 或 24h。"
 	}
+	if c.Backup.Interval < MinBackupInterval {
+		fields["backup.interval"] = "自动备份间隔至少为 10m，例如 6h 或 24h。"
+	}
+	if c.Backup.Keep < 1 || c.Backup.Keep > MaxBackupKeep {
+		fields["backup.keep"] = fmt.Sprintf("保留份数需在 1–%d 之间。", MaxBackupKeep)
+	}
 	if c.Update.CheckInterval < Duration(time.Minute) {
 		fields["update.checkInterval"] = "更新检查间隔至少为 1m。"
 	}

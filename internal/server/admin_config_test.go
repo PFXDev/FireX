@@ -189,6 +189,8 @@ func TestServerConfigRejectsInvalidEditsWithoutWriting(t *testing.T) {
 		{"update": map[string]any{"checkInterval": "30s"}},
 		{"update": map[string]any{"repo": "../repo"}},
 		{"update": map[string]any{"proxyBaseUrl": "file:///tmp/update"}},
+		{"backup": map[string]any{"interval": "5m"}},
+		{"backup": map[string]any{"keep": 0}}, {"backup": map[string]any{"keep": 1001}},
 		{"unknown": true}, {"update": map[string]any{"unknown": true}},
 	} {
 		resp, body := h.do(http.MethodPut, "/api/settings/server", map[string]any{"revision": before.Revision, "config": patch})
