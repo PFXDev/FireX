@@ -3,7 +3,7 @@ import { PencilIcon, PlusIcon, TicketIcon, Trash2Icon, TriangleAlertIcon } from 
 import { toast } from 'sonner'
 
 import { api } from '@/api'
-import type { Panel, Plan, Profile, TrafficReset } from '@/api'
+import type { NodeGroup, Panel, Plan, Profile, TrafficReset } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
@@ -53,6 +53,8 @@ type Draft = {
   profileId: number
   /** Per-user cap on each panel in GB, keyed by panel id; 0 or absent = none. */
   panelLimitsGb: Record<number, number>
+  /** Per-user quota on each node group in GB, keyed by group id; 0 or absent = none. */
+  groupLimitsGb: Record<number, number>
 }
 
 const trafficResetItems = (Object.keys(TRAFFIC_RESET_LABELS) as TrafficReset[]).map((value) => ({
@@ -72,6 +74,7 @@ const emptyDraft: Draft = {
   remark: '',
   profileId: 0,
   panelLimitsGb: {},
+  groupLimitsGb: {},
 }
 
 export function PlansPage() {
@@ -83,6 +86,7 @@ export function PlansPage() {
   // Null when the panel list is unavailable (an operator without config
   // access); the plan's caps are then shown but never sent back.
   const [panels, setPanels] = useState<Panel[] | null>(null)
+  const [groups, setGroups] = useState<NodeGroup[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -93,14 +97,16 @@ export function PlansPage() {
 
   const load = useCallback(async () => {
     try {
-      const [nextPlans, nextProfiles, nextPanels] = await Promise.all([
+      const [nextPlans, nextProfiles, nextPanels, nextGroups] = await Promise.all([
         api.get<Plan[]>('/plans'),
         api.get<Profile[]>('/profiles'),
         api.get<Panel[]>('/panels', { unauthorized: 'ignore' }).catch(() => null),
+        api.get<NodeGroup[]>('/node-groups', { unauthorized: 'ignore' }).catch(() => null),
       ])
       setPlans(nextPlans)
       setProfiles(nextProfiles)
       setPanels(nextPanels)
+      setGroups(nextGroups)
       setLoadError(null)
       return true
     } catch (err) {
@@ -143,6 +149,7 @@ export function PlansPage() {
       remark: plan.remark,
       profileId: plan.profileId,
       panelLimitsGb: Object.fromEntries(plan.panelLimits.map((limit) => [limit.panelId, bytesToGb(limit.trafficBytes)])),
+      groupLimitsGb: Object.fromEntries(plan.groupLimits.map((limit) => [limit.groupId, bytesToGb(limit.trafficBytes)])),
     })
   }
 
@@ -169,6 +176,9 @@ export function PlansPage() {
       // drops zero caps.
       panelLimits: panels
         ?.map((panel) => ({ panelId: panel.id, trafficBytes: gbToBytes(draft.panelLimitsGb[panel.id] ?? 0) }))
+        .filter((limit) => limit.trafficBytes > 0),
+      groupLimits: grantedGroups
+        ?.map((group) => ({ groupId: group.id, trafficBytes: gbToBytes(draft.groupLimitsGb[group.id] ?? 0) }))
         .filter((limit) => limit.trafficBytes > 0),
     }
 
@@ -212,6 +222,14 @@ export function PlansPage() {
   const enabledPlans = plans.filter((plan) => plan.enabled).length
   const assignedUsers = plans.reduce((total, plan) => total + plan.userCount, 0)
   const nameInvalid = Boolean(showErrors && draft && !draft.name.trim())
+  // Only the groups the chosen profile grants can carry a quota; null when
+  // the group list is unavailable.
+  const grantedGroups = useMemo(() => {
+    if (!groups || !draft) return null
+    const profile = profiles.find((item) => item.id === draft.profileId)
+    if (!profile || !profile.enabled) return []
+    return groups.filter((group) => group.enabled && (profile.allGroups || profile.groupIds.includes(group.id)))
+  }, [groups, profiles, draft])
 
   return (
     <div className="flex flex-col gap-6">
@@ -311,6 +329,16 @@ export function PlansPage() {
                           <span className="tabular-nums">{formatQuota(plan.trafficBytes)}</span>
                           {plan.trafficReset && plan.trafficReset !== 'none' && (
                             <span className="text-xs text-muted-foreground">{TRAFFIC_RESET_LABELS[plan.trafficReset]}重置</span>
+                          )}
+                          {plan.groupLimits.length > 0 && (
+                            <span
+                              className="text-xs text-muted-foreground"
+                              title={plan.groupLimits
+                                .map((limit) => `${groups?.find((group) => group.id === limit.groupId)?.name ?? `#${limit.groupId}`}：${formatQuota(limit.trafficBytes)}`)
+                                .join('\n')}
+                            >
+                              {plan.groupLimits.length} 个节点组限额
+                            </span>
                           )}
                           {plan.panelLimits.length > 0 && (
                             <span
@@ -471,11 +499,60 @@ export function PlansPage() {
                   </FieldDescription>
                 </Field>
 
+                {grantedGroups && grantedGroups.length > 0 && (
+                  <FieldSet data-disabled={saving || undefined}>
+                    <FieldLegend variant="label">节点组流量额度 (GB)</FieldLegend>
+                    <FieldDescription>
+                      每个用户在该节点组的用量上限，按节点组里设好的比例拆到各面板；0 表示只受套餐总流量约束。用满一个面板只停用那个面板，随用户流量一起重置。
+                    </FieldDescription>
+                    <FieldGroup className="gap-3">
+                      {grantedGroups.map((group) => {
+                        const gb = draft.groupLimitsGb[group.id] ?? 0
+                        return (
+                          <Field key={group.id} data-disabled={saving || undefined}>
+                            <div className="flex items-center gap-3">
+                              <FieldLabel htmlFor={`plan-group-limit-${group.id}`} className="min-w-0 flex-1 truncate" title={group.name}>
+                                {group.emoji && `${group.emoji} `}
+                                {group.name}
+                              </FieldLabel>
+                              <Input
+                                id={`plan-group-limit-${group.id}`}
+                                className="w-28"
+                                type="number"
+                                min={0}
+                                step="any"
+                                disabled={saving}
+                                value={gb}
+                                onChange={(event) =>
+                                  setDraft({
+                                    ...draft,
+                                    groupLimitsGb: { ...draft.groupLimitsGb, [group.id]: Number(event.target.value) },
+                                  })
+                                }
+                              />
+                            </div>
+                            {gb > 0 && group.panelShares.length > 0 && (
+                              <FieldDescription>
+                                {group.panelShares
+                                  .map(
+                                    (share) =>
+                                      `${panels?.find((panel) => panel.id === share.panelId)?.name ?? `#${share.panelId}`} ${share.weight}% ≈ ${formatQuota(Math.max(1, Math.floor((gbToBytes(gb) * share.weight) / 100)))}`,
+                                  )
+                                  .join('，')}
+                              </FieldDescription>
+                            )}
+                          </Field>
+                        )
+                      })}
+                    </FieldGroup>
+                  </FieldSet>
+                )}
+
                 {panels && panels.length > 0 && (
                   <FieldSet data-disabled={saving || undefined}>
                     <FieldLegend variant="label">单面板流量上限 (GB)</FieldLegend>
                     <FieldDescription>
-                      每个用户在该面板上的用量上限，0 表示只受套餐总流量约束。用满后只停用这个面板，随用户流量一起重置。
+                      可选，按面板单独再收紧：和节点组拆出来的额度同时存在时取较小值。0 表示不额外限制。
                     </FieldDescription>
                     <FieldGroup className="gap-3 sm:grid sm:grid-cols-2">
                       {panels.map((panel) => (

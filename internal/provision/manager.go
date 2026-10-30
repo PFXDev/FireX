@@ -390,18 +390,29 @@ func (m *Manager) blockedPanels(u *model.User, plan *model.Plan) (map[uint]strin
 	return out, nil
 }
 
-// planPanelLimits maps panel id to the plan's per-user quota there.
+// PlanPanelCaps maps panel id to the plan's per-user quota there: its share of
+// a node-group quota, or the plan's own cap on that panel, whichever is
+// tighter.
+func (m *Manager) PlanPanelCaps(plan *model.Plan) (map[uint]int64, error) {
+	return m.planPanelLimits(plan)
+}
+
 func (m *Manager) planPanelLimits(plan *model.Plan) (map[uint]int64, error) {
 	if plan == nil {
 		return nil, nil
+	}
+	out, err := routing.PlanGroupPanelCaps(m.db, plan)
+	if err != nil {
+		return nil, err
 	}
 	var rows []model.PlanPanelLimit
 	if err := m.db.Where("plan_id = ? AND traffic_bytes > 0", plan.ID).Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	out := make(map[uint]int64, len(rows))
 	for _, r := range rows {
-		out[r.PanelID] = r.TrafficBytes
+		if cur, ok := out[r.PanelID]; !ok || r.TrafficBytes < cur {
+			out[r.PanelID] = r.TrafficBytes
+		}
 	}
 	return out, nil
 }

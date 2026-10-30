@@ -419,6 +419,24 @@ type PlanPanelLimit struct {
 	TrafficBytes int64 `json:"trafficBytes"`
 }
 
+// PlanGroupLimit caps what each user on a plan may use through one node group
+// per traffic period. The group's NodeGroupPanelShare splits it into a cap per
+// panel, enforced like a PlanPanelLimit; where both apply the tighter wins.
+type PlanGroupLimit struct {
+	PlanID       uint  `json:"planId" gorm:"primaryKey"`
+	GroupID      uint  `json:"groupId" gorm:"primaryKey;index"`
+	TrafficBytes int64 `json:"trafficBytes"`
+}
+
+// NodeGroupPanelShare is one panel's weight within a node group, in percent:
+// the part of a PlanGroupLimit a user may spend on that panel. A group whose
+// stored weights do not cover every panel it now spans splits evenly instead.
+type NodeGroupPanelShare struct {
+	GroupID uint `json:"groupId" gorm:"primaryKey"`
+	PanelID uint `json:"panelId" gorm:"primaryKey;index"`
+	Weight  int  `json:"weight"`
+}
+
 type User struct {
 	ID       uint   `json:"id" gorm:"primaryKey;autoIncrement"`
 	Username string `json:"username" gorm:"uniqueIndex;not null"`
@@ -682,10 +700,10 @@ type AuditLog struct {
 func AllModels() []any {
 	return []any{
 		&Admin{}, &Session{}, &AgentSession{}, &AuditLog{}, &Panel{}, &Inbound{},
-		&NodeGroup{}, &NodeGroupTag{}, &NodeGroupInbound{},
+		&NodeGroup{}, &NodeGroupTag{}, &NodeGroupInbound{}, &NodeGroupPanelShare{},
 		&Policy{}, &Rule{}, &RuleSet{},
 		&Profile{}, &ProfileNodeGroup{}, &Egress{}, &EgressMember{},
-		&Plan{}, &PlanPanelLimit{}, &User{}, &UserPanel{}, &Setting{},
+		&Plan{}, &PlanPanelLimit{}, &PlanGroupLimit{}, &User{}, &UserPanel{}, &Setting{},
 		&InboundConfig{}, &InboundTemplate{}, &InboundDeployment{},
 	}
 }

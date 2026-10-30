@@ -39,6 +39,9 @@ type nodeGroupRow struct {
 	// ProfileCount is how many profiles grant this group. Zero means no user can
 	// reach it.
 	ProfileCount int `json:"profileCount"`
+	// PanelShares is how a node-group quota splits over the group's panels,
+	// as enforced: stored weights, or an even split when none cover them all.
+	PanelShares []routing.PanelShare `json:"panelShares"`
 }
 
 func (s *Server) listNodeGroups(c *gin.Context) {
@@ -78,6 +81,16 @@ func (s *Server) listNodeGroups(c *gin.Context) {
 		profileCount[g.GroupID]++
 	}
 
+	groupIDs := make([]uint, 0, len(groups))
+	for _, g := range groups {
+		groupIDs = append(groupIDs, g.ID)
+	}
+	shares, err := routing.GroupShares(s.db, groupIDs)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+
 	out := make([]nodeGroupRow, 0, len(groups))
 	for _, g := range groups {
 		row := nodeGroupRow{
@@ -85,6 +98,7 @@ func (s *Server) listNodeGroups(c *gin.Context) {
 			Tags:         jsonList(tagsByGroup[g.ID]),
 			InboundIDs:   jsonList(members[g.ID]),
 			ProfileCount: profileCount[g.ID] + int(wildcards),
+			PanelShares:  jsonList(shares[g.ID]),
 		}
 		for _, id := range row.InboundIDs {
 			if usable[id] {
@@ -109,6 +123,19 @@ type nodeGroupRequest struct {
 	Remark     string         `json:"remark"`
 	Tags       []nodeGroupTag `json:"tags"`
 	InboundIDs []uint         `json:"inboundIds"`
+	// PanelShares replaces the group's per-panel weights when present; nil
+	// keeps them.
+	PanelShares []routing.PanelShare `json:"panelShares"`
+}
+
+// validShares rejects weights outside 0..100; zero drops the panel's weight.
+func validShares(shares []routing.PanelShare) error {
+	for _, sh := range shares {
+		if sh.Weight < 0 || sh.Weight > 100 {
+			return errBadRequest("面板比例必须在 0 到 100 之间")
+		}
+	}
+	return nil
 }
 
 // apply copies the request onto a group, rejecting the shapes that would
@@ -181,6 +208,10 @@ func (s *Server) createNodeGroup(c *gin.Context) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
+	if err := validShares(req.PanelShares); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
 	if err := s.db.Create(&g).Error; err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
@@ -190,6 +221,10 @@ func (s *Server) createNodeGroup(c *gin.Context) {
 		return
 	}
 	if _, err := setGroupMembers(s.db.DB, g.ID, req.InboundIDs); err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := setGroupShares(s.db.DB, g.ID, req.PanelShares); err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -221,6 +256,10 @@ func (s *Server) updateNodeGroup(c *gin.Context) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
+	if err := validShares(req.PanelShares); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
 	if err := s.db.Save(&g).Error; err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
@@ -234,6 +273,13 @@ func (s *Server) updateNodeGroup(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
+	sharesChanged := false
+	if req.PanelShares != nil {
+		if sharesChanged, err = setGroupShares(s.db.DB, g.ID, req.PanelShares); err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
+	}
 	// Egress members reference a group by its bare name, so a rename has to
 	// travel with it or every egress pointing here would dangle.
 	rewritten := int64(0)
@@ -244,10 +290,11 @@ func (s *Server) updateNodeGroup(c *gin.Context) {
 		rewritten = res.RowsAffected
 	}
 	s.subs.InvalidateAll()
-	// Only membership and the enabled flag change which inbounds a user holds;
-	// a relabel must not re-push the whole fleet.
+	// Only membership and the enabled flag change which inbounds a user holds,
+	// and the shares the per-panel caps a node-group quota yields; a relabel
+	// must not re-push the whole fleet.
 	var syncErr error
-	if membersChanged || wasEnabled != g.Enabled {
+	if membersChanged || sharesChanged || wasEnabled != g.Enabled {
 		syncErr = s.reconcilePlans(routing.PlansUsingNodeGroup(s.db, g.ID))
 	}
 	c.JSON(http.StatusOK, gin.H{"group": g, "rewrittenMembers": rewritten, "syncError": errString(syncErr)})
@@ -281,6 +328,8 @@ func (s *Server) deleteNodeGroup(c *gin.Context) {
 func deleteNodeGroupRows(handle *gorm.DB, g model.NodeGroup) (int64, error) {
 	handle.Where("group_id = ?", g.ID).Delete(&model.NodeGroupInbound{})
 	handle.Where("group_id = ?", g.ID).Delete(&model.NodeGroupTag{})
+	handle.Where("group_id = ?", g.ID).Delete(&model.NodeGroupPanelShare{})
+	handle.Where("group_id = ?", g.ID).Delete(&model.PlanGroupLimit{})
 	handle.Where("group_id = ?", g.ID).Delete(&model.ProfileNodeGroup{})
 	dropped := handle.Where("kind = ? AND ref = ?", model.MemberNodeGroup, g.Name).
 		Delete(&model.EgressMember{}).RowsAffected
@@ -322,6 +371,43 @@ func setGroupMembers(handle *gorm.DB, groupID uint, inboundIDs []uint) (bool, er
 		return changed, nil
 	}
 	return changed, handle.Create(&links).Error
+}
+
+// setGroupShares replaces a group's per-panel weights, keeping only panels that
+// exist and carry a weight. It reports whether the stored weights changed.
+func setGroupShares(handle *gorm.DB, groupID uint, shares []routing.PanelShare) (bool, error) {
+	var before []model.NodeGroupPanelShare
+	handle.Where("group_id = ?", groupID).Order("panel_id ASC").Find(&before)
+	if err := handle.Where("group_id = ?", groupID).Delete(&model.NodeGroupPanelShare{}).Error; err != nil {
+		return false, err
+	}
+	var existing []uint
+	ids := make([]uint, 0, len(shares))
+	for _, sh := range shares {
+		ids = append(ids, sh.PanelID)
+	}
+	if len(ids) > 0 {
+		handle.Model(&model.Panel{}).Where("id IN ?", ids).Pluck("id", &existing)
+	}
+	valid := map[uint]bool{}
+	for _, id := range existing {
+		valid[id] = true
+	}
+	rows := make([]model.NodeGroupPanelShare, 0, len(shares))
+	seen := map[uint]bool{}
+	for _, sh := range shares {
+		if !valid[sh.PanelID] || seen[sh.PanelID] || sh.Weight <= 0 {
+			continue
+		}
+		seen[sh.PanelID] = true
+		rows = append(rows, model.NodeGroupPanelShare{GroupID: groupID, PanelID: sh.PanelID, Weight: sh.Weight})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].PanelID < rows[j].PanelID })
+	changed := !slices.Equal(before, rows)
+	if len(rows) == 0 {
+		return changed, nil
+	}
+	return changed, handle.Create(&rows).Error
 }
 
 func setGroupTags(handle *gorm.DB, groupID uint, tags []nodeGroupTag) error {

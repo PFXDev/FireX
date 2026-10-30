@@ -9,6 +9,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
+import { evenWeights, WeightSplitter } from '@/components/traffic-share'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -76,6 +77,8 @@ type Draft = {
   remark: string
   tags: NodeGroupTag[]
   inboundIds: number[]
+  /** Percent of a node-group quota each panel takes, keyed by panel id. */
+  panelWeights: Record<number, number>
 }
 
 const emptyDraft: Draft = {
@@ -91,6 +94,7 @@ const emptyDraft: Draft = {
   remark: '',
   tags: [],
   inboundIds: [],
+  panelWeights: {},
 }
 
 export function NodeGroupsPage() {
@@ -191,6 +195,7 @@ export function NodeGroupsPage() {
       remark: group.remark,
       tags: group.tags.map((tag) => ({ ...tag })),
       inboundIds: group.inboundIds,
+      panelWeights: Object.fromEntries(group.panelShares.map((share) => [share.panelId, share.weight])),
     })
   }
 
@@ -202,8 +207,11 @@ export function NodeGroupsPage() {
     if (!event.currentTarget.reportValidity()) return
 
     setSaving(true)
+    const { panelWeights: _, ...rest } = draft
     const body = {
-      ...draft,
+      ...rest,
+      // Saved as shown; a group on a single panel stores none and takes it all.
+      panelShares: shareSlices.length > 1 ? shareSlices.map((slice) => ({ panelId: slice.key, weight: slice.weight })) : [],
       name: draft.name.trim(),
       emoji: draft.emoji.trim(),
       testUrl: draft.testUrl.trim(),
@@ -277,6 +285,25 @@ export function NodeGroupsPage() {
     if (!draft) return
     setDraft({ ...draft, tags: draft.tags.map((tag, i) => (i === index ? { ...tag, ...patch } : tag)) })
   }
+
+  // The panels the selected inbounds live on, which a node-group quota is
+  // split over. Stored weights apply only while they cover exactly these
+  // panels; otherwise the split starts even, as the server would enforce it.
+  const shareSlices = useMemo(() => {
+    if (!draft) return []
+    const panels = new Map<number, string>()
+    inbounds
+      .filter((inbound) => inbound.enabled && !inbound.missing && draft.inboundIds.includes(inbound.id))
+      .forEach((inbound) => panels.set(inbound.panelId, inbound.panelName || `面板 #${inbound.panelId}`))
+    const ids = [...panels.keys()].sort((a, b) => a - b)
+    const stored = ids.map((id) => draft.panelWeights[id] ?? 0)
+    const covered =
+      stored.every((weight) => weight > 0) &&
+      stored.reduce((sum, weight) => sum + weight, 0) === 100 &&
+      Object.keys(draft.panelWeights).length === ids.length
+    const weights = covered ? stored : evenWeights(ids.length)
+    return ids.map((id, i) => ({ key: id, label: panels.get(id)!, weight: weights[i] }))
+  }, [draft, inbounds])
 
   const nameInvalid = Boolean(showErrors && draft && !draft.name.trim())
   const commaInvalid = Boolean(showErrors && draft && draft.name.includes(','))
@@ -765,6 +792,38 @@ export function NodeGroupsPage() {
                     )}
                   </ScrollArea>
                 </FieldSet>
+
+                {shareSlices.length > 1 && (
+                  <FieldSet data-disabled={locked || undefined}>
+                    <FieldLegend variant="label">流量分配</FieldLegend>
+                    <FieldDescription>
+                      套餐给这个分组设了流量额度时，按这个比例拆成每个面板的上限；拖动分界线或用方向键调整。
+                    </FieldDescription>
+                    <WeightSplitter
+                      slices={shareSlices}
+                      disabled={locked}
+                      onChange={(next) =>
+                        setDraft({
+                          ...draft,
+                          panelWeights: Object.fromEntries(next.map((slice) => [slice.key, slice.weight])),
+                        })
+                      }
+                    />
+                    {!readOnly && (
+                      <div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={saving}
+                          onClick={() => setDraft({ ...draft, panelWeights: {} })}
+                        >
+                          平均分配
+                        </Button>
+                      </div>
+                    )}
+                  </FieldSet>
+                )}
 
                 <Field orientation="horizontal" data-disabled={locked || undefined}>
                   <FieldLabel htmlFor="group-enabled">启用分组</FieldLabel>

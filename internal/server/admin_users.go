@@ -25,6 +25,9 @@ type planRow struct {
 	UserCount      int64 `json:"userCount"`
 	// PanelLimits are the plan's per-user caps on single panels.
 	PanelLimits []model.PlanPanelLimit `json:"panelLimits"`
+	// GroupLimits are the plan's per-user quotas on node groups, which each
+	// group's panel shares split into per-panel caps.
+	GroupLimits []model.PlanGroupLimit `json:"groupLimits"`
 }
 
 type planRequest struct {
@@ -41,6 +44,50 @@ type planRequest struct {
 	// PanelLimits replaces the plan's per-panel caps when present; nil keeps
 	// them, so a client that predates them cannot clear them by omission.
 	PanelLimits []model.PlanPanelLimit `json:"panelLimits"`
+	// GroupLimits replaces the plan's node-group quotas when present, nil
+	// keeps them.
+	GroupLimits []model.PlanGroupLimit `json:"groupLimits"`
+}
+
+// validGroupLimits drops zero quotas and rejects negative ones, repeated
+// groups and groups that do not exist.
+func (s *Server) validGroupLimits(c *gin.Context, limits []model.PlanGroupLimit) ([]model.PlanGroupLimit, bool) {
+	out := make([]model.PlanGroupLimit, 0, len(limits))
+	seen := map[uint]bool{}
+	for _, l := range limits {
+		if l.TrafficBytes < 0 {
+			failMsg(c, http.StatusBadRequest, "node group traffic limit must not be negative")
+			return nil, false
+		}
+		if seen[l.GroupID] {
+			failMsg(c, http.StatusBadRequest, "node group listed twice in groupLimits")
+			return nil, false
+		}
+		seen[l.GroupID] = true
+		var count int64
+		if s.db.Model(&model.NodeGroup{}).Where("id = ?", l.GroupID).Count(&count); count == 0 {
+			failMsg(c, http.StatusBadRequest, "groupLimits names a node group that does not exist")
+			return nil, false
+		}
+		if l.TrafficBytes > 0 {
+			out = append(out, model.PlanGroupLimit{GroupID: l.GroupID, TrafficBytes: l.TrafficBytes})
+		}
+	}
+	return out, true
+}
+
+// saveGroupLimits replaces the plan's node-group quotas.
+func saveGroupLimits(tx *gorm.DB, planID uint, limits []model.PlanGroupLimit) error {
+	if err := tx.Where("plan_id = ?", planID).Delete(&model.PlanGroupLimit{}).Error; err != nil {
+		return err
+	}
+	for i := range limits {
+		limits[i].PlanID = planID
+	}
+	if len(limits) == 0 {
+		return nil
+	}
+	return tx.Create(&limits).Error
 }
 
 // validPanelLimits drops zero caps, which mean "no cap here", and rejects
@@ -102,11 +149,17 @@ func (s *Server) listPlans(c *gin.Context) {
 	for _, l := range limits {
 		limitsByPlan[l.PlanID] = append(limitsByPlan[l.PlanID], l)
 	}
+	var groupLimits []model.PlanGroupLimit
+	s.db.Order("group_id ASC").Find(&groupLimits)
+	groupLimitsByPlan := map[uint][]model.PlanGroupLimit{}
+	for _, l := range groupLimits {
+		groupLimitsByPlan[l.PlanID] = append(groupLimitsByPlan[l.PlanID], l)
+	}
 	out := make([]planRow, 0, len(plans))
 	for _, p := range plans {
-		row := planRow{Plan: p, ProfileName: profileNames[p.ProfileID], PanelLimits: limitsByPlan[p.ID]}
-		if row.PanelLimits == nil {
-			row.PanelLimits = []model.PlanPanelLimit{}
+		row := planRow{
+			Plan: p, ProfileName: profileNames[p.ProfileID],
+			PanelLimits: jsonList(limitsByPlan[p.ID]), GroupLimits: jsonList(groupLimitsByPlan[p.ID]),
 		}
 		s.db.Model(&model.User{}).Where("plan_id = ?", p.ID).Count(&row.UserCount)
 		inbounds, _ := routing.InboundsForProfile(s.db, p.ProfileID)
@@ -134,6 +187,10 @@ func (s *Server) createPlan(c *gin.Context) {
 	if !ok {
 		return
 	}
+	groupLimits, ok := s.validGroupLimits(c, req.GroupLimits)
+	if !ok {
+		return
+	}
 	now := provision.NowMs()
 	plan := model.Plan{
 		Name:         strings.TrimSpace(req.Name),
@@ -153,7 +210,10 @@ func (s *Server) createPlan(c *gin.Context) {
 		if err := tx.Create(&plan).Error; err != nil {
 			return err
 		}
-		return savePanelLimits(tx, plan.ID, limits)
+		if err := savePanelLimits(tx, plan.ID, limits); err != nil {
+			return err
+		}
+		return saveGroupLimits(tx, plan.ID, groupLimits)
 	})
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
@@ -193,6 +253,12 @@ func (s *Server) updatePlan(c *gin.Context) {
 			return
 		}
 	}
+	var groupLimits []model.PlanGroupLimit
+	if req.GroupLimits != nil {
+		if groupLimits, ok = s.validGroupLimits(c, req.GroupLimits); !ok {
+			return
+		}
+	}
 	resetChanged := reset != plan.TrafficReset
 	plan.TrafficReset = reset
 	plan.TrafficBytes = req.TrafficBytes
@@ -211,10 +277,15 @@ func (s *Server) updatePlan(c *gin.Context) {
 		if err := tx.Save(&plan).Error; err != nil {
 			return err
 		}
-		if req.PanelLimits == nil {
+		if req.PanelLimits != nil {
+			if err := savePanelLimits(tx, plan.ID, limits); err != nil {
+				return err
+			}
+		}
+		if req.GroupLimits == nil {
 			return nil
 		}
-		return savePanelLimits(tx, plan.ID, limits)
+		return saveGroupLimits(tx, plan.ID, groupLimits)
 	})
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
@@ -253,6 +324,9 @@ func (s *Server) deletePlan(c *gin.Context) {
 	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("plan_id = ?", id).Delete(&model.PlanPanelLimit{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("plan_id = ?", id).Delete(&model.PlanGroupLimit{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&model.Plan{}, id).Error
@@ -322,14 +396,11 @@ func (s *Server) listUsers(c *gin.Context) {
 	for _, p := range panels {
 		panelNames[p.ID] = p.Name
 	}
-	var limits []model.PlanPanelLimit
-	s.db.Find(&limits)
+	// The cap a user meets on a panel, from node-group quotas and the plan's
+	// own panel caps, as enforced.
 	planLimits := map[uint]map[uint]int64{}
-	for _, l := range limits {
-		if planLimits[l.PlanID] == nil {
-			planLimits[l.PlanID] = map[uint]int64{}
-		}
-		planLimits[l.PlanID][l.PanelID] = l.TrafficBytes
+	for _, p := range plans {
+		planLimits[p.ID], _ = s.mgr.PlanPanelCaps(&p)
 	}
 
 	base := s.subBase(c)

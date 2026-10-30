@@ -20,6 +20,7 @@ import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-
 import { useSession } from '@/lib/session'
 import { PageHeader } from '@/components/page-header'
 import { PanelStatusBadge, StatusBadge } from '@/components/status-badge'
+import { foldSlices, TrafficShareBar } from '@/components/traffic-share'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -43,6 +44,7 @@ import { Progress, ProgressLabel, ProgressValue } from '@/components/ui/progress
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { errorMessage, formatBytes, formatTime } from '@/lib/format'
 
 const POLL_INTERVAL_MS = 15_000
@@ -351,6 +353,8 @@ export function OverviewPage() {
         </Card>
       </div>
 
+      <TrafficDistribution data={data} />
+
       <Card>
         <CardHeader>
           <CardTitle>面板健康</CardTitle>
@@ -483,4 +487,40 @@ function formatRefreshTime(timestamp: number): string {
     second: '2-digit',
     hour12: false,
   })
+}
+
+/**
+ * TrafficDistribution shows how FireX traffic in the panels' current periods
+ * splits by panel or by node group.
+ */
+function TrafficDistribution({ data }: { data: Overview }) {
+  const [by, setBy] = useState<'group' | 'panel'>('group')
+  const source = by === 'group' ? data.trafficByGroup : data.trafficByPanel
+  const slices = foldSlices(
+    source.map((slice) => ({ key: slice.id, label: slice.name || `#${slice.id}`, value: slice.upload + slice.download })),
+  )
+  const total = source.reduce((sum, slice) => sum + slice.upload + slice.download, 0)
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>流量分布</CardTitle>
+        <CardDescription>各面板当前周期的用量，共 {formatBytes(total)}；节点组按其覆盖的面板汇总。</CardDescription>
+        <CardAction>
+          <ToggleGroup
+            aria-label="分布维度"
+            variant="outline"
+            size="sm"
+            value={[by]}
+            onValueChange={(value) => value[0] && setBy(value[0] as 'group' | 'panel')}
+          >
+            <ToggleGroupItem value="group">按节点组</ToggleGroupItem>
+            <ToggleGroupItem value="panel">按面板</ToggleGroupItem>
+          </ToggleGroup>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <TrafficShareBar slices={slices} ariaLabel={by === 'group' ? '按节点组的流量分布' : '按面板的流量分布'} />
+      </CardContent>
+    </Card>
+  )
 }

@@ -201,6 +201,13 @@ export interface NodeGroup {
   inboundIds: number[]
   usableInbounds: number
   profileCount: number
+  /** How a node-group quota splits over the group's panels, in percent; sums to 100. */
+  panelShares: PanelShare[]
+}
+
+export interface PanelShare {
+  panelId: number
+  weight: number
 }
 
 /** A tier's routing: which node groups its users reach, plus its egress column. */
@@ -318,6 +325,14 @@ export interface Plan {
   userCount: number
   /** Per-user caps on single panels; panels not listed are only held to the plan total. */
   panelLimits: PlanPanelLimit[]
+  /** Per-user quotas on node groups, split over each group's panels by its shares. */
+  groupLimits: PlanGroupLimit[]
+}
+
+export interface PlanGroupLimit {
+  planId: number
+  groupId: number
+  trafficBytes: number
 }
 
 export interface PlanPanelLimit {
@@ -382,6 +397,17 @@ export interface Overview {
   download: number
   failedSyncs: number
   panels: { id: number; name: string; status: string; lastError: string; lastSeenAt: number }[]
+  /** FireX traffic in each panel's current period. */
+  trafficByPanel: TrafficSlice[]
+  /** The same traffic summed over each node group's panels; id 0 is panels in no group. */
+  trafficByGroup: TrafficSlice[]
+}
+
+export interface TrafficSlice {
+  id: number
+  name: string
+  upload: number
+  download: number
 }
 
 export interface SubscriptionPreview {

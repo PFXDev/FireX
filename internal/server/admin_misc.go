@@ -80,13 +80,72 @@ func (s *Server) handleOverview(c *gin.Context) {
 	var failed int64
 	s.db.Model(&model.UserPanel{}).Where("state = ?", model.SyncStateFailed).Count(&failed)
 
+	byPanel, byGroup := s.trafficDistribution(panels)
+
 	c.JSON(http.StatusOK, gin.H{
 		"counts":      counts,
 		"upload":      totalUp,
 		"download":    totalDown,
 		"failedSyncs": failed,
 		"panels":      health,
+		// Each panel's and each node group's share of FireX traffic in the
+		// panels' current periods.
+		"trafficByPanel": byPanel,
+		"trafficByGroup": byGroup,
 	})
+}
+
+type trafficSlice struct {
+	ID       uint   `json:"id"`
+	Name     string `json:"name"`
+	Upload   int64  `json:"upload"`
+	Download int64  `json:"download"`
+}
+
+// trafficDistribution splits FireX traffic by panel, from the panels' own
+// period counters, and by node group, as the sum of the panels each group
+// spans. A panel serves at most one group, so the groups do not overlap;
+// traffic on panels in no group is reported under group id 0.
+func (s *Server) trafficDistribution(panels []model.Panel) ([]trafficSlice, []trafficSlice) {
+	byPanel := make([]trafficSlice, 0, len(panels))
+	panelByID := map[uint]model.Panel{}
+	for _, p := range panels {
+		panelByID[p.ID] = p
+		byPanel = append(byPanel, trafficSlice{p.ID, p.Name, p.Upload, p.Download})
+	}
+
+	var groups []model.NodeGroup
+	s.db.Order("sort_order ASC, id ASC").Find(&groups)
+	ids := make([]uint, 0, len(groups))
+	for _, g := range groups {
+		ids = append(ids, g.ID)
+	}
+	spans, _ := routing.GroupPanels(s.db, ids)
+	counted := map[uint]bool{}
+	byGroup := make([]trafficSlice, 0, len(groups)+1)
+	for _, g := range groups {
+		slice := trafficSlice{ID: g.ID, Name: g.DisplayName()}
+		for _, panelID := range spans[g.ID] {
+			if counted[panelID] {
+				continue
+			}
+			counted[panelID] = true
+			slice.Upload += panelByID[panelID].Upload
+			slice.Download += panelByID[panelID].Download
+		}
+		byGroup = append(byGroup, slice)
+	}
+	rest := trafficSlice{Name: "未归组"}
+	for _, p := range panels {
+		if !counted[p.ID] {
+			rest.Upload += p.Upload
+			rest.Download += p.Download
+		}
+	}
+	if rest.Upload+rest.Download > 0 {
+		byGroup = append(byGroup, rest)
+	}
+	return byPanel, byGroup
 }
 
 // handleSyncNow runs a full discover + reconcile pass on demand.

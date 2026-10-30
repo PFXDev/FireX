@@ -281,6 +281,7 @@ func deletePanelRows(handle *gorm.DB, panelID uint) error {
 	handle.Where("panel_id = ?", panelID).Delete(&model.Inbound{})
 	handle.Where("panel_id = ?", panelID).Delete(&model.UserPanel{})
 	handle.Where("panel_id = ?", panelID).Delete(&model.PlanPanelLimit{})
+	handle.Where("panel_id = ?", panelID).Delete(&model.NodeGroupPanelShare{})
 	return handle.Delete(&model.Panel{}, panelID).Error
 }
 

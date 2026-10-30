@@ -194,3 +194,43 @@ func TestPanelTrafficResetsOnItsDay(t *testing.T) {
 		t.Errorf("next reset = %d, want %d", p.NextTrafficReset(loc), want)
 	}
 }
+
+func TestPlanGroupLimitCapsEachPanelByItsShare(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.mgr.DiscoverPanel(ctx, f.panel)
+	plan := f.newPlan(t, f.enableInbounds(t)) // 1000 bytes overall
+	f.db.Create(&model.PlanGroupLimit{PlanID: plan.ID, GroupID: f.group.ID, TrafficBytes: 400})
+	alice := f.newUser(t, plan.ID)
+
+	// With no stored weights the group's only panel takes the whole quota.
+	f.mgr.ReconcileUser(ctx, alice)
+	if c := f.fake.Client("alice@FireX"); c == nil || c.TotalGB != 400 {
+		t.Fatalf("alice's client = %+v, want TotalGB 400 from the group quota", c)
+	}
+
+	// A tighter plan cap on the panel wins over the group's share.
+	f.db.Create(&model.PlanPanelLimit{PlanID: plan.ID, PanelID: f.panel.ID, TrafficBytes: 150})
+	f.mgr.ReconcileUser(ctx, alice)
+	if c := f.fake.Client("alice@FireX"); c == nil || c.TotalGB != 150 {
+		t.Fatalf("alice's client = %+v, want TotalGB 150 from the tighter panel cap", c)
+	}
+	f.db.Where("plan_id = ?", plan.ID).Delete(&model.PlanPanelLimit{})
+
+	f.fake.SetTraffic("alice@FireX", 200, 200)
+	if err := f.mgr.CollectTraffic(ctx); err != nil {
+		t.Fatalf("CollectTraffic() error = %v", err)
+	}
+	if c := f.fake.Client("alice@FireX"); c == nil || c.Enable {
+		t.Errorf("alice = %+v, want disabled once the group's share is used up", c)
+	}
+	var u model.User
+	f.db.First(&u, alice.ID)
+	if u.Depleted {
+		t.Error("alice marked depleted; she has 600 bytes of her plan left")
+	}
+	blocked, _ := f.mgr.BlockedPanels(&u)
+	if blocked[f.panel.ID] != BlockedUserPanelQuota {
+		t.Errorf("BlockedPanels() = %v, want the per-panel quota", blocked)
+	}
+}
