@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  ChevronDownIcon,
   CopyIcon,
   EyeIcon,
   MoreHorizontalIcon,
@@ -55,6 +56,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group'
+import { Popover, PopoverContent, PopoverDescription, PopoverHeader, PopoverTitle, PopoverTrigger } from '@/components/ui/popover'
 import { Progress, ProgressLabel, ProgressValue } from '@/components/ui/progress'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
@@ -809,35 +811,41 @@ const PANEL_BLOCKED_LABELS: Record<string, string> = {
 }
 
 /**
- * PanelUsage summarizes the user's usage on each panel in one line and puts
- * the per-panel breakdown in a tooltip, so a closed panel shows in the list.
+ * PanelUsage opens the per-panel breakdown on click, including on touch screens.
  */
 function PanelUsage({ user }: { user: User }) {
   const panels = user.panels ?? []
   if (panels.length === 0) return null
   const blocked = panels.filter((panel) => panel.blocked)
   return (
-    <Tooltip>
-      <TooltipTrigger
+    <Popover>
+      <PopoverTrigger
         render={
-          <button
+          <Button
             type="button"
-            className="w-fit text-left text-xs text-muted-foreground underline decoration-dotted underline-offset-2"
+            variant="outline"
+            size="xs"
+            className="w-fit"
             aria-label={`${user.username} 在各面板的用量`}
           />
         }
       >
-        {panels.length} 个面板
+        面板用量 · {panels.length}
         {blocked.length > 0 && <span className="text-destructive">，{blocked.length} 个已停用</span>}
-      </TooltipTrigger>
-      <TooltipContent side="bottom" className="max-w-sm">
+        <ChevronDownIcon data-icon="inline-end" />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="max-h-(--available-height) max-w-[calc(100vw-2rem)] overflow-y-auto">
+        <PopoverHeader>
+          <PopoverTitle className="break-words">{user.username} 的面板用量</PopoverTitle>
+          <PopoverDescription>当前流量周期内各面板的已用流量与限额。</PopoverDescription>
+        </PopoverHeader>
         <ul className="flex flex-col gap-1.5">
           {panels.map((panel) => (
             <PanelUsageLine key={panel.panelId} panel={panel} />
           ))}
         </ul>
-      </TooltipContent>
-    </Tooltip>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -845,7 +853,7 @@ function PanelUsageLine({ panel }: { panel: UserPanelUsage }) {
   return (
     <li className="flex flex-col">
       <span className="flex flex-wrap items-baseline gap-x-2">
-        <span className="font-medium">{panel.panelName || `#${panel.panelId}`}</span>
+        <span className="min-w-0 break-words font-medium">{panel.panelName || `#${panel.panelId}`}</span>
         <span className="tabular-nums">
           {formatBytes(panel.upload + panel.download)}
           {panel.limit > 0 && ` / ${formatQuota(panel.limit)}`}
