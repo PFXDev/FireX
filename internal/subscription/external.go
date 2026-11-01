@@ -81,7 +81,7 @@ func (s *Service) RefreshExternalSubscription(ctx context.Context, id uint) erro
 	nodes, warning, refreshErr := fetchExternalSubscription(ctx, sub.URL)
 	now := time.Now().UnixMilli()
 	if refreshErr != nil {
-		err := s.db.Model(&model.ExternalSubscription{}).Where("id = ?", id).Updates(map[string]any{
+		err := s.db.Model(&model.ExternalSubscription{}).Where("id = ? AND url = ?", id, sub.URL).Updates(map[string]any{
 			"last_check_at": now,
 			"last_error":    refreshErr.Error(),
 		}).Error
@@ -94,7 +94,8 @@ func (s *Service) RefreshExternalSubscription(ctx context.Context, id uint) erro
 	if err != nil {
 		return err
 	}
-	return s.db.Model(&model.ExternalSubscription{}).Where("id = ?", id).Updates(map[string]any{
+	// An edit may have changed the source while this request was in flight.
+	return s.db.Model(&model.ExternalSubscription{}).Where("id = ? AND url = ?", id, sub.URL).Updates(map[string]any{
 		"nodes":          string(encoded),
 		"last_check_at":  now,
 		"last_update_at": now,
@@ -286,6 +287,9 @@ func (s *Service) ExternalEntries(groups []model.NodeGroup, usedNames map[string
 	var entries []Entry
 	var warnings []string
 	for _, sub := range subs {
+		if sub.Nodes == "" {
+			continue
+		}
 		var nodes []externalNode
 		if err := json.Unmarshal([]byte(sub.Nodes), &nodes); err != nil {
 			warnings = append(warnings, fmt.Sprintf("外部订阅 %s: 缓存无法读取", sub.Name))
@@ -323,6 +327,9 @@ func ExternalNodeCount(sub *model.ExternalSubscription) int {
 
 // ExternalNodes returns a management view with credentials and share links removed.
 func ExternalNodes(sub *model.ExternalSubscription) ([]ExternalNode, error) {
+	if sub.Nodes == "" {
+		return []ExternalNode{}, nil
+	}
 	var nodes []externalNode
 	if err := json.Unmarshal([]byte(sub.Nodes), &nodes); err != nil {
 		return nil, errors.New("外部订阅缓存无法读取")

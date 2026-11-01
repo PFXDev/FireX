@@ -82,6 +82,10 @@ type Result struct {
 // Build fetches the user's panel share links and merges them with the cached
 // external nodes granted through the same profile's node groups.
 func (s *Service) Build(ctx context.Context, u *model.User) (*Result, error) {
+	result := &Result{User: u}
+	if !u.Active(time.Now().UnixMilli()) {
+		return result, nil
+	}
 	inbounds, err := s.mgr.InboundsForUser(u)
 	if err != nil {
 		return nil, err
@@ -97,7 +101,6 @@ func (s *Service) Build(ctx context.Context, u *model.User) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := &Result{User: u}
 
 	byPanel := map[uint][]model.Inbound{}
 	panelOrder := make([]uint, 0, len(inbounds))

@@ -1,15 +1,167 @@
 package server
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/PFXDev/FireX/internal/model"
 	"github.com/PFXDev/FireX/internal/routing"
 )
+
+func TestInactiveUsersCannotDownloadExternalNodes(t *testing.T) {
+	h := newHarness(t)
+	user := h.seed()
+	const credential = "external-test-uuid"
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("vless://" + credential + "@example.com:443?security=tls#external"))
+	}))
+	defer source.Close()
+	sub := model.ExternalSubscription{Name: "source", URL: source.URL, Enabled: true}
+	if err := h.db.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.subs.RefreshExternalSubscription(context.Background(), sub.ID); err != nil {
+		t.Fatal(err)
+	}
+	var group model.NodeGroup
+	if err := h.db.First(&group).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.Create(&model.NodeGroupExternalSubscription{GroupID: group.ID, SubscriptionID: sub.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		enabled  bool
+		depleted bool
+		expires  int64
+		download int64
+		active   bool
+	}{
+		{"disabled", false, false, 0, 0, false},
+		{"expired", true, false, 1, 0, false},
+		{"over quota", true, false, 0, 100, false},
+		{"depleted", true, true, 0, 0, false},
+		{"reactivated", true, false, 0, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := h.db.Model(user).Updates(map[string]any{
+				"enabled": tc.enabled, "depleted": tc.depleted, "expires_at": tc.expires,
+				"traffic_limit": 100, "download": tc.download,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			for _, target := range []string{"mihomo", "base64"} {
+				body := h.mustDo(http.MethodGet, "/sub/"+user.SubToken+"?target="+target, nil)
+				if target == "base64" {
+					var err error
+					body, err = base64.StdEncoding.DecodeString(string(body))
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if strings.Contains(string(body), credential) != tc.active {
+					t.Errorf("%s output: external credentials present=%v, want %v", target, strings.Contains(string(body), credential), tc.active)
+				}
+			}
+		})
+	}
+}
+
+func TestExternalSubscriptionURLChangeDuringRefresh(t *testing.T) {
+	for _, oldStatus := range []int{http.StatusOK, http.StatusBadGateway} {
+		t.Run(http.StatusText(oldStatus), func(t *testing.T) {
+			h := newHarness(t)
+			h.login()
+			started, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			releaseOld := func() { once.Do(func() { close(release) }) }
+			oldSource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				close(started)
+				<-release
+				w.WriteHeader(oldStatus)
+				_, _ = w.Write([]byte("vless://old-uuid@old.example.com:443#old"))
+			}))
+			defer oldSource.Close()
+			defer releaseOld()
+			newSource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte("vless://new-uuid@new.example.com:443#new"))
+			}))
+			defer newSource.Close()
+			sub := model.ExternalSubscription{
+				Name: "source", URL: oldSource.URL, Enabled: true, UpdateInterval: 3600,
+				Nodes: "[]", LastCheckAt: time.Now().UnixMilli(),
+			}
+			if err := h.db.Create(&sub).Error; err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- h.srv.subs.RefreshExternalSubscription(context.Background(), sub.ID) }()
+			<-started
+			h.mustDo(http.MethodPut, "/api/external-subscriptions/"+itoa(sub.ID), map[string]any{
+				"name": sub.Name, "url": newSource.URL,
+			})
+			releaseOld()
+			err := <-done
+			if (err == nil) != (oldStatus == http.StatusOK) {
+				t.Fatalf("old refresh error = %v", err)
+			}
+			if err := h.db.First(&sub, sub.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if sub.URL != newSource.URL || sub.Nodes != "[]" || sub.LastCheckAt != 0 || sub.LastUpdateAt != 0 || sub.LastError != "" {
+				t.Fatalf("old request changed new source state: %+v", sub)
+			}
+			if err := h.srv.subs.RefreshDueExternalSubscriptions(context.Background(), time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.db.First(&sub, sub.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(sub.Nodes, "new.example.com") || sub.LastUpdateAt == 0 {
+				t.Fatalf("new source was not refreshed on the next tick: %+v", sub)
+			}
+		})
+	}
+}
+
+func TestExternalSubscriptionDetailsAfterFailedFirstRefresh(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusBadGateway)
+	}))
+	defer source.Close()
+	var created struct {
+		Subscription model.ExternalSubscription `json:"subscription"`
+		RefreshError string                     `json:"refreshError"`
+	}
+	if err := json.Unmarshal(h.mustDo(http.MethodPost, "/api/external-subscriptions", map[string]any{
+		"name": "empty", "url": source.URL,
+	}), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.RefreshError == "" {
+		t.Fatal("failed refresh was not reported")
+	}
+	var detail struct {
+		Subscription model.ExternalSubscription `json:"subscription"`
+		Nodes        []any                      `json:"nodes"`
+	}
+	if err := json.Unmarshal(h.mustDo(http.MethodGet, "/api/external-subscriptions/"+itoa(created.Subscription.ID), nil), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Nodes == nil || len(detail.Nodes) != 0 || detail.Subscription.LastError != created.RefreshError {
+		t.Fatalf("empty detail did not retain the refresh error: %+v", detail)
+	}
+}
 
 func TestNodeGroupExternalSourcesAndPanelSharesCoexist(t *testing.T) {
 	h := newHarness(t)

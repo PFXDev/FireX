@@ -153,11 +153,20 @@ func (s *Server) updateExternalSubscription(c *gin.Context) {
 		failMsg(c, http.StatusNotFound, "external subscription not found")
 		return
 	}
+	previousURL := sub.URL
 	if err := req.apply(&sub); err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.db.Save(&sub).Error; err != nil {
+	// Edit settings without writing back a stale copy of the refresh cache.
+	changes := map[string]any{
+		"name": sub.Name, "url": sub.URL, "enabled": sub.Enabled,
+		"update_interval": sub.UpdateInterval, "remark": sub.Remark,
+	}
+	if previousURL != sub.URL {
+		changes["last_check_at"] = 0
+	}
+	if err := s.db.Model(&sub).Updates(changes).Error; err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}

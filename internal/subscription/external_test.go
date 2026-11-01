@@ -79,10 +79,14 @@ func newExternalTestService(t *testing.T) (*store.DB, *Service) {
 }
 
 func TestRefreshExternalSubscriptionKeepsLastGoodNodes(t *testing.T) {
-	var failing atomic.Bool
+	var responseMode atomic.Int32
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if failing.Load() {
+		switch responseMode.Load() {
+		case 1:
 			http.Error(w, "upstream unavailable", http.StatusBadGateway)
+			return
+		case 2:
+			_, _ = w.Write([]byte("proxies:\n  - name: broken\n    type: vless\n"))
 			return
 		}
 		_, _ = w.Write([]byte(base64.StdEncoding.EncodeToString([]byte(testShareLink))))
@@ -107,18 +111,20 @@ func TestRefreshExternalSubscriptionKeepsLastGoodNodes(t *testing.T) {
 		t.Fatalf("successful refresh state = %+v", sub)
 	}
 
-	failing.Store(true)
-	if err := svc.RefreshExternalSubscription(context.Background(), sub.ID); err == nil {
-		t.Fatal("failed upstream refresh returned nil")
-	}
-	if err := db.First(&sub, sub.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if sub.Nodes != oldNodes || sub.LastUpdateAt != oldSuccess || ExternalNodeCount(&sub) != 1 {
-		t.Error("failed refresh replaced the last good cache")
-	}
-	if sub.LastError == "" || strings.Contains(sub.LastError, "secret-token") {
-		t.Errorf("unsafe or missing refresh error: %q", sub.LastError)
+	for _, mode := range []int32{1, 2} {
+		responseMode.Store(mode)
+		if err := svc.RefreshExternalSubscription(context.Background(), sub.ID); err == nil {
+			t.Fatalf("response mode %d: invalid refresh returned nil", mode)
+		}
+		if err := db.First(&sub, sub.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if sub.Nodes != oldNodes || sub.LastUpdateAt != oldSuccess || ExternalNodeCount(&sub) != 1 {
+			t.Error("failed refresh replaced the last good cache")
+		}
+		if sub.LastError == "" || strings.Contains(sub.LastError, "secret-token") {
+			t.Errorf("unsafe or missing refresh error: %q", sub.LastError)
+		}
 	}
 }
 
