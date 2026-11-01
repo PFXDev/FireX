@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  ChevronDownIcon,
   CopyIcon,
   EyeIcon,
   MoreHorizontalIcon,
@@ -19,7 +18,7 @@ import {
 import { toast } from 'sonner'
 
 import { api } from '@/api'
-import type { Plan, SubscriptionPreview, User, UserPanelUsage } from '@/api'
+import type { Plan, SubscriptionPreview, User } from '@/api'
 import { CodeText, CodeTextarea } from '@/components/code-display'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
@@ -43,6 +42,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   DropdownMenu,
@@ -56,7 +56,6 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group'
-import { Popover, PopoverContent, PopoverDescription, PopoverHeader, PopoverTitle, PopoverTrigger } from '@/components/ui/popover'
 import { Progress, ProgressLabel, ProgressValue } from '@/components/ui/progress'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
@@ -421,7 +420,6 @@ export function UsersPage() {
                 </TableHeader>
                 <TableBody>
                   {filteredUsers.map((user) => {
-                    const usage = user.trafficLimit > 0 ? Math.min(100, (user.used / user.trafficLimit) * 100) : 0
                     const previewing = rowAction?.userId === user.id && rowAction.kind === 'preview'
                     const resyncing = rowAction?.userId === user.id && rowAction.kind === 'resync'
                     return (
@@ -436,21 +434,7 @@ export function UsersPage() {
                           {user.planName || <span className="text-muted-foreground">未分配</span>}
                         </TableCell>
                         <TableCell className="min-w-40">
-                          <div className="flex flex-col gap-1.5">
-                            <span className="tabular-nums">{formatBytes(user.used)} / {formatQuota(user.trafficLimit)}</span>
-                            {user.trafficLimit > 0 && (
-                              <Progress value={usage}>
-                                <ProgressLabel className="sr-only">{user.username} 流量使用率</ProgressLabel>
-                                <ProgressValue className="sr-only" />
-                              </Progress>
-                            )}
-                            {user.nextTrafficReset > 0 && (
-                              <span className="text-xs text-muted-foreground">
-                                {new Date(user.nextTrafficReset).toLocaleDateString('zh-CN')} 重置
-                              </span>
-                            )}
-                            <PanelUsage user={user} />
-                          </div>
+                          <UserTraffic user={user} />
                         </TableCell>
                         <TableCell className="hidden text-muted-foreground md:table-cell">{formatExpiry(user.expiresAt)}</TableCell>
                         <TableCell className="hidden tabular-nums text-muted-foreground lg:table-cell">{user.inboundCount}</TableCell>
@@ -810,56 +794,77 @@ const PANEL_BLOCKED_LABELS: Record<string, string> = {
   'user-panel-quota': '已用满套餐在该面板的限额',
 }
 
-/**
- * PanelUsage opens the per-panel breakdown on click, including on touch screens.
- */
-function PanelUsage({ user }: { user: User }) {
+function UserTraffic({ user }: { user: User }) {
   const panels = user.panels ?? []
-  if (panels.length === 0) return null
-  const blocked = panels.filter((panel) => panel.blocked)
-  return (
-    <Popover>
-      <PopoverTrigger
-        render={
-          <Button
-            type="button"
-            variant="outline"
-            size="xs"
-            className="w-fit"
-            aria-label={`${user.username} 在各面板的用量`}
-          />
-        }
-      >
-        面板用量 · {panels.length}
-        {blocked.length > 0 && <span className="text-destructive">，{blocked.length} 个已停用</span>}
-        <ChevronDownIcon data-icon="inline-end" />
-      </PopoverTrigger>
-      <PopoverContent align="start" className="max-h-(--available-height) max-w-[calc(100vw-2rem)] overflow-y-auto">
-        <PopoverHeader>
-          <PopoverTitle className="break-words">{user.username} 的面板用量</PopoverTitle>
-          <PopoverDescription>当前流量周期内各面板的已用流量与限额。</PopoverDescription>
-        </PopoverHeader>
-        <ul className="flex flex-col gap-1.5">
-          {panels.map((panel) => (
-            <PanelUsageLine key={panel.panelId} panel={panel} />
-          ))}
-        </ul>
-      </PopoverContent>
-    </Popover>
-  )
-}
+  const usage = user.trafficLimit > 0 ? Math.min(100, (user.used / user.trafficLimit) * 100) : 0
+  const blockedCount = panels.filter((panel) => panel.blocked).length
 
-function PanelUsageLine({ panel }: { panel: UserPanelUsage }) {
   return (
-    <li className="flex flex-col">
-      <span className="flex flex-wrap items-baseline gap-x-2">
-        <span className="min-w-0 break-words font-medium">{panel.panelName || `#${panel.panelId}`}</span>
-        <span className="tabular-nums">
-          {formatBytes(panel.upload + panel.download)}
-          {panel.limit > 0 && ` / ${formatQuota(panel.limit)}`}
-        </span>
-      </span>
-      {panel.blocked && <span>{PANEL_BLOCKED_LABELS[panel.blocked] ?? panel.blocked}，已停用</span>}
-    </li>
+    <Dialog>
+      <DialogTrigger
+        render={<div />}
+        nativeButton={false}
+        className="flex cursor-pointer flex-col gap-1.5 rounded-sm text-left outline-none transition-colors hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        aria-label={`查看 ${user.username} 的流量明细，已用 ${formatBytes(user.used)}，总限额 ${formatQuota(user.trafficLimit)}`}
+      >
+        <span className="tabular-nums">{formatBytes(user.used)} / {formatQuota(user.trafficLimit)}</span>
+        {user.trafficLimit > 0 && (
+          <Progress value={usage}>
+            <ProgressLabel className="sr-only">{user.username} 流量使用率</ProgressLabel>
+            <ProgressValue className="sr-only" />
+          </Progress>
+        )}
+        {user.nextTrafficReset > 0 && (
+          <span className="text-xs text-muted-foreground">
+            {new Date(user.nextTrafficReset).toLocaleDateString('zh-CN')} 重置
+          </span>
+        )}
+        {blockedCount > 0 && <span className="text-xs text-destructive">{blockedCount} 个面板已停用</span>}
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{user.username} 的流量明细</DialogTitle>
+          <DialogDescription>
+            本周期已用 {formatBytes(user.used)} / {formatQuota(user.trafficLimit)}，以下为各面板用量。
+          </DialogDescription>
+        </DialogHeader>
+        {panels.length > 0 ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>面板</TableHead>
+                <TableHead className="text-right">已用流量</TableHead>
+                <TableHead className="text-right">限额</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {panels.map((panel) => (
+                <TableRow key={panel.panelId}>
+                  <TableCell className="whitespace-normal">
+                    <div className="flex flex-col gap-1">
+                      <span className="font-medium">{panel.panelName || `#${panel.panelId}`}</span>
+                      {panel.blocked && (
+                        <span className="text-xs text-destructive">
+                          {PANEL_BLOCKED_LABELS[panel.blocked] ?? panel.blocked}，已停用
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{formatBytes(panel.upload + panel.download)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatQuota(panel.limit)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>暂无面板用量</EmptyTitle>
+              <EmptyDescription>该用户当前没有面板流量记录。</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
