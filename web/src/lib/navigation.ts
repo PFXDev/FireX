@@ -23,6 +23,7 @@ export type RouteKey =
   | 'inbound-configs'
   | 'inbound-templates'
   | 'node-groups'
+  | 'external-subscriptions'
   | 'plans'
   | 'users'
   | 'routing'
@@ -70,7 +71,17 @@ export const NAV_GROUPS: NavGroup[] = [
           { route: 'inbound-templates', title: '入站模板' },
         ],
       },
-      { route: 'node-groups', title: '节点组', icon: BoxesIcon, superAdminOnly: true, configView: true },
+      {
+        route: 'node-groups',
+        title: '节点组',
+        icon: BoxesIcon,
+        superAdminOnly: true,
+        configView: true,
+        items: [
+          { route: 'node-groups', title: '节点组列表' },
+          { route: 'external-subscriptions', title: '外部订阅' },
+        ],
+      },
       { route: 'plans', title: '套餐', icon: TicketIcon },
       { route: 'users', title: '用户', icon: UsersIcon },
     ],

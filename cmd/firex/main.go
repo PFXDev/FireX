@@ -117,6 +117,7 @@ func main() {
 		return mgr.CollectTraffic(ctx)
 	})
 	go backups.Run(bgCtx)
+	go subs.RunExternalSubscriptions(bgCtx)
 	upd.StartBackground(bgCtx)
 
 	// SIGHUP applies a hand-edited config file without a restart, the same

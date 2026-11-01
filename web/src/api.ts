@@ -184,7 +184,36 @@ export interface NodeGroupTag {
   value: string
 }
 
-/** A hand-picked bundle of inbounds, rendered as one proxy-group. */
+export interface ExternalSubscription {
+  id: number
+  name: string
+  url: string
+  enabled: boolean
+  updateInterval: number
+  remark: string
+  lastCheckAt: number
+  lastUpdateAt: number
+  lastError: string
+  createdAt: number
+  updatedAt: number
+  nodeCount: number
+  groupCount: number
+}
+
+export interface ExternalSubscriptionNode {
+  name: string
+  protocol: string
+  server: string
+  port: number
+  hasShareLink: boolean
+}
+
+export interface ExternalSubscriptionDetail {
+  subscription: ExternalSubscription
+  nodes: ExternalSubscriptionNode[]
+}
+
+/** A bundle of panel inbounds and external subscriptions, rendered as one proxy-group. */
 export interface NodeGroup {
   id: number
   name: string
@@ -199,7 +228,9 @@ export interface NodeGroup {
   remark: string
   tags: NodeGroupTag[]
   inboundIds: number[]
+  subscriptionIds: number[]
   usableInbounds: number
+  usableExternalNodes: number
   profileCount: number
   /** How a node-group quota splits over the group's panels, in percent; sums to 100. */
   panelShares: PanelShare[]
@@ -416,6 +447,8 @@ export interface SubscriptionPreview {
     name: string
     protocol: string
     panelId: number
+    externalSubscriptionId: number
+    externalSubscriptionName: string
     clashSupported: boolean
     link: string
   }[]

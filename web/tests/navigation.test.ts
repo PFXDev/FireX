@@ -11,7 +11,11 @@ test('hash routes ignore query strings and fall back to the overview', () => {
 })
 
 test('a parent menu contains its sub-pages', () => {
-  const inbounds = NAV_GROUPS.flatMap((group) => group.items).find((item) => item.route === 'inbounds')!
+  const items = NAV_GROUPS.flatMap((group) => group.items)
+  const inbounds = items.find((item) => item.route === 'inbounds')!
   assert.ok(isRouteWithin(inbounds, 'inbound-configs'))
   assert.ok(!isRouteWithin(inbounds, 'panels'))
+  const nodeGroups = items.find((item) => item.route === 'node-groups')!
+  assert.ok(isRouteWithin(nodeGroups, 'external-subscriptions'))
+  assert.ok(!isRouteWithin(nodeGroups, 'inbounds'))
 })

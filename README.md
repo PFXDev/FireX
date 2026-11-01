@@ -28,11 +28,14 @@ and no user-facing portal — just an admin UI and a subscription endpoint.
   clients as a single proxy. FireX owns the display name, emoji and, when the
   panel's own address or port is not the one clients should dial, the public
   endpoint; rediscovery never overwrites them.
-- **Node group** (节点组) — hand-picked inbounds from any number of panels
+- **External subscription** (外部订阅) — an HTTP(S) share-link or mihomo
+  subscription FireX refreshes on its own schedule. The last good parsed nodes
+  stay cached if upstream fails; the original URL is never sent to users.
+- **Node group** (节点组) — hand-picked inbounds and external subscriptions
   presented as one proxy-group, normally one region on one line
   (`🇭🇰 香港 IEPL`). It carries key/value tags (地区, 线路, 落地) for filtering,
-  and one inbound may sit in several groups. This is the finest unit anything
-  else addresses.
+  and one inbound or subscription may sit in several groups. This is the finest
+  unit anything else addresses.
 - **Policy** (分流策略) — a reusable rule list plus the identity it takes in the
   client's group list (`🤖 AI 服务`). Policies are global and globally ordered:
   every user sees the same rules in the same order.
@@ -83,9 +86,10 @@ that file has no `adminPassword` yet, generates one and prints it once. Open
    inbounds immediately.
 2. **Inbounds** — newly discovered inbounds are disabled on purpose. Give them a
    name and emoji, then enable the ones you want to sell.
-3. **Node groups** — bundle those inbounds into the proxy-groups clients will
-   see, one per region and line, and tag them. Nothing reaches a user until it
-   is in a group.
+3. **Node groups** — bundle inbounds into the proxy-groups clients will see,
+   one per region and line, and tag them. Optionally add remote sources under
+   **External subscriptions**, then select one or more in the same group editor.
+   Nothing reaches a user until it is in a group.
 4. **Routing** — the matrix. Rows are policies, columns are profiles. Create a
    profile per tier and tick the node groups it may use; the default column
    usually says "every node group", which each profile narrows to its own
@@ -291,8 +295,8 @@ PUT  /api/agent/submission             # { revision, ...sections, summary }
 
 A **snapshot** is the configuration as one JSON document keyed by name rather
 than row id, so the same document means the same thing on any install. The
-top-level sections are `panels`, `inbounds`, `inboundTemplates`, `nodeGroups`,
-`profiles`, `routing` and `clashTemplate`.
+top-level sections are `panels`, `inbounds`, `inboundTemplates`,
+`externalSubscriptions`, `nodeGroups`, `profiles`, `routing` and `clashTemplate`.
 
 - **Sections are optional; a present section is the whole truth.** A section
   left out is untouched. A section that is present replaces what is stored:
@@ -307,8 +311,8 @@ top-level sections are `panels`, `inbounds`, `inboundTemplates`, `nodeGroups`,
   current configuration, both when the agent submits and when the admin
   merges.
 - **References are names.** Inbounds are addressed as `{ panel, remoteId }`;
-  node groups, profiles, policies and rule sets by bare name, as everywhere
-  else in FireX.
+  external subscriptions, node groups, profiles, policies and rule sets by bare
+  name, as everywhere else in FireX.
 - **Panels.** `apiToken` is never exported. It is required for a new panel and
   optional for an existing one (empty keeps the stored token). Dropping a panel
   deletes every FireX client on it, so the review page lists it under
@@ -320,6 +324,9 @@ top-level sections are `panels`, `inbounds`, `inboundTemplates`, `nodeGroups`,
   Leaving out an inbound that still exists on its panel is refused; one
   marked missing is deleted. Discovery-owned fields (`tag`, `port`, …) are
   shown for reading and ignored on merge.
+- **External subscriptions.** `url` is never exported. It is required for a new
+  source and empty keeps the stored URL on an existing one. Parsed nodes and
+  refresh state stay outside the snapshot; node groups reference sources by name.
 - **Panels are written only for clients.** If the merge changed which inbounds
   a profile reaches, the affected users are pushed before the merge returns
   (`reconciledPlans`, `syncError`). A changed managed configuration is **not**
@@ -423,6 +430,23 @@ CI builds Linux and macOS binaries for amd64 and arm64; Windows artifacts are
 not published. Asset names are `firex-{goos}-{goarch}` and must stay identical to
 `targetName()` in `internal/updater` — a name only one side knows about is a
 permanent 404 for those machines.
+
+## External subscriptions
+
+The **Node groups → External subscriptions** tab manages any number of remote
+HTTP(S) subscriptions. FireX accepts base64 or plain-text share-link lists and
+mihomo/Clash YAML with a `proxies` sequence. Each source has its own refresh
+interval (one hour by default, 60 seconds minimum), enable switch and manual
+refresh. Saving also attempts an immediate refresh.
+
+Fetched nodes are parsed and cached on the server. A failed fetch or a response
+with no usable nodes preserves the last good cache and records the error; user
+subscription requests never wait on the upstream site. Select one or more
+sources in a node-group editor to include all their usable cached nodes. Profile
+whitelist rules apply unchanged, external sources never cause panel provisioning,
+and the original subscription URL is not exposed to users. Share-link nodes work
+in both output formats; YAML-only proxies that have no lossless share-link form
+are included only in mihomo output.
 
 ## Subscriptions
 

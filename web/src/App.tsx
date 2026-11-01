@@ -31,6 +31,7 @@ import { InboundsPage } from '@/pages/Inbounds'
 import { InboundConfigsPage } from '@/pages/InboundConfigs'
 import { InboundTemplatesPage } from '@/pages/InboundTemplates'
 import { NodeGroupsPage } from '@/pages/NodeGroups'
+import { ExternalSubscriptionsPage } from '@/pages/ExternalSubscriptions'
 import { PlansPage } from '@/pages/Plans'
 import { RoutingPage } from '@/pages/Routing'
 import { UsersPage } from '@/pages/Users'
@@ -147,6 +148,8 @@ function Page({ route }: { route: RouteKey }) {
       return <InboundTemplatesPage />
     case 'node-groups':
       return <NodeGroupsPage />
+    case 'external-subscriptions':
+      return <ExternalSubscriptionsPage />
     case 'plans':
       return <PlansPage />
     case 'users':

@@ -148,6 +148,13 @@ func (s *Server) routes() {
 	authed.PUT("/node-groups/:id", s.superAdminOnly, s.updateNodeGroup)
 	authed.DELETE("/node-groups/:id", s.superAdminOnly, s.deleteNodeGroup)
 
+	authed.GET("/external-subscriptions", s.configViewer, s.listExternalSubscriptions)
+	authed.POST("/external-subscriptions", s.superAdminOnly, s.createExternalSubscription)
+	authed.GET("/external-subscriptions/:id", s.configViewer, s.getExternalSubscription)
+	authed.PUT("/external-subscriptions/:id", s.superAdminOnly, s.updateExternalSubscription)
+	authed.DELETE("/external-subscriptions/:id", s.superAdminOnly, s.deleteExternalSubscription)
+	authed.POST("/external-subscriptions/:id/refresh", s.superAdminOnly, s.refreshExternalSubscription)
+
 	// Operators read profiles to render the plan list, but never reshape them.
 	authed.GET("/profiles", s.listProfiles)
 	authed.POST("/profiles", s.superAdminOnly, s.createProfile)

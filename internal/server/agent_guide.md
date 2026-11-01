@@ -34,11 +34,11 @@ FireX 是一套 3x-ui 面板集群的控制面。你通过本 API 读取它的�
 ## 快照规则
 
 - **块可选，带上的块就是最终状态。** 顶层块有 `panels`、`inbounds`、`inboundTemplates`、
-  `nodeGroups`、`profiles`、`routing`、`clashTemplate`。不带某个块，该块就不会被改动。
+  `externalSubscriptions`、`nodeGroups`、`profiles`、`routing`、`clashTemplate`。不带某个块，该块就不会被改动。
   带了某个块，就必须写出它的全部条目：没列出的条目会被删除，条目里省略的字段取新建时的默认值。
   所以最稳妥的做法是：从读到的快照出发修改，只提交改动涉及的块，并且保留这些块的其余内容原样。
 - **一律按名称引用**，不用数据库 ID。入站写作 `{ "panel": "面板名", "remoteId": 3 }`；
-  节点组、分流方案、分流策略、规则集都按裸名称（不含 emoji 图标）引用。
+  外部订阅、节点组、分流方案、分流策略、规则集都按裸名称（不含 emoji 图标）引用。
 - **整份校验**。整份文档在一个事务里校验，任何一处出错都整体拒绝，错误信息会指出位置。
 
 ## 各块说明
@@ -52,9 +52,12 @@ FireX 是一套 3x-ui 面板集群的控制面。你通过本 API 读取它的�
   设为 `null` 表示不再接管。改动后的配置只会变成「待下发」，不会写到面板。
   面板上仍然存在的入站不能从列表里删掉。
 - `inboundTemplates`：入站模板，`{ name, parameters }`。
-- `nodeGroups`：节点组。一个节点组把手选的入站组成一个客户端代理组，字段有 `type`（`select`、`url-test`、
-  `fallback`、`load-balance`）、`tags`（键值对，如 `地区`、`线路`）、`inbounds`（入站引用列表）。
-- `profiles`：分流方案，相当于一个档位。`nodeGroups` 是白名单，决定该档用户能用哪些入站；
+- `externalSubscriptions`：外部订阅。可改 `name`、`url`、`enabled`、`updateInterval`（秒，至少 60）、`remark`。
+  导出时不含 `url`；已有订阅留空表示保持原地址，新订阅必须提供 HTTP(S) URL。缓存节点、刷新时间和错误不在快照里。
+- `nodeGroups`：节点组。一个节点组把入站和外部订阅组成一个客户端代理组，字段有 `type`（`select`、`url-test`、
+  `fallback`、`load-balance`）、`tags`（键值对，如 `地区`、`线路`）、`inbounds`（入站引用列表）、
+  `externalSubscriptions`（外部订阅名称列表）。
+- `profiles`：分流方案，相当于一个档位。`nodeGroups` 是白名单，决定该档用户能用哪些节点；
   `allGroups: true` 表示放行全部节点组。还有套餐绑定的方案不能删除。
 - `routing`：分流矩阵。
   - `policies` 是分流策略，**顺序就是规则优先级**，也是客户端里策略组的显示顺序。必须恰好有一条

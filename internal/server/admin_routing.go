@@ -31,11 +31,13 @@ type nodeGroupTag struct {
 
 type nodeGroupRow struct {
 	model.NodeGroup
-	Tags       []nodeGroupTag `json:"tags"`
-	InboundIDs []uint         `json:"inboundIds"`
+	Tags            []nodeGroupTag `json:"tags"`
+	InboundIDs      []uint         `json:"inboundIds"`
+	SubscriptionIDs []uint         `json:"subscriptionIds"`
 	// UsableInbounds counts the members a subscription would actually render, so
 	// a group that looks populated but ships nothing is visible in the list.
-	UsableInbounds int `json:"usableInbounds"`
+	UsableInbounds      int `json:"usableInbounds"`
+	UsableExternalNodes int `json:"usableExternalNodes"`
 	// ProfileCount is how many profiles grant this group. Zero means no user can
 	// reach it.
 	ProfileCount int `json:"profileCount"`
@@ -57,6 +59,12 @@ func (s *Server) listNodeGroups(c *gin.Context) {
 	for _, link := range links {
 		members[link.GroupID] = append(members[link.GroupID], link.InboundID)
 	}
+	var externalLinks []model.NodeGroupExternalSubscription
+	s.db.Find(&externalLinks)
+	externalMembers := map[uint][]uint{}
+	for _, link := range externalLinks {
+		externalMembers[link.GroupID] = append(externalMembers[link.GroupID], link.SubscriptionID)
+	}
 
 	var tags []model.NodeGroupTag
 	s.db.Order("key ASC").Find(&tags)
@@ -70,6 +78,14 @@ func (s *Server) listNodeGroups(c *gin.Context) {
 	usable := map[uint]bool{}
 	for _, n := range inbounds {
 		usable[n.ID] = n.Enabled && !n.Missing
+	}
+	var externalSubs []model.ExternalSubscription
+	s.db.Find(&externalSubs)
+	externalNodes := map[uint]int{}
+	for i := range externalSubs {
+		if externalSubs[i].Enabled {
+			externalNodes[externalSubs[i].ID] = subscription.ExternalNodeCount(&externalSubs[i])
+		}
 	}
 
 	var wildcards int64
@@ -94,16 +110,20 @@ func (s *Server) listNodeGroups(c *gin.Context) {
 	out := make([]nodeGroupRow, 0, len(groups))
 	for _, g := range groups {
 		row := nodeGroupRow{
-			NodeGroup:    g,
-			Tags:         jsonList(tagsByGroup[g.ID]),
-			InboundIDs:   jsonList(members[g.ID]),
-			ProfileCount: profileCount[g.ID] + int(wildcards),
-			PanelShares:  jsonList(shares[g.ID]),
+			NodeGroup:       g,
+			Tags:            jsonList(tagsByGroup[g.ID]),
+			InboundIDs:      jsonList(members[g.ID]),
+			SubscriptionIDs: jsonList(externalMembers[g.ID]),
+			ProfileCount:    profileCount[g.ID] + int(wildcards),
+			PanelShares:     jsonList(shares[g.ID]),
 		}
 		for _, id := range row.InboundIDs {
 			if usable[id] {
 				row.UsableInbounds++
 			}
+		}
+		for _, id := range row.SubscriptionIDs {
+			row.UsableExternalNodes += externalNodes[id]
 		}
 		out = append(out, row)
 	}
@@ -111,18 +131,19 @@ func (s *Server) listNodeGroups(c *gin.Context) {
 }
 
 type nodeGroupRequest struct {
-	Name       string         `json:"name"`
-	Emoji      string         `json:"emoji"`
-	Type       string         `json:"type"`
-	TestURL    string         `json:"testUrl"`
-	Interval   *int           `json:"interval"`
-	Tolerance  *int           `json:"tolerance"`
-	Multiplier *float64       `json:"multiplier"`
-	SortOrder  *int           `json:"sortOrder"`
-	Enabled    *bool          `json:"enabled"`
-	Remark     string         `json:"remark"`
-	Tags       []nodeGroupTag `json:"tags"`
-	InboundIDs []uint         `json:"inboundIds"`
+	Name            string         `json:"name"`
+	Emoji           string         `json:"emoji"`
+	Type            string         `json:"type"`
+	TestURL         string         `json:"testUrl"`
+	Interval        *int           `json:"interval"`
+	Tolerance       *int           `json:"tolerance"`
+	Multiplier      *float64       `json:"multiplier"`
+	SortOrder       *int           `json:"sortOrder"`
+	Enabled         *bool          `json:"enabled"`
+	Remark          string         `json:"remark"`
+	Tags            []nodeGroupTag `json:"tags"`
+	InboundIDs      []uint         `json:"inboundIds"`
+	SubscriptionIDs []uint         `json:"subscriptionIds"`
 	// PanelShares replaces the group's per-panel weights when present; nil
 	// keeps them.
 	PanelShares []routing.PanelShare `json:"panelShares"`
@@ -220,7 +241,8 @@ func (s *Server) createNodeGroup(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	if _, err := setGroupMembers(s.db.DB, g.ID, req.InboundIDs); err != nil {
+	inboundsChanged, err := setGroupMembers(s.db.DB, g.ID, req.InboundIDs)
+	if err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -228,10 +250,17 @@ func (s *Server) createNodeGroup(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	// A brand-new group is reachable straight away by every profile that takes
-	// all groups, so its inbounds have to be pushed.
+	if _, err := setGroupExternalSubscriptions(s.db.DB, g.ID, req.SubscriptionIDs); err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	// Only real panel inbounds need provisioning; external sources are already
+	// available from the cache when a profile reaches this new group.
 	s.subs.InvalidateAll()
-	syncErr := s.reconcilePlans(routing.PlansUsingNodeGroup(s.db, g.ID))
+	var syncErr error
+	if inboundsChanged {
+		syncErr = s.reconcilePlans(routing.PlansUsingNodeGroup(s.db, g.ID))
+	}
 	c.JSON(http.StatusOK, gin.H{"group": g, "syncError": errString(syncErr)})
 }
 
@@ -280,6 +309,10 @@ func (s *Server) updateNodeGroup(c *gin.Context) {
 			return
 		}
 	}
+	if _, err := setGroupExternalSubscriptions(s.db.DB, g.ID, req.SubscriptionIDs); err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
 	// Egress members reference a group by its bare name, so a rename has to
 	// travel with it or every egress pointing here would dangle.
 	rewritten := int64(0)
@@ -327,6 +360,7 @@ func (s *Server) deleteNodeGroup(c *gin.Context) {
 // and drops the egress members that named it. It returns how many it dropped.
 func deleteNodeGroupRows(handle *gorm.DB, g model.NodeGroup) (int64, error) {
 	handle.Where("group_id = ?", g.ID).Delete(&model.NodeGroupInbound{})
+	handle.Where("group_id = ?", g.ID).Delete(&model.NodeGroupExternalSubscription{})
 	handle.Where("group_id = ?", g.ID).Delete(&model.NodeGroupTag{})
 	handle.Where("group_id = ?", g.ID).Delete(&model.NodeGroupPanelShare{})
 	handle.Where("group_id = ?", g.ID).Delete(&model.PlanGroupLimit{})
@@ -408,6 +442,40 @@ func setGroupShares(handle *gorm.DB, groupID uint, shares []routing.PanelShare) 
 		return changed, nil
 	}
 	return changed, handle.Create(&rows).Error
+}
+
+func setGroupExternalSubscriptions(handle *gorm.DB, groupID uint, subscriptionIDs []uint) (bool, error) {
+	var before []uint
+	handle.Model(&model.NodeGroupExternalSubscription{}).Where("group_id = ?", groupID).
+		Order("subscription_id ASC").Pluck("subscription_id", &before)
+	if err := handle.Where("group_id = ?", groupID).Delete(&model.NodeGroupExternalSubscription{}).Error; err != nil {
+		return false, err
+	}
+	var existing []uint
+	if len(subscriptionIDs) > 0 {
+		handle.Model(&model.ExternalSubscription{}).Where("id IN ?", subscriptionIDs).Pluck("id", &existing)
+	}
+	valid := map[uint]bool{}
+	for _, id := range existing {
+		valid[id] = true
+	}
+	links := make([]model.NodeGroupExternalSubscription, 0, len(subscriptionIDs))
+	seen := map[uint]bool{}
+	after := make([]uint, 0, len(subscriptionIDs))
+	for _, id := range subscriptionIDs {
+		if !valid[id] || seen[id] {
+			continue
+		}
+		seen[id] = true
+		links = append(links, model.NodeGroupExternalSubscription{GroupID: groupID, SubscriptionID: id})
+		after = append(after, id)
+	}
+	sort.Slice(after, func(i, j int) bool { return after[i] < after[j] })
+	changed := !slices.Equal(before, after)
+	if len(links) == 0 {
+		return changed, nil
+	}
+	return changed, handle.Create(&links).Error
 }
 
 func setGroupTags(handle *gorm.DB, groupID uint, tags []nodeGroupTag) error {
@@ -1057,9 +1125,8 @@ func clearEgresses(handle *gorm.DB) error {
 	return handle.Where("1 = 1").Delete(&model.Egress{}).Error
 }
 
-// previewRouting renders what a client on this profile would receive. Proxy
-// bodies are stand-ins — the real ones come from the panels at subscription
-// time — but the groups and rules are exactly what would be served.
+// previewRouting renders what a client on this profile would receive. Panel
+// proxy bodies are stand-ins; external nodes use their cached mihomo mappings.
 func (s *Server) previewRouting(c *gin.Context) {
 	profileID := uint(0)
 	if raw := c.Query("profileId"); raw != "" {
@@ -1070,14 +1137,15 @@ func (s *Server) previewRouting(c *gin.Context) {
 	// The default column has no whitelist of its own; previewing it over every
 	// enabled group shows what a profile inherits before it narrows.
 	var inbounds []model.Inbound
+	var groups []model.NodeGroup
 	var err error
 	if profileID == model.DefaultProfileID {
-		var groups []model.NodeGroup
-		if groups, err = routing.AllGroups(s.db); err == nil {
-			inbounds, err = routing.InboundsIn(s.db, groups)
-		}
+		groups, err = routing.AllGroups(s.db)
 	} else {
-		inbounds, err = routing.InboundsForProfile(s.db, profileID)
+		groups, err = routing.Groups(s.db, profileID)
+	}
+	if err == nil {
+		inbounds, err = routing.InboundsIn(s.db, groups)
 	}
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err)
@@ -1094,6 +1162,12 @@ func (s *Server) previewRouting(c *gin.Context) {
 		used[name] = true
 		entry := clash.NewOrdered().Set("name", name).Set("type", strings.ToLower(n.Protocol))
 		proxies = append(proxies, routing.Proxy{InboundID: n.ID, Name: name, Entry: entry})
+	}
+	external, warnings := s.subs.ExternalEntries(groups, used)
+	for _, item := range external {
+		proxies = append(proxies, routing.Proxy{
+			ExternalSubscriptionID: item.ExternalSubscriptionID, Name: item.Name, Entry: item.Clash,
+		})
 	}
 
 	// No user is behind a preview, so rule-set URLs carry a placeholder token.
@@ -1117,5 +1191,5 @@ func (s *Server) previewRouting(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"yaml": out, "inbounds": len(inbounds)})
+	c.JSON(http.StatusOK, gin.H{"yaml": out, "inbounds": len(inbounds), "warnings": jsonList(warnings)})
 }

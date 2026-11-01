@@ -39,12 +39,13 @@ import (
 // config endpoints, with their preview.
 
 type snapshotDoc struct {
-	Panels           []snapshotPanel     `json:"panels"`
-	Inbounds         []snapshotInbound   `json:"inbounds"`
-	InboundTemplates []snapshotTemplate  `json:"inboundTemplates"`
-	NodeGroups       []snapshotNodeGroup `json:"nodeGroups"`
-	Profiles         []snapshotProfile   `json:"profiles"`
-	Routing          *snapshotRouting    `json:"routing"`
+	Panels                []snapshotPanel                `json:"panels"`
+	Inbounds              []snapshotInbound              `json:"inbounds"`
+	InboundTemplates      []snapshotTemplate             `json:"inboundTemplates"`
+	ExternalSubscriptions []snapshotExternalSubscription `json:"externalSubscriptions"`
+	NodeGroups            []snapshotNodeGroup            `json:"nodeGroups"`
+	Profiles              []snapshotProfile              `json:"profiles"`
+	Routing               *snapshotRouting               `json:"routing"`
 	// ClashTemplate is the mihomo base template; empty is the built-in default.
 	ClashTemplate *string `json:"clashTemplate"`
 }
@@ -58,6 +59,16 @@ type snapshotPanel struct {
 	SkipTLSVerify bool   `json:"skipTlsVerify"`
 	Enabled       *bool  `json:"enabled"`
 	Remark        string `json:"remark"`
+}
+
+type snapshotExternalSubscription struct {
+	Name string `json:"name"`
+	// URL is never exported. Empty keeps an existing subscription's URL and is
+	// required when creating a new one.
+	URL            string `json:"url,omitempty"`
+	Enabled        *bool  `json:"enabled"`
+	UpdateInterval *int   `json:"updateInterval"`
+	Remark         string `json:"remark"`
 }
 
 // inboundRef names an inbound by its panel and its id on that panel, the only
@@ -106,18 +117,19 @@ type snapshotTemplate struct {
 }
 
 type snapshotNodeGroup struct {
-	Name       string            `json:"name"`
-	Emoji      string            `json:"emoji"`
-	Type       string            `json:"type"`
-	TestURL    string            `json:"testUrl"`
-	Interval   *int              `json:"interval"`
-	Tolerance  *int              `json:"tolerance"`
-	Multiplier *float64          `json:"multiplier"`
-	SortOrder  *int              `json:"sortOrder"`
-	Enabled    *bool             `json:"enabled"`
-	Remark     string            `json:"remark"`
-	Tags       map[string]string `json:"tags"`
-	Inbounds   []inboundRef      `json:"inbounds"`
+	Name                  string            `json:"name"`
+	Emoji                 string            `json:"emoji"`
+	Type                  string            `json:"type"`
+	TestURL               string            `json:"testUrl"`
+	Interval              *int              `json:"interval"`
+	Tolerance             *int              `json:"tolerance"`
+	Multiplier            *float64          `json:"multiplier"`
+	SortOrder             *int              `json:"sortOrder"`
+	Enabled               *bool             `json:"enabled"`
+	Remark                string            `json:"remark"`
+	Tags                  map[string]string `json:"tags"`
+	Inbounds              []inboundRef      `json:"inbounds"`
+	ExternalSubscriptions []string          `json:"externalSubscriptions"`
 }
 
 type snapshotProfile struct {
@@ -244,6 +256,19 @@ func exportSnapshot(db *store.DB) (snapshotDoc, error) {
 		doc.InboundTemplates = append(doc.InboundTemplates, row)
 	}
 
+	var externalSubs []model.ExternalSubscription
+	if err := db.Order("name ASC, id ASC").Find(&externalSubs).Error; err != nil {
+		return doc, err
+	}
+	externalName := make(map[uint]string, len(externalSubs))
+	doc.ExternalSubscriptions = make([]snapshotExternalSubscription, 0, len(externalSubs))
+	for _, sub := range externalSubs {
+		externalName[sub.ID] = sub.Name
+		doc.ExternalSubscriptions = append(doc.ExternalSubscriptions, snapshotExternalSubscription{
+			Name: sub.Name, Enabled: new(sub.Enabled), UpdateInterval: new(sub.UpdateInterval), Remark: sub.Remark,
+		})
+	}
+
 	var groups []model.NodeGroup
 	if err := db.Order("sort_order ASC, id ASC").Find(&groups).Error; err != nil {
 		return doc, err
@@ -269,6 +294,16 @@ func exportSnapshot(db *store.DB) (snapshotDoc, error) {
 			members[link.GroupID] = append(members[link.GroupID], ref)
 		}
 	}
+	var externalLinks []model.NodeGroupExternalSubscription
+	if err := db.Find(&externalLinks).Error; err != nil {
+		return doc, err
+	}
+	externalMembers := map[uint][]string{}
+	for _, link := range externalLinks {
+		if name, ok := externalName[link.SubscriptionID]; ok {
+			externalMembers[link.GroupID] = append(externalMembers[link.GroupID], name)
+		}
+	}
 	groupName := make(map[uint]string, len(groups))
 	doc.NodeGroups = make([]snapshotNodeGroup, 0, len(groups))
 	for _, g := range groups {
@@ -280,6 +315,8 @@ func exportSnapshot(db *store.DB) (snapshotDoc, error) {
 			}
 			return list[i].RemoteID < list[j].RemoteID
 		})
+		externalList := jsonList(externalMembers[g.ID])
+		sort.Strings(externalList)
 		groupTags := tagsByGroup[g.ID]
 		if groupTags == nil {
 			groupTags = map[string]string{}
@@ -288,7 +325,7 @@ func exportSnapshot(db *store.DB) (snapshotDoc, error) {
 			Name: g.Name, Emoji: g.Emoji, Type: g.Type, TestURL: g.TestURL,
 			Interval: new(g.Interval), Tolerance: new(g.Tolerance), Multiplier: new(g.Multiplier),
 			SortOrder: new(g.SortOrder), Enabled: new(g.Enabled), Remark: g.Remark,
-			Tags: groupTags, Inbounds: list,
+			Tags: groupTags, Inbounds: list, ExternalSubscriptions: externalList,
 		})
 	}
 
@@ -495,6 +532,11 @@ func (s *Server) runSnapshot(req *snapshotRequest, dryRun, allowPanelRemoval boo
 		}
 		if doc.InboundTemplates != nil {
 			if err := applySnapshotTemplates(handle, doc.InboundTemplates); err != nil {
+				return err
+			}
+		}
+		if doc.ExternalSubscriptions != nil {
+			if err := applySnapshotExternalSubscriptions(handle, doc.ExternalSubscriptions); err != nil {
 				return err
 			}
 		}
@@ -913,10 +955,79 @@ func templateMap(raw string) map[string]any {
 	return out
 }
 
+func applySnapshotExternalSubscriptions(handle *gorm.DB, rows []snapshotExternalSubscription) error {
+	var existing []model.ExternalSubscription
+	if err := handle.Find(&existing).Error; err != nil {
+		return err
+	}
+	byName := make(map[string]model.ExternalSubscription, len(existing))
+	for _, sub := range existing {
+		byName[sub.Name] = sub
+	}
+	listed := map[string]bool{}
+	for _, row := range rows {
+		name := strings.TrimSpace(row.Name)
+		stored, exists := byName[name]
+		sub := stored
+		if !exists {
+			sub.Enabled = true
+			sub.UpdateInterval = subscription.DefaultExternalUpdateInterval
+		}
+		rawURL := strings.TrimSpace(row.URL)
+		if rawURL == "" && exists {
+			rawURL = stored.URL
+		}
+		req := externalSubscriptionRequest{
+			Name: row.Name, URL: rawURL, Enabled: new(valueOr(row.Enabled, true)),
+			UpdateInterval: new(valueOr(row.UpdateInterval, subscription.DefaultExternalUpdateInterval)), Remark: row.Remark,
+		}
+		if err := req.apply(&sub); err != nil {
+			return fmt.Errorf("外部订阅「%s」：%w", name, err)
+		}
+		if listed[sub.Name] {
+			return fmt.Errorf("外部订阅「%s」重复", sub.Name)
+		}
+		listed[sub.Name] = true
+		if exists && stored.URL != sub.URL {
+			sub.LastCheckAt = 0
+		}
+		switch {
+		case !exists:
+			if err := createRow(handle, &sub); err != nil {
+				return err
+			}
+		case !reflect.DeepEqual(stored, sub):
+			if err := handle.Save(&sub).Error; err != nil {
+				return err
+			}
+		}
+	}
+	for _, sub := range existing {
+		if listed[sub.Name] {
+			continue
+		}
+		if err := handle.Where("subscription_id = ?", sub.ID).Delete(&model.NodeGroupExternalSubscription{}).Error; err != nil {
+			return err
+		}
+		if err := handle.Delete(&model.ExternalSubscription{}, sub.ID).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func applySnapshotNodeGroups(handle *gorm.DB, rows []snapshotNodeGroup) error {
 	index, _, err := loadInboundIndex(handle)
 	if err != nil {
 		return err
+	}
+	var externalSubs []model.ExternalSubscription
+	if err := handle.Find(&externalSubs).Error; err != nil {
+		return err
+	}
+	externalID := make(map[string]uint, len(externalSubs))
+	for _, sub := range externalSubs {
+		externalID[sub.Name] = sub.ID
 	}
 	var existing []model.NodeGroup
 	if err := handle.Find(&existing).Error; err != nil {
@@ -976,6 +1087,17 @@ func applySnapshotNodeGroups(handle *gorm.DB, rows []snapshotNodeGroup) error {
 			ids = append(ids, n.ID)
 		}
 		if _, err := setGroupMembers(handle, g.ID, ids); err != nil {
+			return err
+		}
+		externalIDs := make([]uint, 0, len(row.ExternalSubscriptions))
+		for _, name := range row.ExternalSubscriptions {
+			id, ok := externalID[strings.TrimSpace(name)]
+			if !ok {
+				return fmt.Errorf("节点组「%s」引用了不存在的外部订阅「%s」", g.Name, name)
+			}
+			externalIDs = append(externalIDs, id)
+		}
+		if _, err := setGroupExternalSubscriptions(handle, g.ID, externalIDs); err != nil {
 			return err
 		}
 	}

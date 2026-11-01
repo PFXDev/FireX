@@ -184,9 +184,10 @@ const (
 	GroupTypeLoadBalance = "load-balance"
 )
 
-// NodeGroup bundles hand-picked inbounds into one client-visible proxy-group,
-// normally one region on one line ("🇭🇰 香港 IEPL"). It is the finest unit the
-// rest of FireX addresses: profiles whitelist groups, never single inbounds.
+// NodeGroup bundles hand-picked inbounds and external subscriptions into one
+// client-visible proxy-group, normally one region on one line
+// ("🇭🇰 香港 IEPL"). It is the finest unit the rest of FireX addresses:
+// profiles whitelist groups, never single sources.
 // Membership is explicit rather than derived from any text field, so retyping a
 // label cannot silently reshape a user's subscription.
 type NodeGroup struct {
@@ -245,6 +246,35 @@ type NodeGroupTag struct {
 type NodeGroupInbound struct {
 	GroupID   uint `json:"groupId" gorm:"primaryKey"`
 	InboundID uint `json:"inboundId" gorm:"primaryKey;index"`
+}
+
+// ExternalSubscription is a remotely managed list of proxies. FireX owns the
+// refresh schedule and the last good parsed node set; the upstream URL and the
+// cached credentials never appear in a user's generated subscription.
+type ExternalSubscription struct {
+	ID             uint   `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name           string `json:"name" gorm:"uniqueIndex;not null"`
+	URL            string `json:"-" gorm:"not null"`
+	Enabled        bool   `json:"enabled" gorm:"default:true"`
+	UpdateInterval int    `json:"updateInterval" gorm:"default:3600"`
+	Remark         string `json:"remark"`
+
+	// Nodes is the JSON-encoded result of the last successful parse. A failed
+	// refresh updates only the check timestamp and error, leaving this intact.
+	Nodes        string `json:"-"`
+	LastCheckAt  int64  `json:"lastCheckAt"`
+	LastUpdateAt int64  `json:"lastUpdateAt"`
+	LastError    string `json:"lastError"`
+
+	CreatedAt int64 `json:"createdAt" gorm:"autoCreateTime:milli"`
+	UpdatedAt int64 `json:"updatedAt" gorm:"autoUpdateTime:milli"`
+}
+
+// NodeGroupExternalSubscription includes every cached node from one external
+// subscription in one group. The same subscription may feed several groups.
+type NodeGroupExternalSubscription struct {
+	GroupID        uint `json:"groupId" gorm:"primaryKey"`
+	SubscriptionID uint `json:"subscriptionId" gorm:"primaryKey;index"`
 }
 
 // Policy is one reusable rule list plus the identity it takes in the client's
@@ -701,6 +731,7 @@ func AllModels() []any {
 	return []any{
 		&Admin{}, &Session{}, &AgentSession{}, &AuditLog{}, &Panel{}, &Inbound{},
 		&NodeGroup{}, &NodeGroupTag{}, &NodeGroupInbound{}, &NodeGroupPanelShare{},
+		&ExternalSubscription{}, &NodeGroupExternalSubscription{},
 		&Policy{}, &Rule{}, &RuleSet{},
 		&Profile{}, &ProfileNodeGroup{}, &Egress{}, &EgressMember{},
 		&Plan{}, &PlanPanelLimit{}, &PlanGroupLimit{}, &User{}, &UserPanel{}, &Setting{},

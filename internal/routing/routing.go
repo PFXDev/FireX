@@ -17,12 +17,13 @@ import (
 	"github.com/PFXDev/FireX/internal/store"
 )
 
-// Proxy is one rendered proxy together with the inbound it came from, so node
-// groups can be narrowed to the proxies this particular user actually holds.
+// Proxy is one rendered proxy together with its source, so node groups can be
+// narrowed to the panel inbounds and external subscriptions this profile holds.
 type Proxy struct {
-	InboundID uint
-	Name      string
-	Entry     *clash.Ordered
+	InboundID              uint
+	ExternalSubscriptionID uint
+	Name                   string
+	Entry                  *clash.Ordered
 }
 
 // Groups returns the node groups a profile grants, in render order. A profile
@@ -111,6 +112,21 @@ func membership(db *store.DB, groupIDs []uint) (map[uint][]uint, error) {
 	return out, nil
 }
 
+func externalMembership(db *store.DB, groupIDs []uint) (map[uint][]uint, error) {
+	if len(groupIDs) == 0 {
+		return map[uint][]uint{}, nil
+	}
+	var links []model.NodeGroupExternalSubscription
+	if err := db.Where("group_id IN ?", groupIDs).Find(&links).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[uint][]uint, len(groupIDs))
+	for _, link := range links {
+		out[link.GroupID] = append(out[link.GroupID], link.SubscriptionID)
+	}
+	return out, nil
+}
+
 // cell is one policy resolved for one profile: the egress that applies plus the
 // rules the policy owns.
 type cell struct {
@@ -149,6 +165,11 @@ func compile(db *store.DB, profileID uint, groups []model.NodeGroup, proxies []P
 	proxyNames := make([]string, 0, len(proxies))
 	nameByInbound := make(map[uint]string, len(proxies))
 	inboundOrder := make([]uint, 0, len(proxies))
+	type externalProxy struct {
+		subscriptionID uint
+		name           string
+	}
+	externalProxies := make([]externalProxy, 0, len(proxies))
 	for _, p := range proxies {
 		if p.Entry == nil {
 			continue
@@ -161,6 +182,9 @@ func compile(db *store.DB, profileID uint, groups []model.NodeGroup, proxies []P
 				nameByInbound[p.InboundID] = p.Name
 			}
 		}
+		if p.ExternalSubscriptionID != 0 {
+			externalProxies = append(externalProxies, externalProxy{subscriptionID: p.ExternalSubscriptionID, name: p.Name})
+		}
 	}
 
 	groupIDs := make([]uint, 0, len(groups))
@@ -168,6 +192,10 @@ func compile(db *store.DB, profileID uint, groups []model.NodeGroup, proxies []P
 		groupIDs = append(groupIDs, g.ID)
 	}
 	members, err := membership(db, groupIDs)
+	if err != nil {
+		return in, err
+	}
+	externalMembers, err := externalMembership(db, groupIDs)
 	if err != nil {
 		return in, err
 	}
@@ -183,10 +211,19 @@ func compile(db *store.DB, profileID uint, groups []model.NodeGroup, proxies []P
 		for _, id := range members[g.ID] {
 			wanted[id] = true
 		}
-		names := make([]string, 0, len(wanted))
+		wantedExternal := make(map[uint]bool, len(externalMembers[g.ID]))
+		for _, id := range externalMembers[g.ID] {
+			wantedExternal[id] = true
+		}
+		names := make([]string, 0, len(wanted)+len(wantedExternal))
 		for _, id := range inboundOrder {
 			if wanted[id] {
 				names = append(names, nameByInbound[id])
+			}
+		}
+		for _, proxy := range externalProxies {
+			if wantedExternal[proxy.subscriptionID] {
+				names = append(names, proxy.name)
 			}
 		}
 		groupMembers[g.Name] = names

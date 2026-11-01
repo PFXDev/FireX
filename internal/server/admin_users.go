@@ -663,20 +663,20 @@ func (s *Server) previewSubscription(c *gin.Context) {
 	yaml, renderErr := s.subs.Clash(result, s.subBase(c))
 
 	type entryView struct {
-		Name     string `json:"name"`
-		Protocol string `json:"protocol"`
-		Panel    uint   `json:"panelId"`
-		Clash    bool   `json:"clashSupported"`
-		Link     string `json:"link"`
+		Name                     string `json:"name"`
+		Protocol                 string `json:"protocol"`
+		Panel                    uint   `json:"panelId"`
+		ExternalSubscriptionID   uint   `json:"externalSubscriptionId"`
+		ExternalSubscriptionName string `json:"externalSubscriptionName"`
+		Clash                    bool   `json:"clashSupported"`
+		Link                     string `json:"link"`
 	}
 	views := make([]entryView, 0, len(result.Entries))
 	for _, e := range result.Entries {
 		views = append(views, entryView{
-			Name:     e.Name,
-			Protocol: e.Inbound.Protocol,
-			Panel:    e.Inbound.PanelID,
-			Clash:    e.Clash != nil,
-			Link:     e.Link,
+			Name: e.Name, Protocol: e.Protocol, Panel: e.Inbound.PanelID,
+			ExternalSubscriptionID: e.ExternalSubscriptionID, ExternalSubscriptionName: e.ExternalSubscriptionName,
+			Clash: e.Clash != nil, Link: e.Link,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{

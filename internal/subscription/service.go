@@ -40,6 +40,9 @@ type Service struct {
 
 	mu    sync.Mutex
 	cache map[cacheKey]cacheEntry
+
+	externalMu sync.Mutex
+	refreshing map[uint]bool
 }
 
 type cacheKey struct {
@@ -53,16 +56,19 @@ type cacheEntry struct {
 }
 
 func NewService(db *store.DB, mgr *provision.Manager) *Service {
-	return &Service{db: db, mgr: mgr, cache: map[cacheKey]cacheEntry{}}
+	return &Service{db: db, mgr: mgr, cache: map[cacheKey]cacheEntry{}, refreshing: map[uint]bool{}}
 }
 
-// Entry is one client-visible proxy: the inbound it came from, the share link
-// the panel produced, and the mihomo rendering of it.
+// Entry is one client-visible proxy. Exactly one of Inbound.ID and
+// ExternalSubscriptionID is set for nodes that came from FireX sources.
 type Entry struct {
-	Inbound model.Inbound
-	Name    string
-	Link    string
-	Clash   *clash.Ordered
+	Inbound                  model.Inbound
+	ExternalSubscriptionID   uint
+	ExternalSubscriptionName string
+	Protocol                 string
+	Name                     string
+	Link                     string
+	Clash                    *clash.Ordered
 }
 
 type Result struct {
@@ -73,8 +79,8 @@ type Result struct {
 	Warnings []string
 }
 
-// Build fetches the user's share links from every panel they are provisioned
-// on and matches them back to FireX inbounds.
+// Build fetches the user's panel share links and merges them with the cached
+// external nodes granted through the same profile's node groups.
 func (s *Service) Build(ctx context.Context, u *model.User) (*Result, error) {
 	inbounds, err := s.mgr.InboundsForUser(u)
 	if err != nil {
@@ -87,10 +93,11 @@ func (s *Service) Build(ctx context.Context, u *model.User) (*Result, error) {
 		return nil, err
 	}
 	inbounds = slices.DeleteFunc(inbounds, func(n model.Inbound) bool { return blocked[n.PanelID] != "" })
-	result := &Result{User: u}
-	if len(inbounds) == 0 {
-		return result, nil
+	groups, err := routing.Groups(s.db, s.profileFor(u))
+	if err != nil {
+		return nil, err
 	}
+	result := &Result{User: u}
 
 	byPanel := map[uint][]model.Inbound{}
 	panelOrder := make([]uint, 0, len(inbounds))
@@ -119,6 +126,9 @@ func (s *Service) Build(ctx context.Context, u *model.User) (*Result, error) {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("panel %s: %s", p.Name, w))
 		}
 	}
+	external, warnings := s.ExternalEntries(groups, usedNames)
+	result.Entries = append(result.Entries, external...)
+	result.Warnings = append(result.Warnings, warnings...)
 
 	sort.SliceStable(result.Entries, func(i, j int) bool {
 		a, b := result.Entries[i].Inbound, result.Entries[j].Inbound
@@ -214,7 +224,7 @@ func matchPanel(inbounds []model.Inbound, links []string, usedNames map[string]b
 		name = uniqueName(name, usedNames)
 		proxy.Name = name
 
-		entry := Entry{Inbound: inbound, Name: name, Link: sharelink.Rename(raw, name)}
+		entry := Entry{Inbound: inbound, Protocol: proxy.Type, Name: name, Link: sharelink.Rename(raw, name)}
 		if rendered, ok := clash.ProxyEntry(proxy); ok {
 			if inbound.XHTTPTuning {
 				clash.TuneXHTTP(rendered, proxy)
@@ -262,7 +272,10 @@ func (s *Service) Clash(result *Result, base string) (string, error) {
 	template := s.db.GetSetting(SettingKeyClashTemplate, clash.DefaultTemplate)
 	proxies := make([]routing.Proxy, 0, len(result.Entries))
 	for _, e := range result.Entries {
-		proxies = append(proxies, routing.Proxy{InboundID: e.Inbound.ID, Name: e.Name, Entry: e.Clash})
+		proxies = append(proxies, routing.Proxy{
+			InboundID: e.Inbound.ID, ExternalSubscriptionID: e.ExternalSubscriptionID,
+			Name: e.Name, Entry: e.Clash,
+		})
 	}
 	token := ""
 	if result.User != nil {
@@ -302,7 +315,9 @@ func (s *Service) profileFor(u *model.User) uint {
 func Base64(result *Result) string {
 	links := make([]string, 0, len(result.Entries))
 	for _, e := range result.Entries {
-		links = append(links, e.Link)
+		if e.Link != "" {
+			links = append(links, e.Link)
+		}
 	}
 	return base64.StdEncoding.EncodeToString([]byte(strings.Join(links, "\n")))
 }

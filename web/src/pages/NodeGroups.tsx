@@ -3,7 +3,7 @@ import { BoxesIcon, EyeIcon, PencilIcon, PlusIcon, RouteIcon, Trash2Icon, Triang
 import { toast } from 'sonner'
 
 import { api } from '@/api'
-import type { Inbound, NodeGroup, NodeGroupTag } from '@/api'
+import type { ExternalSubscription, Inbound, NodeGroup, NodeGroupTag } from '@/api'
 import { CodeText } from '@/components/code-display'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
@@ -79,6 +79,7 @@ type Draft = {
   inboundIds: number[]
   /** Percent of a node-group quota each panel takes, keyed by panel id. */
   panelWeights: Record<number, number>
+  subscriptionIds: number[]
 }
 
 const emptyDraft: Draft = {
@@ -95,11 +96,13 @@ const emptyDraft: Draft = {
   tags: [],
   inboundIds: [],
   panelWeights: {},
+  subscriptionIds: [],
 }
 
 export function NodeGroupsPage() {
   const [groups, setGroups] = useState<NodeGroup[]>([])
   const [inbounds, setInbounds] = useState<Inbound[]>([])
+  const [externalSubscriptions, setExternalSubscriptions] = useState<ExternalSubscription[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -112,12 +115,14 @@ export function NodeGroupsPage() {
 
   const load = useCallback(async () => {
     try {
-      const [nextGroups, nextInbounds] = await Promise.all([
+      const [nextGroups, nextInbounds, nextExternalSubscriptions] = await Promise.all([
         api.get<NodeGroup[]>('/node-groups'),
         api.get<Inbound[]>('/inbounds'),
+        api.get<ExternalSubscription[]>('/external-subscriptions'),
       ])
       setGroups(nextGroups)
       setInbounds(nextInbounds)
+      setExternalSubscriptions(nextExternalSubscriptions)
       setLoadError(null)
       return true
     } catch (err) {
@@ -196,6 +201,7 @@ export function NodeGroupsPage() {
       tags: group.tags.map((tag) => ({ ...tag })),
       inboundIds: group.inboundIds,
       panelWeights: Object.fromEntries(group.panelShares.map((share) => [share.panelId, share.weight])),
+      subscriptionIds: group.subscriptionIds,
     })
   }
 
@@ -269,6 +275,17 @@ export function NodeGroupsPage() {
     })
   }
 
+  const toggleSubscription = (id: number) => {
+    if (!draft) return
+    const has = draft.subscriptionIds.includes(id)
+    setDraft({
+      ...draft,
+      subscriptionIds: has
+        ? draft.subscriptionIds.filter((subscriptionId) => subscriptionId !== id)
+        : [...draft.subscriptionIds, id],
+    })
+  }
+
   const togglePanel = (group: Inbound[]) => {
     if (!draft) return
     const ids = group.map((inbound) => inbound.id)
@@ -319,7 +336,7 @@ export function NodeGroupsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="节点组" description="把不同面板的入站聚合成客户端看到的一组线路，用标签按地区、线路管理。">
+      <PageHeader title="节点组" description="把面板入站和外部订阅聚合成客户端看到的一组线路，用标签按地区、线路管理。">
         {readOnly ? (
           <Badge variant="outline">
             <EyeIcon data-icon="inline-start" />
@@ -366,6 +383,7 @@ export function NodeGroupsPage() {
                 { label: '标签', className: 'hidden md:table-cell', width: 'w-24' },
                 { label: '类型', className: 'hidden lg:table-cell', width: 'w-16' },
                 { label: '入站', width: 'w-8' },
+                { label: '外部节点', className: 'hidden md:table-cell', width: 'w-12' },
                 { label: '方案', className: 'hidden lg:table-cell', width: 'w-8' },
                 { label: '状态', width: 'w-14' },
                 { width: 'w-24' },
@@ -442,6 +460,7 @@ export function NodeGroupsPage() {
                     <TableHead className="hidden md:table-cell">标签</TableHead>
                     <TableHead className="hidden lg:table-cell">类型</TableHead>
                     <TableHead>入站</TableHead>
+                    <TableHead className="hidden md:table-cell">外部节点</TableHead>
                     <TableHead className="hidden lg:table-cell">方案</TableHead>
                     <TableHead>状态</TableHead>
                     <TableHead>
@@ -481,6 +500,9 @@ export function NodeGroupsPage() {
                         {group.usableInbounds === group.inboundIds.length
                           ? group.inboundIds.length
                           : `${group.usableInbounds}/${group.inboundIds.length}`}
+                      </TableCell>
+                      <TableCell className="hidden tabular-nums md:table-cell" title={`${group.subscriptionIds.length} 个关联订阅`}>
+                        {group.usableExternalNodes}
                       </TableCell>
                       <TableCell className="hidden lg:table-cell">
                         {group.profileCount > 0 ? (
@@ -534,7 +556,9 @@ export function NodeGroupsPage() {
             {loading ? '正在读取分组' : loadError && groups.length === 0 ? '分组统计暂不可用' : `共 ${groups.length} 个分组`}
           </span>
           <span className="text-muted-foreground">
-            {loading || (loadError && groups.length === 0) ? '—' : `覆盖 ${new Set(groups.flatMap((group) => group.inboundIds)).size} 个入站`}
+            {loading || (loadError && groups.length === 0)
+              ? '—'
+              : `覆盖 ${new Set(groups.flatMap((group) => group.inboundIds)).size} 个入站 · ${new Set(groups.flatMap((group) => group.subscriptionIds)).size} 个外部订阅`}
           </span>
         </CardFooter>
       </Card>
@@ -824,6 +848,47 @@ export function NodeGroupsPage() {
                     )}
                   </FieldSet>
                 )}
+
+                <FieldSet>
+                  <FieldLegend variant="label">包含外部订阅（已选 {draft.subscriptionIds.length} 个）</FieldLegend>
+                  <FieldDescription>订阅中的全部可用节点都会加入此分组；一个订阅可以同时属于多个分组。</FieldDescription>
+                  <ScrollArea className="h-40 rounded-lg border">
+                    {externalSubscriptions.length === 0 ? (
+                      <Empty>
+                        <EmptyHeader>
+                          <EmptyTitle>还没有外部订阅</EmptyTitle>
+                          <EmptyDescription>可先在独立 Tab 中添加订阅，也可以只使用面板入站。</EmptyDescription>
+                        </EmptyHeader>
+                        <EmptyContent>
+                          <Button variant="outline" size="sm" render={<a href="#/external-subscriptions" />} nativeButton={false}>
+                            管理外部订阅
+                          </Button>
+                        </EmptyContent>
+                      </Empty>
+                    ) : (
+                      <FieldGroup className="gap-2 p-3">
+                        {externalSubscriptions.map((subscription) => (
+                          <Field key={subscription.id} orientation="horizontal">
+                            <Checkbox
+                              id={`group-subscription-${subscription.id}`}
+                              checked={draft.subscriptionIds.includes(subscription.id)}
+                              disabled={locked}
+                              onCheckedChange={() => toggleSubscription(subscription.id)}
+                            />
+                            <FieldLabel htmlFor={`group-subscription-${subscription.id}`}>
+                              <span>{subscription.name}</span>
+                              <Badge variant="outline">{subscription.nodeCount} 节点</Badge>
+                              {!subscription.enabled && <StatusBadge tone="idle">停用</StatusBadge>}
+                              {subscription.enabled && subscription.lastError && (
+                                <StatusBadge tone="warn" title={subscription.lastError}>有警告</StatusBadge>
+                              )}
+                            </FieldLabel>
+                          </Field>
+                        ))}
+                      </FieldGroup>
+                    )}
+                  </ScrollArea>
+                </FieldSet>
 
                 <Field orientation="horizontal" data-disabled={locked || undefined}>
                   <FieldLabel htmlFor="group-enabled">启用分组</FieldLabel>
