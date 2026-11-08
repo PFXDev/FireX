@@ -43,6 +43,17 @@ func (s *Server) handleSubscription(c *gin.Context) {
 		return
 	}
 
+	var plan model.Plan
+	if err := s.db.Select("name").Where("id = ?", u.PlanID).Find(&plan).Error; err != nil {
+		c.String(http.StatusBadGateway, "subscription unavailable")
+		return
+	}
+	planName := plan.Name
+	if planName == "" {
+		planName = "未分配套餐"
+	}
+	profileTitle := "FireX@" + u.Username + "[" + planName + "]"
+
 	ctx, cancel := context.WithTimeout(context.Background(), subTimeout)
 	defer cancel()
 	result, err := s.subs.Build(ctx, &u)
@@ -56,7 +67,7 @@ func (s *Server) handleSubscription(c *gin.Context) {
 	c.Header("Subscription-Userinfo", subscription.UserInfo(&u))
 	c.Header("Profile-Update-Interval", strconv.Itoa(int(s.cfg.Get().SubUpdateInterval.Duration()/time.Hour)))
 	c.Header("Cache-Control", "no-store")
-	filename := u.Username
+	filename := profileTitle
 	if target == targetMihomo {
 		filename += ".yaml"
 	} else {
@@ -70,7 +81,7 @@ func (s *Server) handleSubscription(c *gin.Context) {
 			c.String(http.StatusInternalServerError, "template render failed: %v", err)
 			return
 		}
-		c.Header("Profile-Title", u.Username)
+		c.Header("Profile-Title", profileTitle)
 		c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(yaml))
 		return
 	}
