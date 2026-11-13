@@ -576,6 +576,7 @@ export interface ServerConfig {
   dbPath: string
   subBaseUrl: string
   subUpdateInterval: string
+  blockV2rayClients: boolean
   debug: boolean
   adminUser: string
   adminPassword: string

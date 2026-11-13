@@ -98,7 +98,7 @@ export function ServerConfigEditor() {
     }
   }
 
-  const textField = (key: keyof Omit<ServerConfig, 'update' | 'debug' | 'backup'>, label: string, description: string, placeholder?: string) => (
+  const textField = (key: keyof Omit<ServerConfig, 'update' | 'debug' | 'backup' | 'blockV2rayClients'>, label: string, description: string, placeholder?: string) => (
     <ConfigTextField key={key} name={key} label={label} description={description} placeholder={placeholder}
       restart={restartBound.has(key)} pending={!!saved?.restartFields.includes(key)}
       value={draft?.[key] ?? ''} error={fields[key]} disabled={busy || (key === 'adminPassword' && clearPassword)}
@@ -154,6 +154,14 @@ export function ServerConfigEditor() {
                     {textField('subUpdateInterval', '订阅更新间隔', '客户端自动刷新订阅的周期，必须是整小时，例如 12h 或 24h。', '12h')}
                   </FieldGroup>
                   <FieldGroup>
+                    <Field orientation="horizontal" data-disabled={busy || undefined}>
+                      <FieldContent>
+                        <FieldLabel htmlFor="server-block-v2ray-clients">拦截 v2ray / xray 客户端订阅</FieldLabel>
+                        <FieldDescription id="server-block-v2ray-clients-description">默认开启。UA 包含 v2ray 或 xray 的客户端仅收到“请使用FlClash”占位节点；关闭后恢复正常订阅。</FieldDescription>
+                      </FieldContent>
+                      <Switch id="server-block-v2ray-clients" checked={draft.blockV2rayClients} disabled={busy} aria-describedby="server-block-v2ray-clients-description"
+                        onCheckedChange={(blockV2rayClients) => setDraft({ ...draft, blockV2rayClients })} />
+                    </Field>
                     <Field orientation="horizontal" data-disabled={busy || undefined}>
                       <FieldContent>
                         <FieldLabel htmlFor="server-debug">调试日志</FieldLabel>

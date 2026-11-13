@@ -24,11 +24,6 @@ const (
 	targetBase64 = "base64"
 )
 
-// base64Agents are legacy clients that cannot consume a mihomo profile. Every
-// other client gets mihomo by default; base64 remains available explicitly via
-// ?target=base64.
-var base64Agents = []string{"v2rayn"} // Matches both v2rayN and v2rayNG.
-
 func (s *Server) handleSubscription(c *gin.Context) {
 	token := c.Param("token")
 	var u model.User
@@ -37,10 +32,30 @@ func (s *Server) handleSubscription(c *gin.Context) {
 		return
 	}
 
-	target, ok := subscriptionTarget(c.Query("target"), c.GetHeader("User-Agent"))
-	if !ok {
-		c.String(http.StatusBadRequest, "unsupported subscription target")
-		return
+	userAgent := c.GetHeader("User-Agent")
+	target := targetBase64
+	var result *subscription.Result
+	if s.cfg.Get().BlockV2RayClients && blockedSubscriptionAgent(userAgent) {
+		// Return a parseable, unusable node so the client displays the hint.
+		// Do not fetch real links, even when a target override is supplied.
+		result = &subscription.Result{Entries: []subscription.Entry{{
+			Link: "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:1?encryption=none&type=tcp&security=none#" + url.PathEscape("请使用FlClash"),
+		}}}
+	} else {
+		var ok bool
+		target, ok = subscriptionTarget(c.Query("target"), userAgent)
+		if !ok {
+			c.String(http.StatusBadRequest, "unsupported subscription target")
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), subTimeout)
+		defer cancel()
+		var err error
+		result, err = s.subs.Build(ctx, &u)
+		if err != nil {
+			c.String(http.StatusBadGateway, "subscription unavailable")
+			return
+		}
 	}
 
 	var plan model.Plan
@@ -54,15 +69,7 @@ func (s *Server) handleSubscription(c *gin.Context) {
 	}
 	profileTitle := "FireX@" + u.Username + "[" + planName + "]"
 
-	ctx, cancel := context.WithTimeout(context.Background(), subTimeout)
-	defer cancel()
-	result, err := s.subs.Build(ctx, &u)
-	if err != nil {
-		c.String(http.StatusBadGateway, "subscription unavailable")
-		return
-	}
-
-	s.recordFetch(&u, c.GetHeader("User-Agent"))
+	s.recordFetch(&u, userAgent)
 
 	c.Header("Subscription-Userinfo", subscription.UserInfo(&u))
 	c.Header("Profile-Update-Interval", strconv.Itoa(int(s.cfg.Get().SubUpdateInterval.Duration()/time.Hour)))
@@ -121,14 +128,9 @@ func (s *Server) handleRuleSet(c *gin.Context) {
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(body))
 }
 
-func detectTarget(userAgent string) string {
+func blockedSubscriptionAgent(userAgent string) bool {
 	ua := strings.ToLower(userAgent)
-	for _, marker := range base64Agents {
-		if strings.Contains(ua, marker) {
-			return targetBase64
-		}
-	}
-	return targetMihomo
+	return strings.Contains(ua, "v2ray") || strings.Contains(ua, "xray")
 }
 
 // subscriptionTarget accepts both the product name (mihomo) and its familiar
@@ -138,7 +140,10 @@ func detectTarget(userAgent string) string {
 func subscriptionTarget(requested, userAgent string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(requested)) {
 	case "":
-		return detectTarget(userAgent), true
+		if blockedSubscriptionAgent(userAgent) {
+			return targetBase64, true
+		}
+		return targetMihomo, true
 	case "clash", targetMihomo:
 		return targetMihomo, true
 	case targetBase64:

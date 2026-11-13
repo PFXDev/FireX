@@ -125,6 +125,7 @@ written as anything but a string, aborts startup.
   "dbPath": "",
   "subBaseUrl": "",
   "subUpdateInterval": "12h0m0s",
+  "blockV2rayClients": true,
   "debug": false,
   "adminUser": "admin",
   "adminPassword": "",
@@ -149,6 +150,7 @@ written as anything but a string, aborts startup.
 | `dbPath`               | Explicit database path; empty follows `dataDir`                   |
 | `subBaseUrl`           | Public origin for subscription URLs; empty derives it per request |
 | `subUpdateInterval`    | How often clients refresh their subscription, in whole hours      |
+| `blockV2rayClients`    | Block v2ray/xray subscription clients; enabled by default          |
 | `debug`                | Verbose logging and SQL tracing                                   |
 | `adminUser`            | Admin username; created on first start, reset target after        |
 | `adminPassword`        | One-shot: sets the admin's password on the next start, then blanks |
@@ -458,10 +460,17 @@ GET /sub/<token>?target=base64
 GET /sub/<token>/rules/<id>   # a rule set as plain-text classical rules
 ```
 
-The default response is a mihomo profile. Known legacy clients such as v2rayN
-still receive the base64 share-link list automatically, and callers can select
-either format explicitly with `target`. sing-box output is not enabled and an
-unsupported target is rejected instead of silently returning another format.
+The default response is a mihomo profile, and callers can select either format
+explicitly with `target`. With `blockV2rayClients` enabled (the default),
+User-Agent values containing `v2ray` or `xray`
+(case-insensitive, including v2rayN and v2rayNG) receive only a base64-encoded,
+nonfunctional placeholder node named `请使用FlClash`, regardless of `target`.
+These requests never fetch real panel links. The switch is available in the
+server configuration UI and takes effect immediately after saving. Disabling it
+allows these clients to receive real base64 subscriptions by default, with
+explicit `target` selection still supported. For other clients, sing-box output
+is not enabled and an unsupported target is rejected instead of silently
+returning another format.
 The response carries
 `Subscription-Userinfo` with the aggregate upload, download, quota and expiry,
 so clients can show remaining traffic, and `Profile-Update-Interval` with

@@ -96,6 +96,9 @@ func TestLoadCompletesMissingSettings(t *testing.T) {
 	if cfg.AdminUser != "admin" {
 		t.Errorf("AdminUser = %q, want admin", cfg.AdminUser)
 	}
+	if !cfg.BlockV2RayClients || !strings.Contains(written, `"blockV2rayClients": true`) {
+		t.Fatal("older configs must default to blocking v2ray/xray clients")
+	}
 	if cfg.Update.Repo != updater.DefaultRepo {
 		t.Errorf("Update.Repo = %q, want %q", cfg.Update.Repo, updater.DefaultRepo)
 	}
@@ -109,6 +112,17 @@ func TestLoadCompletesMissingSettings(t *testing.T) {
 	}
 	if !strings.Contains(written, `"adminPassword": "hunter2"`) {
 		t.Errorf("completing dropped a setting the operator wrote:\n%s", written)
+	}
+}
+
+func TestLoadPreservesDisabledClientBlocking(t *testing.T) {
+	cfg, written, path := load(t, `{"blockV2rayClients": false}`)
+	if cfg.BlockV2RayClients || !strings.Contains(written, `"blockV2rayClients": false`) {
+		t.Fatal("explicitly disabled client blocking was not preserved")
+	}
+	reloaded, err := Read(path)
+	if err != nil || reloaded.BlockV2RayClients {
+		t.Fatalf("reload did not preserve disabled client blocking: %v", err)
 	}
 }
 

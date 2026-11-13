@@ -39,6 +39,7 @@ type Config struct {
 	// sent as Profile-Update-Interval. That header counts whole hours, so the
 	// value is kept to whole hours here rather than truncated on the wire.
 	SubUpdateInterval Duration `json:"subUpdateInterval"`
+	BlockV2RayClients bool     `json:"blockV2rayClients"`
 	Debug             bool     `json:"debug"`
 
 	// AdminUser names the admin: created on first start, and the account a
@@ -88,6 +89,7 @@ func Template() *Config {
 		DBPath:            "",
 		SubBaseURL:        "",
 		SubUpdateInterval: Duration(12 * time.Hour),
+		BlockV2RayClients: true,
 		Debug:             false,
 		AdminUser:         "admin",
 		AdminPassword:     "",

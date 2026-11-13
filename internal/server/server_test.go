@@ -20,6 +20,7 @@ import (
 	"github.com/PFXDev/FireX/internal/paneltest"
 	"github.com/PFXDev/FireX/internal/provision"
 	"github.com/PFXDev/FireX/internal/routing"
+	"github.com/PFXDev/FireX/internal/sharelink"
 	"github.com/PFXDev/FireX/internal/store"
 	"github.com/PFXDev/FireX/internal/subscription"
 	"github.com/PFXDev/FireX/internal/updater"
@@ -312,9 +313,10 @@ func TestSubscriptionFormatSelection(t *testing.T) {
 		name, path, userAgent, contentType string
 		status                             int
 	}{
-		{"legacy client", "/sub/" + u.SubToken, "v2rayN/7.0", "text/plain", http.StatusOK},
+		{"explicit base64", "/sub/" + u.SubToken + "?target=base64", "", "text/plain", http.StatusOK},
 		{"default mihomo", "/sub/" + u.SubToken, "", "text/yaml", http.StatusOK},
-		{"query overrides user agent", "/sub/" + u.SubToken + "?target=clash", "v2rayN/7.0", "text/yaml", http.StatusOK},
+		{"FlClash", "/sub/" + u.SubToken, "FlClash/0.8.92", "text/yaml", http.StatusOK},
+		{"clash alias", "/sub/" + u.SubToken + "?target=clash", "clash-verge/2.0", "text/yaml", http.StatusOK},
 		{"mihomo alias", "/sub/" + u.SubToken + "?target=mihomo", "", "text/yaml", http.StatusOK},
 		{"unsupported sing-box", "/sub/" + u.SubToken + "?target=sing-box", "", "", http.StatusBadRequest},
 		{"unknown token", "/sub/definitely-not-a-token", "", "", http.StatusNotFound},
@@ -363,6 +365,91 @@ func TestSubscriptionFormatSelection(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSubscriptionBlocksV2RayAndXrayAgents(t *testing.T) {
+	h := newHarness(t)
+	u := h.seed()
+	// Blocked requests must not depend on the subscription builder or panels.
+	h.srv.subs = nil
+	for _, ua := range []string{"v2rayN/7.0", "v2rayNG/1.9", "V2Ray/5.0", "Xray/25.1", "client XRAY-core/1.0"} {
+		for _, target := range []string{"", "clash", "mihomo", "base64", "sing-box"} {
+			t.Run(ua+"/"+target, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodGet, "/sub/"+u.SubToken+"?target="+target, nil)
+				req.Header.Set("User-Agent", ua)
+				w := httptest.NewRecorder()
+				h.srv.engine.ServeHTTP(w, req)
+				if w.Code != http.StatusOK {
+					t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+				}
+				if !strings.HasPrefix(w.Header().Get("Content-Type"), "text/plain") || w.Header().Get("Cache-Control") != "no-store" {
+					t.Fatalf("unexpected headers: %v", w.Header())
+				}
+				decoded, err := base64.StdEncoding.DecodeString(w.Body.String())
+				if err != nil {
+					t.Fatal(err)
+				}
+				links := strings.Split(strings.TrimSpace(string(decoded)), "\n")
+				if len(links) != 1 {
+					t.Fatalf("expected only a placeholder node, got %s", decoded)
+				}
+				proxy, err := sharelink.Parse(links[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if proxy.Name != "请使用FlClash" || proxy.Server != "127.0.0.1" || proxy.Port != 1 || proxy.UUID != "00000000-0000-0000-0000-000000000000" {
+					t.Fatalf("unexpected placeholder: %+v", proxy)
+				}
+				if strings.Contains(string(decoded), u.UUID) {
+					t.Fatal("blocked response contains the user's credentials")
+				}
+			})
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/sub/invalid-token", nil)
+	req.Header.Set("User-Agent", "v2rayN/7.0")
+	w := httptest.NewRecorder()
+	h.srv.engine.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("invalid token status = %d, want 404", w.Code)
+	}
+}
+
+func TestSubscriptionClientBlockingToggle(t *testing.T) {
+	h := newHarness(t)
+	u := h.seed()
+	for _, enabled := range []bool{false, true} {
+		h.mustDo(http.MethodPut, "/api/settings/server", map[string]any{
+			"revision": h.serverConfig().Revision,
+			"config":   map[string]any{"blockV2rayClients": enabled},
+		})
+		saved := h.serverConfig()
+		if saved.Config.BlockV2RayClients != enabled || saved.RestartRequired {
+			t.Fatalf("switch was not saved as a hot setting: %+v", saved)
+		}
+		for _, ua := range []string{"v2rayN/7.0", "v2rayNG/1.9", "Xray/25.1"} {
+			for _, target := range []string{"", "base64", "clash"} {
+				req := httptest.NewRequest(http.MethodGet, "/sub/"+u.SubToken+"?target="+target, nil)
+				req.Header.Set("User-Agent", ua)
+				w := httptest.NewRecorder()
+				h.srv.engine.ServeHTTP(w, req)
+				if w.Code != http.StatusOK {
+					t.Fatalf("subscription status = %d: %s", w.Code, w.Body.String())
+				}
+				body := w.Body.Bytes()
+				if enabled || target != "clash" {
+					var err error
+					body, err = base64.StdEncoding.DecodeString(string(body))
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if strings.Contains(string(body), u.UUID) == enabled {
+					t.Fatalf("blocking=%v did not affect %s target=%s: %s", enabled, ua, target, body)
+				}
+			}
+		}
 	}
 }
 
