@@ -35,6 +35,7 @@ function makeSummary(): LiveSummary {
     totalUdp: 2,
     totalConnections: 12,
     onlineUsers: 3,
+    userSamplePanels: 1,
     onlineUserSessions: 3,
     onlineClients: 3,
     totalCpuCores: 4,
@@ -45,9 +46,9 @@ function makeSummary(): LiveSummary {
     fleetLoad15: 0.2,
     systemLoadIndex: 30,
     systemLoadLevel: 'idle',
-    cpu: { avg: 20, min: zeroExtreme, max: zeroExtreme },
-    mem: { avg: 40, min: zeroExtreme, max: zeroExtreme },
-    loadIndex: { avg: 25, min: zeroExtreme, max: zeroExtreme },
+    cpu: { samples: 1, avg: 20, min: zeroExtreme, max: zeroExtreme },
+    mem: { samples: 1, avg: 40, min: zeroExtreme, max: zeroExtreme },
+    loadIndex: { samples: 1, avg: 25, min: zeroExtreme, max: zeroExtreme },
   }
 }
 
@@ -160,4 +161,11 @@ test('loadLevelMeta returns expected labels and tones', () => {
   assert.equal(loadLevelMeta('normal').tone, 'good')
   assert.equal(loadLevelMeta('busy').tone, 'warn')
   assert.equal(loadLevelMeta('high').tone, 'bad')
+})
+
+test('missing CPU measurements leave gaps in trend lines', () => {
+  const path = buildSparklinePath([60, 60, null, 0, 0], 100, 40, { min: 0, max: 100 })
+  assert.equal(path.line.split('M ').length - 1, 2)
+  assert.match(path.line, /M 75\.0 /)
+  assert.equal(buildSparklinePath([null, null], 100, 40).line, '')
 })

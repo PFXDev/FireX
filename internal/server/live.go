@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -29,32 +30,32 @@ const (
 )
 
 type LivePanelStat struct {
-	ID            uint    `json:"id"`
-	Name          string  `json:"name"`
-	Online        bool    `json:"online"`
-	Error         string  `json:"error,omitempty"`
-	RttMs         int64   `json:"rttMs"`
-	CPU           float64 `json:"cpu"`
-	CPUCores      int     `json:"cpuCores"`
-	MemUsed       uint64  `json:"memUsed"`
-	MemTotal      uint64  `json:"memTotal"`
-	MemPercent    float64 `json:"memPercent"`
-	DiskUsed      uint64  `json:"diskUsed"`
-	DiskTotal     uint64  `json:"diskTotal"`
-	Load1         float64 `json:"load1"`
-	Load5         float64 `json:"load5"`
-	Load15        float64 `json:"load15"`
-	LoadIndex     float64 `json:"loadIndex"`
-	NetUp         uint64  `json:"netUp"`
-	NetDown       uint64  `json:"netDown"`
-	TCPCount      int     `json:"tcpCount"`
-	UDPCount      int     `json:"udpCount"`
-	OnlineUsers   int     `json:"onlineUsers"`
-	OnlineClients int     `json:"onlineClients"`
-	XrayState     string  `json:"xrayState"`
-	XrayVersion   string  `json:"xrayVersion"`
-	Uptime        uint64  `json:"uptime"`
-	SampledAt     int64   `json:"sampledAt"`
+	ID            uint     `json:"id"`
+	Name          string   `json:"name"`
+	Online        bool     `json:"online"`
+	Error         string   `json:"error,omitempty"`
+	RttMs         int64    `json:"rttMs"`
+	CPU           *float64 `json:"cpu"`
+	CPUCores      int      `json:"cpuCores"`
+	MemUsed       uint64   `json:"memUsed"`
+	MemTotal      uint64   `json:"memTotal"`
+	MemPercent    float64  `json:"memPercent"`
+	DiskUsed      uint64   `json:"diskUsed"`
+	DiskTotal     uint64   `json:"diskTotal"`
+	Load1         float64  `json:"load1"`
+	Load5         float64  `json:"load5"`
+	Load15        float64  `json:"load15"`
+	LoadIndex     *float64 `json:"loadIndex"`
+	NetUp         uint64   `json:"netUp"`
+	NetDown       uint64   `json:"netDown"`
+	TCPCount      int      `json:"tcpCount"`
+	UDPCount      int      `json:"udpCount"`
+	OnlineUsers   *int     `json:"onlineUsers"`
+	OnlineClients *int     `json:"onlineClients"`
+	XrayState     string   `json:"xrayState"`
+	XrayVersion   string   `json:"xrayVersion"`
+	Uptime        uint64   `json:"uptime"`
+	SampledAt     int64    `json:"sampledAt"`
 }
 
 type LiveMetricExtreme struct {
@@ -64,21 +65,22 @@ type LiveMetricExtreme struct {
 }
 
 type LiveMetricStats struct {
-	Avg float64           `json:"avg"`
-	Min LiveMetricExtreme `json:"min"`
-	Max LiveMetricExtreme `json:"max"`
+	Samples int               `json:"samples"`
+	Avg     float64           `json:"avg"`
+	Min     LiveMetricExtreme `json:"min"`
+	Max     LiveMetricExtreme `json:"max"`
 }
 
 type LiveTrendPoint struct {
-	T           int64   `json:"t"`
-	NetUp       uint64  `json:"netUp"`
-	NetDown     uint64  `json:"netDown"`
-	CPUAvg      float64 `json:"cpuAvg"`
-	MemAvg      float64 `json:"memAvg"`
-	LoadAvg     float64 `json:"loadAvg"`
-	SystemLoad  float64 `json:"systemLoad"`
-	Connections int     `json:"connections"`
-	OnlineUsers int     `json:"onlineUsers"`
+	T           int64    `json:"t"`
+	NetUp       uint64   `json:"netUp"`
+	NetDown     uint64   `json:"netDown"`
+	CPUAvg      *float64 `json:"cpuAvg"`
+	MemAvg      float64  `json:"memAvg"`
+	LoadAvg     *float64 `json:"loadAvg"`
+	SystemLoad  *float64 `json:"systemLoad"`
+	Connections int      `json:"connections"`
+	OnlineUsers *int     `json:"onlineUsers"`
 }
 
 type LiveSummary struct {
@@ -91,6 +93,7 @@ type LiveSummary struct {
 	TotalUDP           int             `json:"totalUdp"`
 	TotalConnections   int             `json:"totalConnections"`
 	OnlineUsers        int             `json:"onlineUsers"`
+	UserSamplePanels   int             `json:"userSamplePanels"`
 	OnlineUserSessions int             `json:"onlineUserSessions"`
 	OnlineClients      int             `json:"onlineClients"`
 	TotalCPUCores      int             `json:"totalCpuCores"`
@@ -185,7 +188,6 @@ func (h *LiveHub) Subscribe() (chan LiveSnapshot, *LiveSnapshot, bool) {
 	var initial *LiveSnapshot
 	if h.last != nil {
 		snap := *h.last
-		snap.Panels = append([]LivePanelStat(nil), h.last.Panels...)
 		if len(h.history) > 0 {
 			snap.History = append([]LiveTrendPoint(nil), h.history...)
 		}
@@ -371,12 +373,17 @@ func (h *LiveHub) collectOnce(ctx context.Context, epoch uint64) {
 		T:           now,
 		NetUp:       summary.TotalNetUp,
 		NetDown:     summary.TotalNetDown,
-		CPUAvg:      summary.CPU.Avg,
 		MemAvg:      summary.Mem.Avg,
-		LoadAvg:     summary.LoadIndex.Avg,
-		SystemLoad:  summary.SystemLoadIndex,
 		Connections: summary.TotalConnections,
-		OnlineUsers: summary.OnlineUsers,
+	}
+
+	if summary.CPU.Samples > 0 {
+		point.CPUAvg = &summary.CPU.Avg
+		point.LoadAvg = &summary.LoadIndex.Avg
+		point.SystemLoad = &summary.SystemLoadIndex
+	}
+	if summary.UserSamplePanels > 0 && summary.UserSamplePanels == summary.OnlinePanels {
+		point.OnlineUsers = &summary.OnlineUsers
 	}
 
 	snap := LiveSnapshot{
@@ -431,9 +438,8 @@ func (h *LiveHub) collectOnce(ctx context.Context, epoch uint64) {
 		h.history = append([]LiveTrendPoint(nil), h.history[len(h.history)-historyCap:]...)
 	}
 
-	stored := snap
-	stored.Panels = append([]LivePanelStat(nil), stats...)
-	h.last = &stored
+	// Published panel slices are immutable, including the non-nil empty slice.
+	h.last = &snap
 
 	for ch := range h.subs {
 		select {
@@ -529,8 +535,14 @@ func (h *LiveHub) pollPanel(ctx context.Context, p *model.Panel, timeout time.Du
 		loadIdx = round1(0.60*cpuPct + 0.40*memPct)
 	}
 
+	var cpu, loadIndex *float64
+	if !slices.Contains(status.UnavailableMetrics, "cpu") {
+		cpu, loadIndex = &cpuPct, &loadIdx
+	}
+
+	var userCount, clientCount *int
 	var userEmails, clientEmails []string
-	if onlineErr == nil && len(onlines) > 0 {
+	if onlineErr == nil {
 		seen := make(map[string]struct{}, len(onlines))
 		suffix := strings.ToLower(provision.EmailSuffix)
 		for _, raw := range onlines {
@@ -547,6 +559,8 @@ func (h *LiveHub) pollPanel(ctx context.Context, p *model.Panel, timeout time.Du
 				userEmails = append(userEmails, norm)
 			}
 		}
+		users, clients := len(userEmails), len(clientEmails)
+		userCount, clientCount = &users, &clients
 	}
 
 	return panelPollResult{
@@ -555,7 +569,7 @@ func (h *LiveHub) pollPanel(ctx context.Context, p *model.Panel, timeout time.Du
 			Name:          p.Name,
 			Online:        true,
 			RttMs:         rttMs,
-			CPU:           cpuPct,
+			CPU:           cpu,
 			CPUCores:      cores,
 			MemUsed:       status.Mem.Current,
 			MemTotal:      status.Mem.Total,
@@ -565,13 +579,13 @@ func (h *LiveHub) pollPanel(ctx context.Context, p *model.Panel, timeout time.Du
 			Load1:         load1,
 			Load5:         load5,
 			Load15:        load15,
-			LoadIndex:     loadIdx,
+			LoadIndex:     loadIndex,
 			NetUp:         status.NetIO.Up,
 			NetDown:       status.NetIO.Down,
 			TCPCount:      max(0, status.TcpCount),
 			UDPCount:      max(0, status.UdpCount),
-			OnlineUsers:   len(userEmails),
-			OnlineClients: len(clientEmails),
+			OnlineUsers:   userCount,
+			OnlineClients: clientCount,
 			XrayState:     status.Xray.State,
 			XrayVersion:   status.Xray.Version,
 			Uptime:        status.Uptime,
@@ -590,24 +604,22 @@ func buildLiveSummary(stats []LivePanelStat, uniqueUsers, uniqueClients int) Liv
 		OnlineClients: uniqueClients,
 	}
 
-	var (
-		cpuSum, memSum, loadSum float64
-		hasOnline               bool
-	)
-
 	for _, st := range stats {
 		if !st.Online {
 			continue
 		}
 		summary.OnlinePanels++
-		if st.NetUp+st.NetDown > 0 || st.OnlineClients > 0 || st.TCPCount+st.UDPCount > 0 {
+		if st.NetUp+st.NetDown > 0 || (st.OnlineClients != nil && *st.OnlineClients > 0) || st.TCPCount+st.UDPCount > 0 {
 			summary.ActivePanels++
 		}
 		summary.TotalNetUp += st.NetUp
 		summary.TotalNetDown += st.NetDown
 		summary.TotalTCP += st.TCPCount
 		summary.TotalUDP += st.UDPCount
-		summary.OnlineUserSessions += st.OnlineUsers
+		if st.OnlineUsers != nil {
+			summary.OnlineUserSessions += *st.OnlineUsers
+			summary.UserSamplePanels++
+		}
 		summary.TotalCPUCores += st.CPUCores
 		summary.TotalMemUsed += st.MemUsed
 		summary.TotalMemTotal += st.MemTotal
@@ -615,24 +627,11 @@ func buildLiveSummary(stats []LivePanelStat, uniqueUsers, uniqueClients int) Liv
 		summary.FleetLoad5 += st.Load5
 		summary.FleetLoad15 += st.Load15
 
-		cpuSum += st.CPU
-		memSum += st.MemPercent
-		loadSum += st.LoadIndex
-
-		if !hasOnline {
-			hasOnline = true
-			summary.CPU.Min = LiveMetricExtreme{Value: st.CPU, PanelID: st.ID, PanelName: st.Name}
-			summary.CPU.Max = summary.CPU.Min
-			summary.Mem.Min = LiveMetricExtreme{Value: st.MemPercent, PanelID: st.ID, PanelName: st.Name}
-			summary.Mem.Max = summary.Mem.Min
-			summary.LoadIndex.Min = LiveMetricExtreme{Value: st.LoadIndex, PanelID: st.ID, PanelName: st.Name}
-			summary.LoadIndex.Max = summary.LoadIndex.Min
-			continue
+		summary.Mem.add(st.MemPercent, st)
+		if st.CPU != nil {
+			summary.CPU.add(*st.CPU, st)
+			summary.LoadIndex.add(*st.LoadIndex, st)
 		}
-
-		updateMetricExtremes(&summary.CPU, st.CPU, st.ID, st.Name)
-		updateMetricExtremes(&summary.Mem, st.MemPercent, st.ID, st.Name)
-		updateMetricExtremes(&summary.LoadIndex, st.LoadIndex, st.ID, st.Name)
 	}
 
 	summary.TotalConnections = summary.TotalTCP + summary.TotalUDP
@@ -640,15 +639,15 @@ func buildLiveSummary(stats []LivePanelStat, uniqueUsers, uniqueClients int) Liv
 	summary.FleetLoad5 = round2(summary.FleetLoad5)
 	summary.FleetLoad15 = round2(summary.FleetLoad15)
 
-	if summary.OnlinePanels == 0 {
-		summary.SystemLoadLevel = "idle"
+	for _, metric := range []*LiveMetricStats{&summary.CPU, &summary.Mem, &summary.LoadIndex} {
+		if metric.Samples > 0 {
+			metric.Avg = round1(metric.Avg / float64(metric.Samples))
+		}
+	}
+	if summary.LoadIndex.Samples == 0 {
+		summary.SystemLoadLevel = "unknown"
 		return summary
 	}
-
-	n := float64(summary.OnlinePanels)
-	summary.CPU.Avg = round1(cpuSum / n)
-	summary.Mem.Avg = round1(memSum / n)
-	summary.LoadIndex.Avg = round1(loadSum / n)
 
 	summary.SystemLoadIndex = round1(0.75*summary.LoadIndex.Avg + 0.25*summary.LoadIndex.Max.Value)
 	switch {
@@ -664,13 +663,16 @@ func buildLiveSummary(stats []LivePanelStat, uniqueUsers, uniqueClients int) Liv
 	return summary
 }
 
-func updateMetricExtremes(m *LiveMetricStats, value float64, panelID uint, panelName string) {
-	if value < m.Min.Value {
-		m.Min = LiveMetricExtreme{Value: value, PanelID: panelID, PanelName: panelName}
+func (m *LiveMetricStats) add(value float64, panel LivePanelStat) {
+	extreme := LiveMetricExtreme{Value: value, PanelID: panel.ID, PanelName: panel.Name}
+	if m.Samples == 0 || value < m.Min.Value {
+		m.Min = extreme
 	}
-	if value > m.Max.Value {
-		m.Max = LiveMetricExtreme{Value: value, PanelID: panelID, PanelName: panelName}
+	if m.Samples == 0 || value > m.Max.Value {
+		m.Max = extreme
 	}
+	m.Samples++
+	m.Avg += value
 }
 
 func clampFloat(v, minVal, maxVal float64) float64 {
@@ -692,6 +694,18 @@ func round2(v float64) float64 {
 }
 
 func (s *Server) handleOverviewLive(c *gin.Context) {
+	sess := c.MustGet(ctxSessionKey).(*model.Session)
+	ctx, cancel := context.WithDeadline(c.Request.Context(), time.UnixMilli(sess.ExpiresAt))
+	defer cancel()
+	// Recheck before each write so revoked sessions cannot receive the next frame.
+	validSession := func() bool {
+		var count int64
+		err := s.db.WithContext(ctx).Model(&model.Session{}).
+			Joins("JOIN admins ON admins.id = sessions.admin_id").
+			Where("sessions.token = ? AND sessions.admin_id = ? AND expires_at > ?", sess.Token, sess.AdminID, time.Now().UnixMilli()).
+			Count(&count).Error
+		return err == nil && count == 1 && ctx.Err() == nil
+	}
 	ch, initial, ok := s.live.Subscribe()
 	if !ok {
 		failMsg(c, http.StatusServiceUnavailable, "实时监控服务正在关闭")
@@ -708,7 +722,7 @@ func (s *Server) handleOverviewLive(c *gin.Context) {
 	c.Writer.Flush()
 
 	if initial != nil {
-		if !writeSSEEvent(c.Writer, "snapshot", initial) {
+		if !validSession() || !writeSSEEvent(c.Writer, "snapshot", initial) {
 			return
 		}
 	}
@@ -722,16 +736,16 @@ func (s *Server) handleOverviewLive(c *gin.Context) {
 
 	for {
 		select {
-		case <-c.Request.Context().Done():
+		case <-ctx.Done():
 			return
 		case <-s.live.Done():
 			return
 		case snap := <-ch:
-			if !writeSSEEvent(c.Writer, "snapshot", snap) {
+			if !validSession() || !writeSSEEvent(c.Writer, "snapshot", snap) {
 				return
 			}
 		case <-ping.C:
-			if !writeSSEComment(c.Writer, "ping") {
+			if !validSession() || !writeSSEComment(c.Writer, "ping") {
 				return
 			}
 		}

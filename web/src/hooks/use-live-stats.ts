@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
-import { verifySession, type LiveSnapshot, type LiveTrendPoint } from '@/api'
+import type { LiveSnapshot, LiveTrendPoint } from '@/api'
+import { subscribeLiveStats } from '@/lib/live-stream'
 import { mergeLiveHistory } from '@/lib/live-stats'
 
 const STORAGE_KEY = 'firex.overview.live'
@@ -68,36 +69,15 @@ export function useLiveStats(): LiveStatsState {
       return
     }
 
-    let closed = false
     setStatus('connecting')
-
-    const es = new EventSource('/api/overview/live', { withCredentials: true })
-
-    const onSnapshot = (event: Event) => {
-      if (closed) return
-      const msg = event as MessageEvent<string>
-      try {
-        const next = JSON.parse(msg.data) as LiveSnapshot
+    return subscribeLiveStats(
+      (next) => {
         setSnapshot(next)
         setHistory((prev) => mergeLiveHistory(prev, next))
         setStatus('live')
-      } catch {
-        // Ignore malformed payloads and wait for the next tick.
-      }
-    }
-
-    es.addEventListener('snapshot', onSnapshot)
-    es.onerror = () => {
-      if (closed) return
-      setStatus('reconnecting')
-      verifySession('/overview/live')
-    }
-
-    return () => {
-      closed = true
-      es.removeEventListener('snapshot', onSnapshot)
-      es.close()
-    }
+      },
+      () => setStatus('reconnecting'),
+    )
   }, [enabled, visible])
 
   return {

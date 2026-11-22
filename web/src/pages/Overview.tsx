@@ -450,19 +450,19 @@ export function OverviewPage() {
                             )}
                           </TableCell>
                           <TableCell className="tabular-nums">
-                            {stat?.online ? `${stat.cpu.toFixed(1)}%` : '—'}
+                            {stat?.cpu != null ? `${stat.cpu.toFixed(1)}%` : '—'}
                           </TableCell>
                           <TableCell className="whitespace-nowrap tabular-nums">
                             {stat?.online ? `${stat.memPercent.toFixed(1)}%` : '—'}
                           </TableCell>
                           <TableCell className="hidden whitespace-nowrap tabular-nums lg:table-cell">
-                            {stat?.online ? `${stat.loadIndex.toFixed(1)} (${stat.load1.toFixed(2)})` : '—'}
+                            {stat?.loadIndex != null ? `${stat.loadIndex.toFixed(1)} (${stat.load1.toFixed(2)})` : '—'}
                           </TableCell>
                           <TableCell className="hidden whitespace-nowrap tabular-nums sm:table-cell">
                             {stat?.online ? `${stat.tcpCount + stat.udpCount} (${stat.tcpCount}/${stat.udpCount})` : '—'}
                           </TableCell>
                           <TableCell className="hidden whitespace-nowrap tabular-nums md:table-cell">
-                            {stat?.online
+                            {stat?.onlineUsers != null && stat.onlineClients != null
                               ? stat.onlineClients > stat.onlineUsers
                                 ? `${stat.onlineUsers} (全量 ${stat.onlineClients})`
                                 : String(stat.onlineUsers)

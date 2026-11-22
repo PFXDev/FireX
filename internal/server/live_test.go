@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"math"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/PFXDev/FireX/internal/model"
 	"github.com/PFXDev/FireX/internal/paneltest"
 )
 
@@ -309,5 +311,98 @@ func TestOverviewLiveOfflineIsolationAndShutdown(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("SSE handler did not exit promptly when LiveHub closed")
+	}
+}
+
+func TestLiveEmptyPanelsOnFirstFrameAndCatchUp(t *testing.T) {
+	h := newHarness(t)
+	defer h.srv.live.Close()
+	h.login()
+	for subscriber := 0; subscriber < 2; subscriber++ {
+		resp := openSSE(t, h, context.Background())
+		defer resp.Body.Close()
+		snap := readNextSnapshot(t, bufio.NewReader(resp.Body), time.Second)
+		if snap.Panels == nil || len(snap.Panels) != 0 {
+			t.Fatalf("subscriber %d: expected an empty JSON array, got %#v", subscriber, snap.Panels)
+		}
+		if subscriber == 1 && len(snap.History) == 0 {
+			t.Fatal("second subscriber did not receive the cached snapshot")
+		}
+	}
+}
+
+func TestLiveSessionInvalidation(t *testing.T) {
+	for _, reason := range []string{"expiry", "logout"} {
+		t.Run(reason, func(t *testing.T) {
+			h := newHarness(t)
+			defer h.srv.live.Close()
+			h.login()
+			h.srv.live.interval = time.Hour
+			h.srv.live.heartbeat = time.Hour
+			if reason == "expiry" {
+				deadline := time.Now().Add(500 * time.Millisecond).UnixMilli()
+				if err := h.db.Model(&model.Session{}).Where("1 = 1").Update("expires_at", deadline).Error; err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				h.srv.live.heartbeat = 100 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			resp := openSSE(t, h, ctx)
+			defer resp.Body.Close()
+			reader := bufio.NewReader(resp.Body)
+			readNextSnapshot(t, reader, time.Second)
+			if reason == "logout" {
+				h.mustDo(http.MethodPost, "/api/auth/logout", nil)
+			}
+			data, err := io.ReadAll(reader)
+			if err != nil || ctx.Err() != nil || strings.Contains(string(data), "event: snapshot") {
+				t.Fatalf("stream did not close cleanly after %s: %q, %v", reason, data, err)
+			}
+		})
+	}
+}
+
+func TestLivePartialTelemetry(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.mustDo(http.MethodPost, "/api/panels", map[string]any{
+		"name": "partial", "baseUrl": h.fake.URL(), "apiToken": "tok",
+	})
+	h.fake.SetStatus(map[string]any{"cpu": 0, "unavailableMetrics": []string{"cpu"}})
+	h.fake.FailNext["/clients/onlines"] = true
+	hub := h.srv.live
+	hub.collectOnce(context.Background(), hub.epoch)
+	snap := hub.last
+	st := snap.Panels[0]
+	if !st.Online || st.CPU != nil || st.LoadIndex != nil || st.OnlineUsers != nil || st.OnlineClients != nil || snap.Summary.UserSamplePanels != 0 {
+		t.Fatalf("missing samples reported as measurements: %+v", snap)
+	}
+	if snap.Summary.SystemLoadLevel != "unknown" || snap.Point.CPUAvg != nil || snap.Point.SystemLoad != nil || snap.Point.LoadAvg != nil || snap.Point.OnlineUsers != nil {
+		t.Fatalf("unexpected empty-fleet metrics: %+v", snap)
+	}
+	healthy := paneltest.New("tok")
+	defer healthy.Close()
+	h.mustDo(http.MethodPost, "/api/panels", map[string]any{
+		"name": "healthy", "baseUrl": healthy.URL(), "apiToken": "tok",
+	})
+	healthy.SetStatus(map[string]any{"cpu": 60})
+	healthy.SetOnlineClients([]string{"alice@FireX"})
+	h.fake.FailNext["/clients/onlines"] = true
+	hub.collectOnce(context.Background(), hub.epoch)
+	sum := hub.last.Summary
+	if sum.UserSamplePanels != 1 || sum.OnlinePanels != 2 || sum.OnlineUsers != 1 || hub.last.Point.OnlineUsers != nil {
+		t.Fatalf("unexpected partial user counts: %+v", sum)
+	}
+	if sum.CPU.Samples != 1 || sum.CPU.Min.Value != 60 || sum.CPU.Avg != 60 || sum.LoadIndex.Samples != 1 || sum.SystemLoadIndex != 36 || sum.Mem.Samples != 2 {
+		t.Fatalf("unavailable CPU skewed fleet metrics: %+v", sum)
+	}
+	h.fake.SetStatus(map[string]any{"cpu": 0})
+	hub.collectOnce(context.Background(), hub.epoch)
+	st = hub.last.Panels[0]
+	sum = hub.last.Summary
+	if st.CPU == nil || *st.CPU != 0 || st.OnlineUsers == nil || *st.OnlineUsers != 0 || sum.CPU.Samples != 2 || sum.CPU.Avg != 30 || sum.UserSamplePanels != 2 || hub.last.Point.OnlineUsers == nil {
+		t.Fatalf("valid zero readings lost after recovery: %+v", hub.last)
 	}
 }

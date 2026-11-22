@@ -23,6 +23,7 @@ const (
 	sessionCookie = "firex_session"
 	sessionTTL    = 7 * 24 * time.Hour
 	ctxAdminKey   = "firex_admin"
+	ctxSessionKey = "firex_session"
 )
 
 // BootstrapAdmin makes sure an admin exists and applies the config's one-shot
@@ -169,6 +170,7 @@ func (s *Server) requireAdmin(c *gin.Context) {
 		return
 	}
 	c.Set(ctxAdminKey, &admin)
+	c.Set(ctxSessionKey, &sess)
 	c.Next()
 }
 

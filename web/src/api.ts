@@ -19,7 +19,7 @@ type RequestOptions = {
   unauthorized?: UnauthorizedHandling
 }
 
-let sessionVerification: Promise<void> | null = null
+let sessionVerification: Promise<boolean> | null = null
 
 function emitUnauthorized(path: string) {
   if (typeof window === 'undefined') return
@@ -27,21 +27,26 @@ function emitUnauthorized(path: string) {
 }
 
 export function verifySession(path: string) {
-  if (typeof window === 'undefined' || sessionVerification) return
+  if (typeof window === 'undefined') return Promise.resolve(true)
+  if (sessionVerification) return sessionVerification
 
   sessionVerification = fetch('/api/auth/me', {
+    signal: AbortSignal.timeout(10000),
     credentials: 'include',
   })
     .then((res) => {
       if (res.status === 401) emitUnauthorized(path)
+      return res.status !== 401
     })
     .catch(() => {
       // A network/server failure does not prove the session is invalid. The
       // next protected request will retry verification if it also returns 401.
+      return true
     })
     .finally(() => {
       sessionVerification = null
     })
+  return sessionVerification
 }
 
 function handleUnauthorized(path: string, handling: UnauthorizedHandling) {
@@ -447,7 +452,7 @@ export interface LivePanelStat {
   online: boolean
   error?: string
   rttMs: number
-  cpu: number
+  cpu: number | null
   cpuCores: number
   memUsed: number
   memTotal: number
@@ -457,13 +462,13 @@ export interface LivePanelStat {
   load1: number
   load5: number
   load15: number
-  loadIndex: number
+  loadIndex: number | null
   netUp: number
   netDown: number
   tcpCount: number
   udpCount: number
-  onlineUsers: number
-  onlineClients: number
+  onlineUsers: number | null
+  onlineClients: number | null
   xrayState: string
   xrayVersion: string
   uptime: number
@@ -477,6 +482,7 @@ export interface LiveMetricExtreme {
 }
 
 export interface LiveMetricStats {
+  samples: number
   avg: number
   min: LiveMetricExtreme
   max: LiveMetricExtreme
@@ -486,15 +492,15 @@ export interface LiveTrendPoint {
   t: number
   netUp: number
   netDown: number
-  cpuAvg: number
+  cpuAvg: number | null
   memAvg: number
-  loadAvg: number
-  systemLoad: number
+  loadAvg: number | null
+  systemLoad: number | null
   connections: number
-  onlineUsers: number
+  onlineUsers: number | null
 }
 
-export type SystemLoadLevel = 'idle' | 'normal' | 'busy' | 'high'
+export type SystemLoadLevel = 'unknown' | 'idle' | 'normal' | 'busy' | 'high'
 
 export interface LiveSummary {
   totalPanels: number
@@ -506,6 +512,7 @@ export interface LiveSummary {
   totalUdp: number
   totalConnections: number
   onlineUsers: number
+  userSamplePanels: number
   onlineUserSessions: number
   onlineClients: number
   totalCpuCores: number

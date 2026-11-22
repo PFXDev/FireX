@@ -4,7 +4,7 @@ import { buildSparklinePath } from '@/lib/live-stats'
 import { cn } from '@/lib/utils'
 
 export interface SparklineSeries {
-  values: number[]
+  values: (number | null)[]
   color: string
   dashed?: boolean
   fillOpacity?: number
@@ -28,7 +28,7 @@ export function SparklineBackdrop({
   const rawId = useId()
   const baseId = rawId.replace(/:/g, '')
 
-  const allValues = series.flatMap((s) => s.values).filter((v) => Number.isFinite(v))
+  const allValues = series.flatMap((s) => s.values).filter((v): v is number => v !== null && Number.isFinite(v))
   if (allValues.length === 0) return null
 
   const resolvedMin = min ?? Math.min(...allValues)

@@ -34,7 +34,7 @@ export type SparklineOptions = {
 }
 
 export function buildSparklinePath(
-  values: number[],
+  values: (number | null)[],
   width: number,
   height: number,
   options: SparklineOptions = {},
@@ -47,8 +47,10 @@ export function buildSparklinePath(
   const padBottom = options.padBottom ?? 2
   const usableHeight = Math.max(1, height - padTop - padBottom)
 
-  let minVal = options.min ?? Math.min(...values)
-  let maxVal = options.max ?? Math.max(...values)
+  const measured = values.filter((v): v is number => v !== null && Number.isFinite(v))
+  if (measured.length === 0) return { line: '', area: '' }
+  let minVal = options.min ?? Math.min(...measured)
+  let maxVal = options.max ?? Math.max(...measured)
   if (!Number.isFinite(minVal)) minVal = 0
   if (!Number.isFinite(maxVal)) maxVal = 1
   if (maxVal <= minVal) {
@@ -63,16 +65,26 @@ export function buildSparklinePath(
 
   const series = values.length === 1 ? [values[0], values[0]] : values
   const span = maxVal - minVal
-  const pts = series.map((raw, index) => {
-    const clamped = Math.min(maxVal, Math.max(minVal, Number.isFinite(raw) ? raw : minVal))
-    const x = (index / (series.length - 1)) * width
-    const ratio = (clamped - minVal) / span
-    const y = padTop + (1 - ratio) * usableHeight
-    return { x, y }
-  })
+  const groups: { x: number; y: number }[][] = []
+  let points: { x: number; y: number }[] = []
+  for (const [index, value] of series.entries()) {
+    if (value === null || !Number.isFinite(value)) {
+      points = []
+      continue
+    }
+    if (points.length === 0) groups.push(points)
+    const ratio = (Math.min(maxVal, Math.max(minVal, value)) - minVal) / span
+    points.push({ x: index * width / (series.length - 1), y: padTop + (1 - ratio) * usableHeight })
+  }
+  const paths = groups.map((group) => sparklineSegment(group, height))
+  return { line: paths.map((p) => p.line).join(' '), area: paths.map((p) => p.area).join(' ') }
+}
 
+function sparklineSegment(pts: { x: number; y: number }[], height: number) {
   let line = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`
-  if (pts.length === 2) {
+  if (pts.length === 1) {
+    line += ' l 0 0'
+  } else if (pts.length === 2) {
     line += ` L ${pts[1].x.toFixed(1)} ${pts[1].y.toFixed(1)}`
   } else {
     for (let i = 1; i < pts.length - 2; i++) {
@@ -107,6 +119,8 @@ export function loadLevelMeta(level: SystemLoadLevel): {
   colorVar: string
 } {
   switch (level) {
+    case 'unknown':
+      return { label: '暂无数据', tone: 'idle', colorVar: 'var(--muted-foreground)' }
     case 'idle':
       return { label: '空闲', tone: 'idle', colorVar: 'var(--brand)' }
     case 'normal':

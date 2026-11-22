@@ -10,11 +10,12 @@ import (
 var ErrClientMissing = errors.New("panel: client not found")
 
 type Status struct {
-	Cpu         float64 `json:"cpu"`
-	CpuCores    int     `json:"cpuCores"`
-	LogicalPro  int     `json:"logicalPro"`
-	CpuSpeedMhz float64 `json:"cpuSpeedMhz"`
-	Mem         struct {
+	UnavailableMetrics []string `json:"unavailableMetrics"`
+	Cpu                float64  `json:"cpu"`
+	CpuCores           int      `json:"cpuCores"`
+	LogicalPro         int      `json:"logicalPro"`
+	CpuSpeedMhz        float64  `json:"cpuSpeedMhz"`
+	Mem                struct {
 		Current uint64 `json:"current"`
 		Total   uint64 `json:"total"`
 	} `json:"mem"`

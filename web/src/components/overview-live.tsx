@@ -58,6 +58,8 @@ export function OverviewLiveSection({ live }: { live: LiveStatsState }) {
   const topPanel = sortedPanels.find((p) => p.online && p.netUp + p.netDown > 0)
   const levelMeta = loadLevelMeta(summary.systemLoadLevel)
   const hasOnline = summary.onlinePanels > 0
+  const userCoverage = `已采样 ${summary.userSamplePanels}/${summary.onlinePanels} 个在线节点`
+  const partialUsers = summary.userSamplePanels < summary.onlinePanels
 
   return (
     <section aria-label="实时节点监控" className="flex flex-col gap-4">
@@ -203,17 +205,18 @@ export function OverviewLiveSection({ live }: { live: LiveStatsState }) {
                       }
                     />
                     <TooltipContent>
-                      按 @FireX 跨节点去重统计；跨节点会话 {summary.onlineUserSessions}，面板全量客户端（含非 FireX）
-                      {summary.onlineClients}。
+                      按 @FireX 跨节点去重。{userCoverage}。
                     </TooltipContent>
                   </Tooltip>
                 </div>
                 <div className="flex items-baseline gap-1">
                   <span className="font-heading text-lg font-semibold tabular-nums">
-                    {summary.onlineUsers}
+                    {summary.userSamplePanels > 0 ? summary.onlineUsers : '—'}
                   </span>
                   <span className="truncate text-xs text-muted-foreground tabular-nums">
-                    {summary.onlineClients > summary.onlineUsers
+                    {partialUsers || !hasOnline
+                      ? userCoverage
+                      : summary.onlineClients > summary.onlineUsers
                       ? `会话 ${summary.onlineUserSessions} · 全部 ${summary.onlineClients}`
                       : `跨节点会话 ${summary.onlineUserSessions}`}
                   </span>
@@ -250,7 +253,7 @@ export function OverviewLiveSection({ live }: { live: LiveStatsState }) {
           <CardContent className="relative z-10 flex flex-col gap-3">
             <div className="flex items-baseline gap-2">
               <strong className="font-heading text-3xl font-semibold tabular-nums">
-                {hasOnline ? summary.systemLoadIndex.toFixed(1) : '—'}
+                {summary.loadIndex.samples > 0 ? summary.systemLoadIndex.toFixed(1) : '—'}
               </strong>
               <span className="text-xs text-muted-foreground">/ 100</span>
             </div>
@@ -271,7 +274,7 @@ export function OverviewLiveSection({ live }: { live: LiveStatsState }) {
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              由在线节点平均负载 (75%) 与峰值节点负载 (25%) 加权得出
+              有效样本 {summary.loadIndex.samples}/{summary.onlinePanels} · 平均负载占 75%，峰值占 25%
             </p>
           </CardContent>
         </Card>
@@ -284,11 +287,10 @@ export function OverviewLiveSection({ live }: { live: LiveStatsState }) {
       <div className="grid gap-4 lg:grid-cols-3">
         <ExtremeMetricCard
           title="CPU 使用率"
-          description={hasOnline ? `在线 ${summary.onlinePanels} 个节点 · 共 ${summary.totalCpuCores} 核` : '暂无在线节点'}
+          description={hasOnline ? `已采样 ${summary.cpu.samples}/${summary.onlinePanels} 个在线节点` : '暂无在线节点'}
           icon={<CpuIcon className="size-3.5 text-muted-foreground" />}
           stats={summary.cpu}
           unit="%"
-          hasOnline={hasOnline}
           history={history}
           pickValue={(p) => p.cpuAvg}
           color="var(--chart-1)"
@@ -303,7 +305,6 @@ export function OverviewLiveSection({ live }: { live: LiveStatsState }) {
           icon={<MemoryStickIcon className="size-3.5 text-muted-foreground" />}
           stats={summary.mem}
           unit="%"
-          hasOnline={hasOnline}
           history={history}
           pickValue={(p) => p.memAvg}
           color="var(--chart-3)"
@@ -314,7 +315,6 @@ export function OverviewLiveSection({ live }: { live: LiveStatsState }) {
           icon={<GaugeIcon className="size-3.5 text-muted-foreground" />}
           stats={summary.loadIndex}
           unit=""
-          hasOnline={hasOnline}
           history={history}
           pickValue={(p) => p.loadAvg}
           color="var(--chart-4)"
@@ -388,7 +388,7 @@ function PerNodeSpeedCard({ panels }: { panels: LivePanelStat[] }) {
                         </span>
                       </span>
                       <span>
-                        CPU {panel.cpu.toFixed(0)}% · 负载 {panel.loadIndex.toFixed(0)}
+                        CPU {panel.cpu != null ? `${panel.cpu.toFixed(0)}%` : '—'} · 负载 {panel.loadIndex?.toFixed(0) ?? '—'}
                       </span>
                     </div>
                   ) : (
@@ -412,7 +412,6 @@ function ExtremeMetricCard({
   icon,
   stats,
   unit,
-  hasOnline,
   history,
   pickValue,
   color,
@@ -422,11 +421,11 @@ function ExtremeMetricCard({
   icon: React.ReactNode
   stats: LiveMetricStats
   unit: string
-  hasOnline: boolean
   history: LiveTrendPoint[]
-  pickValue: (p: LiveTrendPoint) => number
+  pickValue: (p: LiveTrendPoint) => number | null
   color: string
 }) {
+  const hasSamples = stats.samples > 0
   const formatVal = (v: number) => `${v.toFixed(1)}${unit}`
 
   return (
@@ -456,7 +455,7 @@ function ExtremeMetricCard({
       <CardContent className="relative z-10 flex flex-col gap-3">
         <div className="flex items-baseline gap-2">
           <strong className="font-heading text-3xl font-semibold tabular-nums">
-            {hasOnline ? formatVal(stats.avg) : '—'}
+            {hasSamples ? formatVal(stats.avg) : '—'}
           </strong>
           <span className="text-xs text-muted-foreground">平均</span>
         </div>
@@ -466,11 +465,11 @@ function ExtremeMetricCard({
             <div className="flex items-center justify-between gap-1 text-muted-foreground">
               <span>最高</span>
               <span className="font-semibold text-foreground tabular-nums">
-                {hasOnline ? formatVal(stats.max.value) : '—'}
+                {hasSamples ? formatVal(stats.max.value) : '—'}
               </span>
             </div>
             <span className="truncate text-muted-foreground" title={stats.max.panelName}>
-              {hasOnline ? stats.max.panelName || `#${stats.max.panelId}` : '—'}
+              {hasSamples ? stats.max.panelName || `#${stats.max.panelId}` : '—'}
             </span>
           </div>
 
@@ -478,11 +477,11 @@ function ExtremeMetricCard({
             <div className="flex items-center justify-between gap-1 text-muted-foreground">
               <span>最低</span>
               <span className="font-semibold text-foreground tabular-nums">
-                {hasOnline ? formatVal(stats.min.value) : '—'}
+                {hasSamples ? formatVal(stats.min.value) : '—'}
               </span>
             </div>
             <span className="truncate text-muted-foreground" title={stats.min.panelName}>
-              {hasOnline ? stats.min.panelName || `#${stats.min.panelId}` : '—'}
+              {hasSamples ? stats.min.panelName || `#${stats.min.panelId}` : '—'}
             </span>
           </div>
         </div>
