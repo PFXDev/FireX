@@ -81,6 +81,14 @@ func IsNotFound(err error) bool {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
+	retries := 0
+	if method == http.MethodGet {
+		retries = readRetries
+	}
+	return c.doWithRetries(ctx, method, path, body, out, retries)
+}
+
+func (c *Client) doWithRetries(ctx context.Context, method, path string, body any, out any, retries int) error {
 	var payload []byte
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -90,7 +98,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		payload = buf
 	}
 
-	resp, err := c.send(ctx, method, path, payload)
+	resp, err := c.sendWithRetries(ctx, method, path, payload, retries)
 	if err != nil {
 		return err
 	}
@@ -116,15 +124,13 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	return nil
 }
 
-// send issues the request and hands back the panel's response. A GET that
-// never reached the panel is retried: the whole read is repeatable, and once
-// the panel has answered, the answer stands. Writes go out exactly once,
-// because a retried add or delete would be a second edit, not a second look.
-func (c *Client) send(ctx context.Context, method, path string, payload []byte) (*http.Response, error) {
-	attempts := 1
-	if method == http.MethodGet {
-		attempts += readRetries
-	}
+// sendWithRetries issues the request and hands back the panel's response. A GET
+// that never reached the panel is retried when retries > 0: the whole read is
+// repeatable, and once the panel has answered, the answer stands. Writes go out
+// exactly once, because a retried add or delete would be a second edit, not a
+// second look.
+func (c *Client) sendWithRetries(ctx context.Context, method, path string, payload []byte, retries int) (*http.Response, error) {
+	attempts := 1 + max(0, retries)
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
@@ -200,6 +206,34 @@ func (c *Client) Status(ctx context.Context) (*Status, error) {
 		return nil, err
 	}
 	return &s, nil
+}
+
+// StatusLive fetches panel telemetry without transport retries so live stream
+// polling fails fast against unreachable panels.
+func (c *Client) StatusLive(ctx context.Context) (*Status, error) {
+	var s Status
+	if err := c.doWithRetries(ctx, http.MethodGet, "/panel/api/server/status", nil, &s, 0); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// OnlineClients returns the currently connected client emails reported by 3x-ui.
+// Older panel versions mounted the same handler under /inbounds/onlines, so a
+// 404 falls back there once.
+func (c *Client) OnlineClients(ctx context.Context) ([]string, error) {
+	var emails []string
+	err := c.doWithRetries(ctx, http.MethodPost, "/panel/api/clients/onlines", nil, &emails, 0)
+	if IsNotFound(err) {
+		err = c.doWithRetries(ctx, http.MethodPost, "/panel/api/inbounds/onlines", nil, &emails, 0)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if emails == nil {
+		return []string{}, nil
+	}
+	return emails, nil
 }
 
 // Inbounds lists inbounds with their full settings, which is what reveals

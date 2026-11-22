@@ -14,9 +14,10 @@ import {
 } from 'lucide-react'
 
 import { api } from '@/api'
-import type { Overview } from '@/api'
+import type { LivePanelStat, Overview } from '@/api'
 import { CodeText } from '@/components/code-display'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
+import { OverviewLiveSection } from '@/components/overview-live'
 import { useSession } from '@/lib/session'
 import { PageHeader } from '@/components/page-header'
 import { PanelStatusBadge, StatusBadge } from '@/components/status-badge'
@@ -40,12 +41,15 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty'
+import { Label } from '@/components/ui/label'
 import { Progress, ProgressLabel, ProgressValue } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
+import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { errorMessage, formatBytes, formatTime } from '@/lib/format'
+import { useLiveStats, type LiveStatus } from '@/hooks/use-live-stats'
+import { errorMessage, formatBytes, formatSpeed, formatTime } from '@/lib/format'
 
 const POLL_INTERVAL_MS = 15_000
 
@@ -65,6 +69,7 @@ export function OverviewPage() {
   const [syncing, setSyncing] = useState(false)
   // A full sync discovers panels and rewrites routing, which operators cannot do.
   const { isSuperAdmin } = useSession()
+  const live = useLiveStats()
   const [syncProblems, setSyncProblems] = useState<SyncProblem[]>([])
   const activeRefresh = useRef<Promise<boolean> | null>(null)
 
@@ -174,10 +179,27 @@ export function OverviewPage() {
   const nodeRate = percentage(counts.enabledInbounds, counts.inbounds)
   const userRate = percentage(counts.activeUsers, counts.users)
   const hasAttention = data.failedSyncs > 0 || syncProblems.length > 0
+  const liveByPanel = new Map<number, LivePanelStat>(
+    (live.snapshot?.panels ?? []).map((panel) => [panel.id, panel]),
+  )
+  const showLiveColumns = live.enabled && live.snapshot !== null
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="总览" description="核心健康状态、资源可用性与累计用量">
+        <div className="flex items-center gap-2 rounded-lg border bg-card px-2.5 py-1">
+          <Switch
+            id="overview-live-toggle"
+            size="sm"
+            checked={live.enabled}
+            onCheckedChange={live.setEnabled}
+            aria-label="实时监控"
+          />
+          <Label htmlFor="overview-live-toggle" className="cursor-pointer gap-1.5 text-xs font-medium">
+            <span>实时监控</span>
+            {live.enabled && <LiveStatusPill status={live.status} intervalMs={live.snapshot?.intervalMs} />}
+          </Label>
+        </div>
         <Badge variant="outline" aria-live="polite">
           {refreshing ? <Spinner data-icon="inline-start" /> : <Clock3Icon data-icon="inline-start" />}
           {refreshing
@@ -244,6 +266,8 @@ export function OverviewPage() {
           </AlertAction>
         </Alert>
       )}
+
+      <OverviewLiveSection live={live} />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Card>
@@ -386,34 +410,85 @@ export function OverviewPage() {
                 <TableRow>
                   <TableHead>名称</TableHead>
                   <TableHead>状态</TableHead>
+                  {showLiveColumns && (
+                    <>
+                      <TableHead>实时网速 (↑ / ↓)</TableHead>
+                      <TableHead>CPU</TableHead>
+                      <TableHead>内存</TableHead>
+                      <TableHead className="hidden lg:table-cell">负载指数</TableHead>
+                      <TableHead className="hidden sm:table-cell">连接 (TCP/UDP)</TableHead>
+                      <TableHead className="hidden md:table-cell">在线用户</TableHead>
+                      <TableHead className="hidden xl:table-cell">延迟</TableHead>
+                    </>
+                  )}
                   <TableHead className="hidden md:table-cell">最近连通</TableHead>
                   <TableHead className="hidden lg:table-cell">最近错误</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.panels.map((panel) => (
-                  <TableRow key={panel.id}>
-                    <TableCell>
-                      <span className="font-medium">{panel.name}</span>
-                    </TableCell>
-                    <TableCell>
-                      <PanelStatusBadge status={panel.status} />
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell">
-                      <span className="whitespace-nowrap text-muted-foreground">
-                        {formatTime(panel.lastSeenAt)}
-                      </span>
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell">
-                      <CodeText
-                        className="block max-w-80 truncate"
-                        title={panel.lastError || undefined}
-                      >
-                        {panel.lastError || '—'}
-                      </CodeText>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {data.panels.map((panel) => {
+                  const stat = liveByPanel.get(panel.id)
+                  const effectiveStatus = stat ? (stat.online ? 'online' : 'offline') : panel.status
+                  const effectiveError = stat && !stat.online && stat.error ? stat.error : panel.lastError
+                  return (
+                    <TableRow key={panel.id}>
+                      <TableCell>
+                        <span className="font-medium">{panel.name}</span>
+                      </TableCell>
+                      <TableCell>
+                        <PanelStatusBadge status={effectiveStatus} />
+                      </TableCell>
+                      {showLiveColumns && (
+                        <>
+                          <TableCell className="whitespace-nowrap tabular-nums">
+                            {stat?.online ? (
+                              <span className="text-xs">
+                                ↑ {formatSpeed(stat.netUp)} / ↓ {formatSpeed(stat.netDown)}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="tabular-nums">
+                            {stat?.online ? `${stat.cpu.toFixed(1)}%` : '—'}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap tabular-nums">
+                            {stat?.online ? `${stat.memPercent.toFixed(1)}%` : '—'}
+                          </TableCell>
+                          <TableCell className="hidden whitespace-nowrap tabular-nums lg:table-cell">
+                            {stat?.online ? `${stat.loadIndex.toFixed(1)} (${stat.load1.toFixed(2)})` : '—'}
+                          </TableCell>
+                          <TableCell className="hidden whitespace-nowrap tabular-nums sm:table-cell">
+                            {stat?.online ? `${stat.tcpCount + stat.udpCount} (${stat.tcpCount}/${stat.udpCount})` : '—'}
+                          </TableCell>
+                          <TableCell className="hidden whitespace-nowrap tabular-nums md:table-cell">
+                            {stat?.online
+                              ? stat.onlineClients > stat.onlineUsers
+                                ? `${stat.onlineUsers} (全量 ${stat.onlineClients})`
+                                : String(stat.onlineUsers)
+                              : '—'}
+                          </TableCell>
+                          <TableCell className="hidden whitespace-nowrap tabular-nums xl:table-cell">
+                            {stat?.online ? `${stat.rttMs} ms` : '—'}
+                          </TableCell>
+                        </>
+                      )}
+                      <TableCell className="hidden md:table-cell">
+                        <span className="whitespace-nowrap text-muted-foreground">
+                          {formatTime(stat?.online ? stat.sampledAt : panel.lastSeenAt)}
+                        </span>
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell">
+                        <CodeText
+                          className="block max-w-80 truncate"
+                          title={effectiveError || undefined}
+                        >
+                          {effectiveError || '—'}
+                        </CodeText>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           )}
@@ -487,6 +562,35 @@ function formatRefreshTime(timestamp: number): string {
     second: '2-digit',
     hour12: false,
   })
+}
+
+function LiveStatusPill({ status, intervalMs }: { status: LiveStatus; intervalMs?: number }) {
+  if (status === 'live') {
+    const secs = intervalMs ? Math.max(1, Math.round(intervalMs / 1000)) : 2
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] text-success tabular-nums">
+        <span className="size-1.5 animate-pulse rounded-full bg-success" aria-hidden="true" />
+        {secs}s
+      </span>
+    )
+  }
+  if (status === 'paused') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+        <span className="size-1.5 rounded-full bg-muted-foreground" aria-hidden="true" />
+        已暂停
+      </span>
+    )
+  }
+  if (status === 'connecting' || status === 'reconnecting') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] text-warning">
+        <Spinner className="size-2.5" />
+        {status === 'reconnecting' ? '重连中' : '连接中'}
+      </span>
+    )
+  }
+  return null
 }
 
 /**

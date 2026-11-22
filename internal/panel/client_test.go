@@ -116,3 +116,87 @@ func TestPanelErrorIsNotRetried(t *testing.T) {
 		t.Errorf("attempts = %d, want 1: the panel answered, so the answer stands", rt.attempts)
 	}
 }
+
+func TestStatusLiveDoesNotRetryAndDecodesTelemetry(t *testing.T) {
+	rt := &flakyTransport{
+		failures: 1,
+		err:      &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+	}
+	c := newTestClient(t, rt)
+
+	if _, err := c.StatusLive(context.Background()); err == nil {
+		t.Fatal("StatusLive() error = nil, want immediate dial failure without retries")
+	}
+	if rt.attempts != 1 {
+		t.Errorf("attempts = %d, want 1", rt.attempts)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/panel/api/server/status" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"obj":{
+			"cpu":34.5,"cpuCores":2,"logicalPro":4,"cpuSpeedMhz":2400,
+			"mem":{"current":1073741824,"total":4294967296},
+			"swap":{"current":1024,"total":2048},
+			"disk":{"current":5000,"total":10000},
+			"loads":[0.8,0.6,0.4],
+			"tcpCount":120,"udpCount":30,
+			"netIO":{"up":1000,"down":2000,"pktUp":10,"pktDown":20},
+			"netTraffic":{"sent":10000,"recv":20000,"pktSent":100,"pktRecv":200},
+			"xray":{"state":"running","version":"25.1.1"},
+			"panelVersion":"3.7.0","uptime":3600
+		}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	liveClient := New(srv.URL, "tok", false)
+	st, err := liveClient.StatusLive(context.Background())
+	if err != nil {
+		t.Fatalf("StatusLive() error = %v", err)
+	}
+	if st.LogicalPro != 4 || st.TcpCount != 120 || st.UdpCount != 30 || st.NetIO.Up != 1000 || st.NetIO.Down != 2000 || len(st.Loads) != 3 {
+		t.Fatalf("unexpected decoded status: %+v", st)
+	}
+}
+
+func TestOnlineClientsAndLegacyFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/panel/api/clients/onlines":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"success":false,"msg":"not found"}`))
+		case "/panel/api/inbounds/onlines":
+			_, _ = w.Write([]byte(`{"success":true,"obj":["alice@FireX","bob@FireX"]}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL, "tok", false)
+	emails, err := c.OnlineClients(context.Background())
+	if err != nil {
+		t.Fatalf("OnlineClients() error = %v", err)
+	}
+	if len(emails) != 2 || emails[0] != "alice@FireX" || emails[1] != "bob@FireX" {
+		t.Fatalf("emails = %v, want [alice@FireX bob@FireX]", emails)
+	}
+
+	nullSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"obj":null}`))
+	}))
+	t.Cleanup(nullSrv.Close)
+
+	nullClient := New(nullSrv.URL, "tok", false)
+	empty, err := nullClient.OnlineClients(context.Background())
+	if err != nil {
+		t.Fatalf("OnlineClients(null) error = %v", err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("empty = %#v, want non-nil empty slice", empty)
+	}
+}

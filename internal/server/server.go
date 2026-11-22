@@ -37,6 +37,7 @@ type Server struct {
 	// agentMu orders submissions against merges, so a merge never applies a
 	// submission the reviewer has not seen.
 	agentMu sync.Mutex
+	live    *LiveHub
 
 	engine *gin.Engine
 	http   *http.Server
@@ -46,7 +47,7 @@ func New(cfg *config.Live, configPath string, db *store.DB, mgr *provision.Manag
 	if !cfg.Get().Debug {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	s := &Server{cfg: cfg, configPath: configPath, db: db, mgr: mgr, subs: subs, upd: upd, bkup: bkup, restart: upd.Restart}
+	s := &Server{cfg: cfg, configPath: configPath, db: db, mgr: mgr, subs: subs, upd: upd, bkup: bkup, restart: upd.Restart, live: newLiveHub(db, mgr)}
 	s.engine = gin.New()
 	s.engine.Use(gin.Recovery())
 	// The request log is always mounted and consults debug per request, so
@@ -92,6 +93,7 @@ func (s *Server) routes() {
 	// everything that changes infrastructure, routing or accounts is closed to
 	// them. Users are the one thing both roles manage.
 	authed.GET("/overview", s.handleOverview)
+	authed.GET("/overview/live", s.handleOverviewLive)
 	authed.POST("/sync", s.superAdminOnly, s.handleSyncNow)
 
 	// An agent session hands the configuration to an outside agent: it edits
@@ -247,6 +249,9 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.live != nil {
+		s.live.Close()
+	}
 	if s.http == nil {
 		return nil
 	}

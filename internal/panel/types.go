@@ -10,15 +10,37 @@ import (
 var ErrClientMissing = errors.New("panel: client not found")
 
 type Status struct {
-	Cpu float64 `json:"cpu"`
-	Mem struct {
+	Cpu         float64 `json:"cpu"`
+	CpuCores    int     `json:"cpuCores"`
+	LogicalPro  int     `json:"logicalPro"`
+	CpuSpeedMhz float64 `json:"cpuSpeedMhz"`
+	Mem         struct {
 		Current uint64 `json:"current"`
 		Total   uint64 `json:"total"`
 	} `json:"mem"`
+	Swap struct {
+		Current uint64 `json:"current"`
+		Total   uint64 `json:"total"`
+	} `json:"swap"`
 	Disk struct {
 		Current uint64 `json:"current"`
 		Total   uint64 `json:"total"`
 	} `json:"disk"`
+	Loads    []float64 `json:"loads"`
+	TcpCount int       `json:"tcpCount"`
+	UdpCount int       `json:"udpCount"`
+	NetIO    struct {
+		Up      uint64 `json:"up"`
+		Down    uint64 `json:"down"`
+		PktUp   uint64 `json:"pktUp"`
+		PktDown uint64 `json:"pktDown"`
+	} `json:"netIO"`
+	NetTraffic struct {
+		Sent    uint64 `json:"sent"`
+		Recv    uint64 `json:"recv"`
+		PktSent uint64 `json:"pktSent"`
+		PktRecv uint64 `json:"pktRecv"`
+	} `json:"netTraffic"`
 	Xray struct {
 		State    string `json:"state"`
 		ErrorMsg string `json:"errorMsg"`

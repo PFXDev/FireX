@@ -19,6 +19,19 @@ export function formatQuota(n: number): string {
   return n <= 0 ? '不限' : formatBytes(n)
 }
 
+export function formatSpeed(bytesPerSec: number): string {
+  if (!Number.isFinite(bytesPerSec) || bytesPerSec <= 0) return '0 B/s'
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s']
+  let value = bytesPerSec
+  let i = 0
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024
+    i++
+  }
+  const decimals = i === 0 ? 0 : value < 10 ? 2 : value < 100 ? 1 : 0
+  return `${value.toFixed(decimals)} ${units[i]}`
+}
+
 export function gbToBytes(gb: number): number {
   return Math.round(gb * GB)
 }

@@ -57,6 +57,8 @@ type Panel struct {
 	// FailNext makes the next matching request fail, for error-path tests.
 	FailNext           map[string]bool
 	KeepEnableOnUpdate bool
+	statusObj          map[string]any
+	onlineEmails       []string
 }
 
 func New(token string, inbounds ...Inbound) *Panel {
@@ -137,6 +139,20 @@ func (p *Panel) SetClientFlow(email string, inboundID int, flow string) {
 	p.flows[strings.ToLower(email)][inboundID] = flow
 }
 
+// SetStatus overrides the /server/status obj payload returned by the fake panel.
+func (p *Panel) SetStatus(obj map[string]any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.statusObj = obj
+}
+
+// SetOnlineClients sets the emails returned by /clients/onlines.
+func (p *Panel) SetOnlineClients(emails []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onlineEmails = append([]string(nil), emails...)
+}
+
 // SeedClient places a client on the panel as if something other than FireX
 // had created it, keeping the email exactly as given.
 func (p *Panel) SeedClient(c Client, inboundIDs ...int) {
@@ -203,10 +219,21 @@ func (p *Panel) handle(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case path == "/server/status":
-		writeJSON(w, http.StatusOK, envelope{Success: true, Obj: map[string]any{
-			"xray":         map[string]any{"state": "running", "version": "25.1.1"},
-			"panelVersion": "3.0.0-test",
-		}})
+		p.mu.Lock()
+		obj := p.statusObj
+		p.mu.Unlock()
+		if obj == nil {
+			obj = map[string]any{
+				"xray":         map[string]any{"state": "running", "version": "25.1.1"},
+				"panelVersion": "3.0.0-test",
+			}
+		}
+		writeJSON(w, http.StatusOK, envelope{Success: true, Obj: obj})
+	case path == "/clients/onlines":
+		p.mu.Lock()
+		onlines := append([]string(nil), p.onlineEmails...)
+		p.mu.Unlock()
+		writeJSON(w, http.StatusOK, envelope{Success: true, Obj: onlines})
 	case path == "/inbounds/list", path == "/inbounds/list/slim":
 		p.mu.Lock()
 		defer p.mu.Unlock()

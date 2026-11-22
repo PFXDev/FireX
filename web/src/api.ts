@@ -26,7 +26,7 @@ function emitUnauthorized(path: string) {
   window.dispatchEvent(new CustomEvent(FIREX_UNAUTHORIZED_EVENT, { detail: { path } }))
 }
 
-function verifySession(path: string) {
+export function verifySession(path: string) {
   if (typeof window === 'undefined' || sessionVerification) return
 
   sessionVerification = fetch('/api/auth/me', {
@@ -439,6 +439,95 @@ export interface TrafficSlice {
   name: string
   upload: number
   download: number
+}
+
+export interface LivePanelStat {
+  id: number
+  name: string
+  online: boolean
+  error?: string
+  rttMs: number
+  cpu: number
+  cpuCores: number
+  memUsed: number
+  memTotal: number
+  memPercent: number
+  diskUsed: number
+  diskTotal: number
+  load1: number
+  load5: number
+  load15: number
+  loadIndex: number
+  netUp: number
+  netDown: number
+  tcpCount: number
+  udpCount: number
+  onlineUsers: number
+  onlineClients: number
+  xrayState: string
+  xrayVersion: string
+  uptime: number
+  sampledAt: number
+}
+
+export interface LiveMetricExtreme {
+  value: number
+  panelId: number
+  panelName: string
+}
+
+export interface LiveMetricStats {
+  avg: number
+  min: LiveMetricExtreme
+  max: LiveMetricExtreme
+}
+
+export interface LiveTrendPoint {
+  t: number
+  netUp: number
+  netDown: number
+  cpuAvg: number
+  memAvg: number
+  loadAvg: number
+  systemLoad: number
+  connections: number
+  onlineUsers: number
+}
+
+export type SystemLoadLevel = 'idle' | 'normal' | 'busy' | 'high'
+
+export interface LiveSummary {
+  totalPanels: number
+  onlinePanels: number
+  activePanels: number
+  totalNetUp: number
+  totalNetDown: number
+  totalTcp: number
+  totalUdp: number
+  totalConnections: number
+  onlineUsers: number
+  onlineUserSessions: number
+  onlineClients: number
+  totalCpuCores: number
+  totalMemUsed: number
+  totalMemTotal: number
+  fleetLoad1: number
+  fleetLoad5: number
+  fleetLoad15: number
+  systemLoadIndex: number
+  systemLoadLevel: SystemLoadLevel
+  cpu: LiveMetricStats
+  mem: LiveMetricStats
+  loadIndex: LiveMetricStats
+}
+
+export interface LiveSnapshot {
+  timestamp: number
+  intervalMs: number
+  summary: LiveSummary
+  panels: LivePanelStat[]
+  point: LiveTrendPoint
+  history?: LiveTrendPoint[]
 }
 
 export interface SubscriptionPreview {
