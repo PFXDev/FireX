@@ -95,17 +95,19 @@ func (s *Server) listPanels(c *gin.Context) {
 		EnabledInbounds int64 `json:"enabledInbounds"`
 		// UserCount is how many FireX users hold a client here.
 		UserCount int64 `json:"userCount"`
-		// Used is Upload+Download; OverQuota means the panel's inbounds are
-		// out of every subscription until NextTrafficReset (0 for never).
+		// Used is Upload+Download; TotalUsed is all-time TotalUpload+TotalDownload.
+		// OverQuota means the panel's inbounds are out of every subscription
+		// until NextTrafficReset (0 for never).
 		Used             int64 `json:"used"`
+		TotalUsed        int64 `json:"totalUsed"`
 		OverQuota        bool  `json:"overQuota"`
 		NextTrafficReset int64 `json:"nextTrafficReset"`
 	}
 	out := make([]row, 0, len(panels))
 	for _, p := range panels {
 		r := row{
-			Panel: p, Used: p.Upload + p.Download, OverQuota: p.OverQuota(),
-			NextTrafficReset: s.mgr.NextPanelTrafficReset(&p),
+			Panel: p, Used: p.Upload + p.Download, TotalUsed: p.TotalUpload + p.TotalDownload,
+			OverQuota: p.OverQuota(), NextTrafficReset: s.mgr.NextPanelTrafficReset(&p),
 		}
 		s.db.Model(&model.Inbound{}).Where("panel_id = ?", p.ID).Count(&r.InboundCount)
 		s.db.Model(&model.Inbound{}).Where("panel_id = ? AND enabled = ? AND missing = ?", p.ID, true, false).Count(&r.EnabledInbounds)
@@ -192,7 +194,7 @@ func (s *Server) updatePanel(c *gin.Context) {
 	}
 	// The traffic collector owns the usage columns; an edit must not write
 	// back the counters it read before a poll moved them.
-	if err := s.db.Omit("upload", "download").Save(&p).Error; err != nil {
+	if err := s.db.Omit("upload", "download", "total_upload", "total_download").Save(&p).Error; err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}

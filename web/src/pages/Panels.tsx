@@ -863,7 +863,7 @@ export function PanelsPage() {
         open={pendingReset !== null}
         onOpenChange={(open) => !open && setPendingReset(null)}
         title={`清零面板「${pendingReset?.name ?? ''}」本周期的流量？`}
-        description="面板合计用量从 0 重新计算，因面板用满而停用的客户端会恢复。用户自己的套餐用量不受影响。"
+        description="面板本周期用量从 0 重新计算，历史累计保持不变；因面板用满而停用的客户端会恢复。用户自己的套餐用量不受影响。"
         confirmLabel="清零"
         onConfirm={async () => {
           if (pendingReset) await resetTraffic(pendingReset)
@@ -891,6 +891,11 @@ function PanelTraffic({ panel }: { panel: Panel }) {
         {formatBytes(panel.used)}
         {panel.trafficLimit > 0 && <span className="text-muted-foreground"> / {formatQuota(panel.trafficLimit)}</span>}
       </span>
+      {(panel.totalUsed > 0 || panel.nextTrafficReset > 0) && (
+        <span className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
+          累计 {formatBytes(panel.totalUsed)}
+        </span>
+      )}
       {panel.overQuota ? (
         <StatusBadge tone="bad" title="面板的入站已从所有订阅中移除，客户端已停用">
           已用满

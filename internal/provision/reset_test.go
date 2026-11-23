@@ -41,6 +41,17 @@ func TestResetUserTraffic(t *testing.T) {
 	if got.Upload != 0 || got.Download != 0 {
 		t.Errorf("traffic after reset = %d/%d, want 0/0", got.Upload, got.Download)
 	}
+	if got.TotalUpload != 400 || got.TotalDownload != 600 {
+		t.Errorf("cumulative traffic after reset = %d/%d, want 400/600", got.TotalUpload, got.TotalDownload)
+	}
+	var upRec model.UserPanel
+	f.db.First(&upRec, "user_id = ?", u.ID)
+	if upRec.Upload != 0 || upRec.Download != 0 {
+		t.Errorf("per-panel period traffic after reset = %d/%d, want 0/0", upRec.Upload, upRec.Download)
+	}
+	if upRec.TotalUpload != 400 || upRec.TotalDownload != 600 {
+		t.Errorf("per-panel cumulative traffic after reset = %d/%d, want 400/600", upRec.TotalUpload, upRec.TotalDownload)
+	}
 	if got.TrafficPeriodStart == 0 {
 		t.Error("TrafficPeriodStart = 0, want the reset timestamp")
 	}
@@ -97,6 +108,15 @@ func TestResetUserTraffic(t *testing.T) {
 	f.db.First(&got, u.ID)
 	if got.Upload != 10 || got.Download != 20 {
 		t.Errorf("traffic after retry = %d/%d, want 10/20", got.Upload, got.Download)
+	}
+	// Cumulative traffic adds across every period without double-counting the
+	// failed reset.
+	if got.TotalUpload != 460 || got.TotalDownload != 720 {
+		t.Errorf("cumulative traffic after retry = %d/%d, want 460/720", got.TotalUpload, got.TotalDownload)
+	}
+	f.db.First(&rec, "user_id = ?", u.ID)
+	if rec.TotalUpload != 460 || rec.TotalDownload != 720 {
+		t.Errorf("per-panel cumulative traffic after retry = %d/%d, want 460/720", rec.TotalUpload, rec.TotalDownload)
 	}
 }
 
@@ -195,6 +215,13 @@ func TestResetDueTrafficAtPeriodBoundary(t *testing.T) {
 	f.db.First(&got2, u2.ID)
 	if got2.Upload+got2.Download != 0 {
 		t.Errorf("u2 usage after downtime = %d, want 0 (single catch-up reset)", got2.Upload+got2.Download)
+	}
+	if got2.TotalUpload != 350 || got2.TotalDownload != 350 {
+		t.Errorf("u2 cumulative after scheduled resets = %d/%d, want 350/350", got2.TotalUpload, got2.TotalDownload)
+	}
+	f.db.First(&got1, u1.ID)
+	if got1.TotalUpload != 200 || got1.TotalDownload != 300 {
+		t.Errorf("u1 cumulative after monthly reset = %d/%d, want 200/300", got1.TotalUpload, got1.TotalDownload)
 	}
 }
 

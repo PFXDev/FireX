@@ -46,10 +46,21 @@ func TestCollectTrafficSumsPanelAndPerPanelUsage(t *testing.T) {
 	if p.Upload != 45 || p.Download != 65 {
 		t.Errorf("panel traffic = %d/%d, want 45/65", p.Upload, p.Download)
 	}
+	if p.TotalUpload != 45 || p.TotalDownload != 65 {
+		t.Errorf("panel cumulative traffic = %d/%d, want 45/65", p.TotalUpload, p.TotalDownload)
+	}
 	var rec model.UserPanel
 	f.db.Where("user_id = ? AND panel_id = ?", alice.ID, f.panel.ID).First(&rec)
 	if rec.Upload != 15 || rec.Download != 25 {
 		t.Errorf("alice's usage on the panel = %d/%d, want 15/25", rec.Upload, rec.Download)
+	}
+	if rec.TotalUpload != 15 || rec.TotalDownload != 25 {
+		t.Errorf("alice's cumulative usage on the panel = %d/%d, want 15/25", rec.TotalUpload, rec.TotalDownload)
+	}
+	var total model.TrafficTotal
+	f.db.First(&total, 1)
+	if total.Upload != 45 || total.Download != 65 {
+		t.Errorf("global cumulative traffic = %d/%d, want 45/65", total.Upload, total.Download)
 	}
 }
 
@@ -92,6 +103,9 @@ func TestPanelQuotaDisablesEveryClientUntilReset(t *testing.T) {
 	f.db.First(&p, f.panel.ID)
 	if p.Upload != 0 || p.Download != 0 || p.TrafficPeriodStart == 0 {
 		t.Errorf("panel after reset = %d/%d start %d, want 0/0 and a period start", p.Upload, p.Download, p.TrafficPeriodStart)
+	}
+	if p.TotalUpload != 50 || p.TotalDownload != 50 {
+		t.Errorf("panel cumulative after reset = %d/%d, want 50/50 kept", p.TotalUpload, p.TotalDownload)
 	}
 	for _, email := range []string{"alice@FireX", "bob@FireX"} {
 		if c := f.fake.Client(email); c == nil || !c.Enable {
@@ -166,6 +180,7 @@ func TestPanelTrafficResetsOnItsDay(t *testing.T) {
 
 	f.db.Model(&model.Panel{}).Where("id = ?", f.panel.ID).Updates(map[string]any{
 		"traffic_limit": 1000, "traffic_reset_day": 10, "upload": 400, "download": 600,
+		"total_upload": 400, "total_download": 600,
 		"traffic_period_start": time.Date(2026, 2, 10, 0, 0, 0, 0, loc).UnixMilli(),
 	})
 	var p model.Panel
@@ -189,6 +204,9 @@ func TestPanelTrafficResetsOnItsDay(t *testing.T) {
 	f.db.First(&p, f.panel.ID)
 	if p.Upload != 0 || p.Download != 0 {
 		t.Errorf("panel traffic after its reset day = %d/%d, want 0/0", p.Upload, p.Download)
+	}
+	if p.TotalUpload != 400 || p.TotalDownload != 600 {
+		t.Errorf("panel cumulative after its reset day = %d/%d, want 400/600", p.TotalUpload, p.TotalDownload)
 	}
 	if want := time.Date(2026, 4, 10, 0, 0, 0, 0, loc).UnixMilli(); p.NextTrafficReset(loc) != want {
 		t.Errorf("next reset = %d, want %d", p.NextTrafficReset(loc), want)

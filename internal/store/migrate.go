@@ -8,12 +8,19 @@ import (
 	"strings"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/PFXDev/FireX/internal/model"
 )
 
 // settingSchemaVersion records which shape the database is in, so a migration
 // that already ran is never attempted twice.
 const settingSchemaVersion = "schema.version"
+
+// settingCumulativeTraffic records that existing period counters were seeded
+// into the all-time columns and global total once, so later resets do not
+// re-trigger the backfill.
+const settingCumulativeTraffic = "traffic.cumulative.v1"
 
 // schemaVersion 2 is the routing refactor: nodes became inbounds, classification
 // moved onto node groups, and plans stopped picking inbounds in favour of a
@@ -79,7 +86,56 @@ func (d *DB) migrate(path string) error {
 			return err
 		}
 	}
+	if err := d.backfillCumulativeTraffic(); err != nil {
+		return fmt.Errorf("migrate cumulative traffic: %w", err)
+	}
 	return d.SetSetting(settingSchemaVersion, strconv.Itoa(schemaVersion))
+}
+
+// backfillCumulativeTraffic seeds the all-time traffic columns from current
+// period counters on databases predating cumulative tracking, and initializes
+// the singleton global total. It runs once per database so later period resets
+// are never overwritten.
+func (d *DB) backfillCumulativeTraffic() error {
+	if d.GetSetting(settingCumulativeTraffic, "") != "" {
+		return nil
+	}
+	return d.Transaction(func(tx *gorm.DB) error {
+		for _, table := range []string{"panels", "users", "user_panels"} {
+			stmt := fmt.Sprintf(`
+				UPDATE %s
+				SET total_upload = CASE WHEN COALESCE(total_upload, 0) < COALESCE(upload, 0) THEN COALESCE(upload, 0) ELSE COALESCE(total_upload, 0) END,
+				    total_download = CASE WHEN COALESCE(total_download, 0) < COALESCE(download, 0) THEN COALESCE(download, 0) ELSE COALESCE(total_download, 0) END`, table)
+			if err := tx.Exec(stmt).Error; err != nil {
+				return err
+			}
+		}
+		var userSum, panelSum struct {
+			Up   int64
+			Down int64
+		}
+		if err := tx.Raw(`SELECT COALESCE(SUM(total_upload), 0) AS up, COALESCE(SUM(total_download), 0) AS down FROM users`).Scan(&userSum).Error; err != nil {
+			return err
+		}
+		if err := tx.Raw(`SELECT COALESCE(SUM(total_upload), 0) AS up, COALESCE(SUM(total_download), 0) AS down FROM panels`).Scan(&panelSum).Error; err != nil {
+			return err
+		}
+		up := max(userSum.Up, panelSum.Up)
+		down := max(userSum.Down, panelSum.Down)
+		now := time.Now().UnixMilli()
+		if err := tx.Exec(`
+			INSERT INTO traffic_totals (id, upload, download, updated_at)
+			VALUES (1, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				upload = CASE WHEN upload < excluded.upload THEN excluded.upload ELSE upload END,
+				download = CASE WHEN download < excluded.download THEN excluded.download ELSE download END,
+				updated_at = excluded.updated_at`,
+			up, down, now,
+		).Error; err != nil {
+			return err
+		}
+		return tx.Save(&model.Setting{Key: settingCumulativeTraffic, Value: "1"}).Error
+	})
 }
 
 // snapshot writes a consistent copy of the database next to it. VACUUM INTO

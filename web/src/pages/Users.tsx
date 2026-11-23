@@ -497,9 +497,9 @@ export function UsersPage() {
           `/users/${pending.user.id}/resetTraffic`,
         )
         if (result.remoteFailures > 0) {
-          toast.warning(`流量统计已清空，${result.remoteFailures} 个面板暂未响应，稍后会自动重试`)
+          toast.warning(`本周期流量已清零，${result.remoteFailures} 个面板暂未响应，稍后会自动重试`)
         } else {
-          toast.success('流量统计已清空')
+          toast.success('本周期流量已清零')
         }
         reportSyncError(result.syncError)
       }
@@ -903,7 +903,7 @@ export function UsersPage() {
                                   </DropdownMenuItem>
                                   <DropdownMenuItem onClick={() => setPending({ user, kind: 'resetTraffic' })}>
                                     <RotateCcwIcon />
-                                    清空流量
+                                    清零本周期流量
                                   </DropdownMenuItem>
                                 </DropdownMenuGroup>
                                 <DropdownMenuSeparator />
@@ -1382,16 +1382,16 @@ export function UsersPage() {
         title={
           pending?.kind === 'delete'
             ? `删除用户「${pending.user.username}」？`
-            : `清空「${pending?.user.username ?? ''}」的流量统计？`
+            : `清零「${pending?.user.username ?? ''}」本周期流量？`
         }
         description={
           pending?.kind === 'delete'
             ? '会同时从所有面板移除该用户的客户端。'
             : pending && pending.user.nextTrafficReset > 0
-              ? '面板侧计数会一并重置，用户会重新可用。自动重置日不变。'
-              : '面板侧计数会一并重置，用户会重新可用。'
+              ? '本周期用量与面板侧计数会一并归零，历史累计保持不变，用户会重新可用。自动重置日不变。'
+              : '本周期用量与面板侧计数会一并归零，历史累计保持不变，用户会重新可用。'
         }
-        confirmLabel={pending?.kind === 'delete' ? '删除用户' : '清空流量'}
+        confirmLabel={pending?.kind === 'delete' ? '删除用户' : '清零流量'}
         onConfirm={confirmAction}
       />
     </div>
@@ -1445,7 +1445,7 @@ function UserTraffic({ user }: { user: User }) {
         render={<div />}
         nativeButton={false}
         className="flex cursor-pointer flex-col gap-1.5 rounded-sm text-left outline-none transition-colors hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-        aria-label={`查看 ${user.username} 的流量明细，已用 ${formatBytes(user.used)}，总限额 ${formatQuota(user.trafficLimit)}`}
+        aria-label={`查看 ${user.username} 的流量明细，本周期已用 ${formatBytes(user.used)}，总限额 ${formatQuota(user.trafficLimit)}，历史累计 ${formatBytes(user.totalUsed)}`}
       >
         <span className="tabular-nums">
           {formatBytes(user.used)} / {formatQuota(user.trafficLimit)}
@@ -1455,6 +1455,11 @@ function UserTraffic({ user }: { user: User }) {
             <ProgressLabel className="sr-only">{user.username} 流量使用率</ProgressLabel>
             <ProgressValue className="sr-only" />
           </Progress>
+        )}
+        {(user.totalUsed > 0 || user.nextTrafficReset > 0) && (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            累计 {formatBytes(user.totalUsed)}
+          </span>
         )}
         {user.nextTrafficReset > 0 && (
           <span className="text-xs text-muted-foreground">
@@ -1467,7 +1472,8 @@ function UserTraffic({ user }: { user: User }) {
         <DialogHeader>
           <DialogTitle>{user.username} 的流量明细</DialogTitle>
           <DialogDescription>
-            本周期已用 {formatBytes(user.used)} / {formatQuota(user.trafficLimit)}，以下为各面板用量。
+            本周期已用 {formatBytes(user.used)} / {formatQuota(user.trafficLimit)}，历史累计{' '}
+            {formatBytes(user.totalUsed)}（↑ {formatBytes(user.totalUpload)} / ↓ {formatBytes(user.totalDownload)}），以下为各面板用量。
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
@@ -1476,7 +1482,8 @@ function UserTraffic({ user }: { user: User }) {
               <TableHeader>
                 <TableRow>
                   <TableHead>面板</TableHead>
-                  <TableHead className="text-right">已用流量</TableHead>
+                  <TableHead className="text-right">本周期</TableHead>
+                  <TableHead className="text-right">历史累计</TableHead>
                   <TableHead className="text-right">限额</TableHead>
                 </TableRow>
               </TableHeader>
@@ -1494,6 +1501,9 @@ function UserTraffic({ user }: { user: User }) {
                       </div>
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{formatBytes(panel.upload + panel.download)}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatBytes(panel.totalUpload + panel.totalDownload)}
+                    </TableCell>
                     <TableCell className="text-right tabular-nums">{formatQuota(panel.limit)}</TableCell>
                   </TableRow>
                 ))}

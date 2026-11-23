@@ -606,7 +606,7 @@ func (m *Manager) reconcileOnPanel(ctx context.Context, u *model.User, p *model.
 // record was read before the panel round-trips, and a poll or reset may have
 // moved the baselines since.
 func (m *Manager) saveRecord(record *model.UserPanel) error {
-	return m.db.Omit("last_up", "last_down", "reset_pending", "upload", "download").Save(record).Error
+	return m.db.Omit("last_up", "last_down", "reset_pending", "upload", "download", "total_upload", "total_download").Save(record).Error
 }
 
 // syncClientFlows addresses the client as remote, its spelling on the panel.
@@ -741,6 +741,7 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 	}
 
 	var firstErr error
+	var globalUp, globalDown int64
 	for i := range panels {
 		p := &panels[i]
 		client := m.ClientFor(p)
@@ -782,12 +783,14 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 			if err := m.db.Model(&model.UserPanel{}).
 				Where("user_id = ? AND panel_id = ?", rec.UserID, rec.PanelID).
 				Updates(map[string]any{
-					"last_up":       rec.LastUp,
-					"last_down":     rec.LastDown,
-					"reset_pending": rec.ResetPending,
-					"updated_at":    rec.UpdatedAt,
-					"upload":        gorm.Expr("upload + ?", dUp),
-					"download":      gorm.Expr("download + ?", dDown),
+					"last_up":        rec.LastUp,
+					"last_down":      rec.LastDown,
+					"reset_pending":  rec.ResetPending,
+					"updated_at":     rec.UpdatedAt,
+					"upload":         gorm.Expr("upload + ?", dUp),
+					"download":       gorm.Expr("download + ?", dDown),
+					"total_upload":   gorm.Expr("total_upload + ?", dUp),
+					"total_download": gorm.Expr("total_download + ?", dDown),
 				}).Error; err != nil && firstErr == nil {
 				firstErr = err
 			}
@@ -798,8 +801,10 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 			// cannot clobber traffic that arrived between read and write.
 			if err := m.db.Model(&model.User{}).Where("id = ?", rec.UserID).
 				UpdateColumns(map[string]any{
-					"upload":   gorm.Expr("upload + ?", dUp),
-					"download": gorm.Expr("download + ?", dDown),
+					"upload":         gorm.Expr("upload + ?", dUp),
+					"download":       gorm.Expr("download + ?", dDown),
+					"total_upload":   gorm.Expr("total_upload + ?", dUp),
+					"total_download": gorm.Expr("total_download + ?", dDown),
 				}).Error; err != nil && firstErr == nil {
 				firstErr = err
 			}
@@ -807,11 +812,19 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 		if panelUp == 0 && panelDown == 0 {
 			continue
 		}
+		globalUp, globalDown = globalUp+panelUp, globalDown+panelDown
 		if err := m.db.Model(&model.Panel{}).Where("id = ?", p.ID).
 			UpdateColumns(map[string]any{
-				"upload":   gorm.Expr("upload + ?", panelUp),
-				"download": gorm.Expr("download + ?", panelDown),
+				"upload":         gorm.Expr("upload + ?", panelUp),
+				"download":       gorm.Expr("download + ?", panelDown),
+				"total_upload":   gorm.Expr("total_upload + ?", panelUp),
+				"total_download": gorm.Expr("total_download + ?", panelDown),
 			}).Error; err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if globalUp > 0 || globalDown > 0 {
+		if err := m.addGlobalTraffic(globalUp, globalDown); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -830,6 +843,21 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 		firstErr = err
 	}
 	return firstErr
+}
+
+// addGlobalTraffic folds this poll's usage across all panels into the singleton
+// all-time counter. It never resets and survives user or panel deletions.
+func (m *Manager) addGlobalTraffic(up, down int64) error {
+	now := NowMs()
+	return m.db.Exec(`
+		INSERT INTO traffic_totals (id, upload, download, updated_at)
+		VALUES (1, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			upload = upload + excluded.upload,
+			download = download + excluded.download,
+			updated_at = excluded.updated_at`,
+		up, down, now,
+	).Error
 }
 
 // ResetTraffic starts a new traffic period for the user now: FireX's totals go

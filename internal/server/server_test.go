@@ -1088,3 +1088,133 @@ func TestPreviewSubscriptionIncludesPanelNameAndBulkUsers(t *testing.T) {
 		"action": "resync",
 	})
 }
+
+func TestCumulativeTrafficSurvivesResetsEditsAndDeletions(t *testing.T) {
+	h := newHarness(t)
+	u := h.seed()
+
+	var panels []model.Panel
+	h.db.Find(&panels)
+	if len(panels) != 1 {
+		t.Fatalf("panels = %d, want 1", len(panels))
+	}
+	panelID := panels[0].ID
+
+	// Collect first period's traffic.
+	h.fake.SetTraffic(u.Username+"@FireX", 300, 700)
+	h.mustDo(http.MethodPost, "/api/sync", nil)
+
+	// Reset user traffic, collect more traffic, then reset panel traffic.
+	h.mustDo(http.MethodPost, "/api/users/"+itoa(u.ID)+"/resetTraffic", nil)
+	h.fake.SetTraffic(u.Username+"@FireX", 50, 150)
+	h.mustDo(http.MethodPost, "/api/sync", nil)
+	h.mustDo(http.MethodPost, "/api/panels/"+itoa(panelID)+"/resetTraffic", nil)
+
+	// Editing the user and panel must not clobber cumulative counters.
+	h.mustDo(http.MethodPut, "/api/users/"+itoa(u.ID), map[string]any{
+		"planId": u.PlanID, "remark": "edited",
+	})
+	h.mustDo(http.MethodPut, "/api/panels/"+itoa(panelID), map[string]any{
+		"name": panels[0].Name, "baseUrl": panels[0].BaseURL, "remark": "edited",
+	})
+
+	var userRows []struct {
+		ID            uint  `json:"id"`
+		Upload        int64 `json:"upload"`
+		Download      int64 `json:"download"`
+		Used          int64 `json:"used"`
+		TotalUpload   int64 `json:"totalUpload"`
+		TotalDownload int64 `json:"totalDownload"`
+		TotalUsed     int64 `json:"totalUsed"`
+		Panels        []struct {
+			PanelID       uint  `json:"panelId"`
+			Upload        int64 `json:"upload"`
+			Download      int64 `json:"download"`
+			TotalUpload   int64 `json:"totalUpload"`
+			TotalDownload int64 `json:"totalDownload"`
+		} `json:"panels"`
+	}
+	json.Unmarshal(h.mustDo(http.MethodGet, "/api/users", nil), &userRows)
+	if len(userRows) != 1 {
+		t.Fatalf("users = %d, want 1", len(userRows))
+	}
+	ur := userRows[0]
+	if ur.Upload != 50 || ur.Download != 150 || ur.Used != 200 {
+		t.Errorf("user period traffic = %d/%d (%d), want 50/150 (200)", ur.Upload, ur.Download, ur.Used)
+	}
+	if ur.TotalUpload != 350 || ur.TotalDownload != 850 || ur.TotalUsed != 1200 {
+		t.Errorf("user cumulative traffic = %d/%d (%d), want 350/850 (1200)", ur.TotalUpload, ur.TotalDownload, ur.TotalUsed)
+	}
+	if len(ur.Panels) != 1 || ur.Panels[0].Upload != 50 || ur.Panels[0].Download != 150 ||
+		ur.Panels[0].TotalUpload != 350 || ur.Panels[0].TotalDownload != 850 {
+		t.Errorf("user panel traffic = %+v, want period 50/150 and total 350/850", ur.Panels)
+	}
+
+	var panelRows []struct {
+		ID            uint  `json:"id"`
+		Upload        int64 `json:"upload"`
+		Download      int64 `json:"download"`
+		Used          int64 `json:"used"`
+		TotalUpload   int64 `json:"totalUpload"`
+		TotalDownload int64 `json:"totalDownload"`
+		TotalUsed     int64 `json:"totalUsed"`
+	}
+	json.Unmarshal(h.mustDo(http.MethodGet, "/api/panels", nil), &panelRows)
+	if len(panelRows) != 1 {
+		t.Fatalf("panels = %d, want 1", len(panelRows))
+	}
+	pr := panelRows[0]
+	if pr.Upload != 0 || pr.Download != 0 || pr.Used != 0 {
+		t.Errorf("panel period traffic = %d/%d (%d), want 0/0 (0)", pr.Upload, pr.Download, pr.Used)
+	}
+	if pr.TotalUpload != 350 || pr.TotalDownload != 850 || pr.TotalUsed != 1200 {
+		t.Errorf("panel cumulative traffic = %d/%d (%d), want 350/850 (1200)", pr.TotalUpload, pr.TotalDownload, pr.TotalUsed)
+	}
+
+	type overviewResp struct {
+		Upload         int64 `json:"upload"`
+		Download       int64 `json:"download"`
+		TotalUpload    int64 `json:"totalUpload"`
+		TotalDownload  int64 `json:"totalDownload"`
+		TrafficByPanel []struct {
+			Upload        int64 `json:"upload"`
+			Download      int64 `json:"download"`
+			TotalUpload   int64 `json:"totalUpload"`
+			TotalDownload int64 `json:"totalDownload"`
+		} `json:"trafficByPanel"`
+		TrafficByGroup []struct {
+			Upload        int64 `json:"upload"`
+			Download      int64 `json:"download"`
+			TotalUpload   int64 `json:"totalUpload"`
+			TotalDownload int64 `json:"totalDownload"`
+		} `json:"trafficByGroup"`
+	}
+	var ov overviewResp
+	json.Unmarshal(h.mustDo(http.MethodGet, "/api/overview", nil), &ov)
+	if ov.Upload != 50 || ov.Download != 150 {
+		t.Errorf("overview period traffic = %d/%d, want 50/150", ov.Upload, ov.Download)
+	}
+	if ov.TotalUpload != 350 || ov.TotalDownload != 850 {
+		t.Errorf("overview cumulative traffic = %d/%d, want 350/850", ov.TotalUpload, ov.TotalDownload)
+	}
+	if len(ov.TrafficByPanel) != 1 || ov.TrafficByPanel[0].Upload != 0 || ov.TrafficByPanel[0].TotalUpload != 350 || ov.TrafficByPanel[0].TotalDownload != 850 {
+		t.Errorf("overview trafficByPanel = %+v, want period 0/0 and total 350/850", ov.TrafficByPanel)
+	}
+	var groupTotalUp, groupTotalDown int64
+	for _, g := range ov.TrafficByGroup {
+		groupTotalUp += g.TotalUpload
+		groupTotalDown += g.TotalDownload
+	}
+	if groupTotalUp != 350 || groupTotalDown != 850 {
+		t.Errorf("overview trafficByGroup cumulative sum = %d/%d, want 350/850", groupTotalUp, groupTotalDown)
+	}
+
+	// Deleting the user and the panel must not erase the global cumulative total.
+	h.mustDo(http.MethodDelete, "/api/users/"+itoa(u.ID), nil)
+	h.mustDo(http.MethodDelete, "/api/panels/"+itoa(panelID), nil)
+	ov = overviewResp{}
+	json.Unmarshal(h.mustDo(http.MethodGet, "/api/overview", nil), &ov)
+	if ov.TotalUpload != 350 || ov.TotalDownload != 850 {
+		t.Errorf("overview cumulative after deletions = %d/%d, want 350/850", ov.TotalUpload, ov.TotalDownload)
+	}
+}

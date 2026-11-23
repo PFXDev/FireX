@@ -116,6 +116,9 @@ export interface Panel {
   upload: number
   download: number
   used: number
+  totalUpload: number
+  totalDownload: number
+  totalUsed: number
   trafficPeriodStart: number
   /** Over its cap: the panel's inbounds are out of every subscription. */
   overQuota: boolean
@@ -391,6 +394,9 @@ export interface User {
   upload: number
   download: number
   used: number
+  totalUpload: number
+  totalDownload: number
+  totalUsed: number
   /** The plan's reset policy, and when this user's usage next starts over (0 = never). */
   trafficReset: TrafficReset
   nextTrafficReset: number
@@ -411,6 +417,8 @@ export interface UserPanelUsage {
   panelName: string
   upload: number
   download: number
+  totalUpload: number
+  totalDownload: number
   /** The plan's cap on this panel (0 = none). */
   limit: number
   /** Why the panel is closed to the user, empty when it is not. */
@@ -431,9 +439,11 @@ export interface Overview {
   }
   upload: number
   download: number
+  totalUpload: number
+  totalDownload: number
   failedSyncs: number
   panels: { id: number; name: string; status: string; lastError: string; lastSeenAt: number }[]
-  /** FireX traffic in each panel's current period. */
+  /** FireX traffic in each panel's current period and all-time. */
   trafficByPanel: TrafficSlice[]
   /** The same traffic summed over each node group's panels; id 0 is panels in no group. */
   trafficByGroup: TrafficSlice[]
@@ -444,6 +454,8 @@ export interface TrafficSlice {
   name: string
   upload: number
   download: number
+  totalUpload: number
+  totalDownload: number
 }
 
 export interface LivePanelStat {

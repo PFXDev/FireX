@@ -409,3 +409,93 @@ func TestMigrationPromotesAdminsWithoutARole(t *testing.T) {
 		t.Errorf("role = %q, want %q", role, model.AdminRoleSuperAdmin)
 	}
 }
+
+// Upgrading a database that only tracked current-period usage seeds the
+// all-time columns and global total once, without overwriting them on later
+// restarts after a period reset.
+func TestMigrationBackfillsCumulativeTrafficOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "firex.db")
+	db, err := store.Open(path, false)
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+	if err := db.Create(&model.Panel{
+		Name: "p1", BaseURL: "http://x", APIToken: "tok", Enabled: true,
+		Upload: 300, Download: 700,
+	}).Error; err != nil {
+		t.Fatalf("create panel: %v", err)
+	}
+	var panel model.Panel
+	db.First(&panel)
+	if err := db.Create(&model.User{
+		Username: "alice", UUID: "u1", SubToken: "t1", Enabled: true,
+		Upload: 120, Download: 280,
+	}).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	var user model.User
+	db.First(&user)
+	if err := db.Create(&model.UserPanel{
+		UserID: user.ID, PanelID: panel.ID, Email: "alice@FireX",
+		Upload: 120, Download: 280,
+	}).Error; err != nil {
+		t.Fatalf("create user_panel: %v", err)
+	}
+	// Simulate a pre-cumulative database by clearing the migration flag and
+	// zeroing the all-time columns and global total.
+	db.Exec(`DELETE FROM settings WHERE key = 'traffic.cumulative.v1'`)
+	db.Exec(`DELETE FROM traffic_totals`)
+	db.Exec(`UPDATE panels SET total_upload = 0, total_download = 0`)
+	db.Exec(`UPDATE users SET total_upload = 0, total_download = 0`)
+	db.Exec(`UPDATE user_panels SET total_upload = 0, total_download = 0`)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	db, err = store.Open(path, false)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	db.First(&panel, panel.ID)
+	if panel.TotalUpload != 300 || panel.TotalDownload != 700 {
+		t.Fatalf("panel total = %d/%d, want 300/700", panel.TotalUpload, panel.TotalDownload)
+	}
+	db.First(&user, user.ID)
+	if user.TotalUpload != 120 || user.TotalDownload != 280 {
+		t.Fatalf("user total = %d/%d, want 120/280", user.TotalUpload, user.TotalDownload)
+	}
+	var rec model.UserPanel
+	db.Where("user_id = ? AND panel_id = ?", user.ID, panel.ID).First(&rec)
+	if rec.TotalUpload != 120 || rec.TotalDownload != 280 {
+		t.Fatalf("user_panel total = %d/%d, want 120/280", rec.TotalUpload, rec.TotalDownload)
+	}
+	var total model.TrafficTotal
+	if err := db.First(&total, 1).Error; err != nil {
+		t.Fatalf("load traffic_totals: %v", err)
+	}
+	// Global total takes the larger of user sums and panel sums so traffic
+	// already reset on one side is not lost.
+	if total.Upload != 300 || total.Download != 700 {
+		t.Fatalf("global total = %d/%d, want 300/700", total.Upload, total.Download)
+	}
+
+	// Reset period counters, then reopen: cumulative totals must survive.
+	db.Model(&model.User{}).Where("id = ?", user.ID).Updates(map[string]any{"upload": 0, "download": 0})
+	db.Model(&model.Panel{}).Where("id = ?", panel.ID).Updates(map[string]any{"upload": 0, "download": 0})
+	if err := db.Close(); err != nil {
+		t.Fatalf("close 2: %v", err)
+	}
+	db, err = store.Open(path, false)
+	if err != nil {
+		t.Fatalf("reopen 2: %v", err)
+	}
+	defer db.Close()
+	db.First(&user, user.ID)
+	db.First(&panel, panel.ID)
+	if user.TotalUpload != 120 || user.TotalDownload != 280 {
+		t.Errorf("user total after reopen = %d/%d, want 120/280", user.TotalUpload, user.TotalDownload)
+	}
+	if panel.TotalUpload != 300 || panel.TotalDownload != 700 {
+		t.Errorf("panel total after reopen = %d/%d, want 300/700", panel.TotalUpload, panel.TotalDownload)
+	}
+}

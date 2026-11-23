@@ -379,7 +379,12 @@ export function OverviewPage() {
         <Card>
           <CardHeader>
             <CardTitle>累计流量</CardTitle>
-            <CardDescription>总计 {formatBytes(data.upload + data.download)}</CardDescription>
+            <CardDescription>
+              总计 {formatBytes(data.totalUpload + data.totalDownload)}
+              {data.upload + data.download > 0 || data.totalUpload + data.totalDownload > 0
+                ? ` · 本周期 ${formatBytes(data.upload + data.download)}`
+                : ''}
+            </CardDescription>
             <CardAction>
               <Badge variant="outline">
                 <ActivityIcon data-icon="inline-start" />
@@ -392,13 +397,13 @@ export function OverviewPage() {
               <div className="flex min-w-0 flex-col gap-1 rounded-lg bg-muted/50 p-3">
                 <dt className="text-xs text-muted-foreground">累计上行</dt>
                 <dd className="truncate font-heading text-lg font-semibold tabular-nums">
-                  {formatBytes(data.upload)}
+                  {formatBytes(data.totalUpload)}
                 </dd>
               </div>
               <div className="flex min-w-0 flex-col gap-1 rounded-lg bg-muted/50 p-3">
                 <dt className="text-xs text-muted-foreground">累计下行</dt>
                 <dd className="truncate font-heading text-lg font-semibold tabular-nums">
-                  {formatBytes(data.download)}
+                  {formatBytes(data.totalDownload)}
                 </dd>
               </div>
             </dl>
@@ -671,36 +676,67 @@ function LiveStatusPill({ status, intervalMs }: { status: LiveStatus; intervalMs
 }
 
 /**
- * TrafficDistribution shows how FireX traffic in the panels' current periods
- * splits by panel or by node group.
+ * TrafficDistribution shows how FireX traffic splits by panel or by node group,
+ * either for each panel's current period or all-time.
  */
 function TrafficDistribution({ data }: { data: Overview }) {
+  const [scope, setScope] = useState<'period' | 'total'>('period')
   const [by, setBy] = useState<'group' | 'panel'>('group')
   const source = by === 'group' ? data.trafficByGroup : data.trafficByPanel
+  const sliceValue = (slice: Overview['trafficByPanel'][number]) =>
+    scope === 'period' ? slice.upload + slice.download : slice.totalUpload + slice.totalDownload
   const slices = foldSlices(
-    source.map((slice) => ({ key: slice.id, label: slice.name || `#${slice.id}`, value: slice.upload + slice.download })),
+    source.map((slice) => ({ key: slice.id, label: slice.name || `#${slice.id}`, value: sliceValue(slice) })),
   )
-  const total = source.reduce((sum, slice) => sum + slice.upload + slice.download, 0)
+  const total = source.reduce((sum, slice) => sum + sliceValue(slice), 0)
   return (
     <Card>
       <CardHeader>
         <CardTitle>流量分布</CardTitle>
-        <CardDescription>各面板当前周期的用量，共 {formatBytes(total)}；节点组按其覆盖的面板汇总。</CardDescription>
+        <CardDescription>
+          {scope === 'period'
+            ? `各面板当前周期的用量，共 ${formatBytes(total)}；节点组按其覆盖的面板汇总。`
+            : `各面板历史累计用量，共 ${formatBytes(total)}；节点组按其覆盖的面板汇总。`}
+        </CardDescription>
         <CardAction>
-          <ToggleGroup
-            aria-label="分布维度"
-            variant="outline"
-            size="sm"
-            value={[by]}
-            onValueChange={(value) => value[0] && setBy(value[0] as 'group' | 'panel')}
-          >
-            <ToggleGroupItem value="group">按节点组</ToggleGroupItem>
-            <ToggleGroupItem value="panel">按面板</ToggleGroupItem>
-          </ToggleGroup>
+          <div className="flex flex-wrap items-center gap-2">
+            <ToggleGroup
+              aria-label="统计范围"
+              variant="outline"
+              size="sm"
+              value={[scope]}
+              onValueChange={(value) => value[0] && setScope(value[0] as 'period' | 'total')}
+            >
+              <ToggleGroupItem value="period">本周期</ToggleGroupItem>
+              <ToggleGroupItem value="total">历史累计</ToggleGroupItem>
+            </ToggleGroup>
+            <ToggleGroup
+              aria-label="分布维度"
+              variant="outline"
+              size="sm"
+              value={[by]}
+              onValueChange={(value) => value[0] && setBy(value[0] as 'group' | 'panel')}
+            >
+              <ToggleGroupItem value="group">按节点组</ToggleGroupItem>
+              <ToggleGroupItem value="panel">按面板</ToggleGroupItem>
+            </ToggleGroup>
+          </div>
         </CardAction>
       </CardHeader>
       <CardContent>
-        <TrafficShareBar slices={slices} ariaLabel={by === 'group' ? '按节点组的流量分布' : '按面板的流量分布'} />
+        <TrafficShareBar
+          slices={slices}
+          ariaLabel={
+            scope === 'period'
+              ? by === 'group'
+                ? '按节点组的本周期流量分布'
+                : '按面板的本周期流量分布'
+              : by === 'group'
+                ? '按节点组的历史累计流量分布'
+                : '按面板的历史累计流量分布'
+          }
+          emptyText={scope === 'period' ? '当前周期还没有流量。' : '还没有累计流量。'}
+        />
       </CardContent>
     </Card>
   )

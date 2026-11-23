@@ -61,10 +61,13 @@ func (s *Server) handleOverview(c *gin.Context) {
 	var users []model.User
 	s.db.Find(&users)
 	now := nowMs()
-	var totalUp, totalDown int64
+	var periodUp, periodDown int64
+	var userTotalUp, userTotalDown int64
 	for _, u := range users {
-		totalUp += u.Upload
-		totalDown += u.Download
+		periodUp += u.Upload
+		periodDown += u.Download
+		userTotalUp += u.TotalUpload
+		userTotalDown += u.TotalDownload
 		if u.Active(now) {
 			counts.ActiveUsers++
 		}
@@ -73,9 +76,17 @@ func (s *Server) handleOverview(c *gin.Context) {
 	var panels []model.Panel
 	s.db.Order("id ASC").Find(&panels)
 	health := make([]panelHealth, 0, len(panels))
+	var panelTotalUp, panelTotalDown int64
 	for _, p := range panels {
 		health = append(health, panelHealth{p.ID, p.Name, p.Status, p.LastError, p.LastSeenAt})
+		panelTotalUp += p.TotalUpload
+		panelTotalDown += p.TotalDownload
 	}
+
+	var global model.TrafficTotal
+	_ = s.db.First(&global, 1).Error
+	totalUp := max(global.Upload, userTotalUp, panelTotalUp)
+	totalDown := max(global.Download, userTotalDown, panelTotalDown)
 
 	var failed int64
 	s.db.Model(&model.UserPanel{}).Where("state = ?", model.SyncStateFailed).Count(&failed)
@@ -83,35 +94,39 @@ func (s *Server) handleOverview(c *gin.Context) {
 	byPanel, byGroup := s.trafficDistribution(panels)
 
 	c.JSON(http.StatusOK, gin.H{
-		"counts":      counts,
-		"upload":      totalUp,
-		"download":    totalDown,
-		"failedSyncs": failed,
-		"panels":      health,
-		// Each panel's and each node group's share of FireX traffic in the
-		// panels' current periods.
+		"counts":        counts,
+		"upload":        periodUp,
+		"download":      periodDown,
+		"totalUpload":   totalUp,
+		"totalDownload": totalDown,
+		"failedSyncs":   failed,
+		"panels":        health,
+		// Each panel's and each node group's share of FireX traffic, both in
+		// the panels' current periods and all-time.
 		"trafficByPanel": byPanel,
 		"trafficByGroup": byGroup,
 	})
 }
 
 type trafficSlice struct {
-	ID       uint   `json:"id"`
-	Name     string `json:"name"`
-	Upload   int64  `json:"upload"`
-	Download int64  `json:"download"`
+	ID            uint   `json:"id"`
+	Name          string `json:"name"`
+	Upload        int64  `json:"upload"`
+	Download      int64  `json:"download"`
+	TotalUpload   int64  `json:"totalUpload"`
+	TotalDownload int64  `json:"totalDownload"`
 }
 
-// trafficDistribution splits FireX traffic by panel, from the panels' own
-// period counters, and by node group, as the sum of the panels each group
-// spans. A panel serves at most one group, so the groups do not overlap;
+// trafficDistribution splits FireX traffic by panel, from the panels' period
+// and all-time counters, and by node group, as the sum of the panels each
+// group spans. A panel serves at most one group, so the groups do not overlap;
 // traffic on panels in no group is reported under group id 0.
 func (s *Server) trafficDistribution(panels []model.Panel) ([]trafficSlice, []trafficSlice) {
 	byPanel := make([]trafficSlice, 0, len(panels))
 	panelByID := map[uint]model.Panel{}
 	for _, p := range panels {
 		panelByID[p.ID] = p
-		byPanel = append(byPanel, trafficSlice{p.ID, p.Name, p.Upload, p.Download})
+		byPanel = append(byPanel, trafficSlice{p.ID, p.Name, p.Upload, p.Download, p.TotalUpload, p.TotalDownload})
 	}
 
 	var groups []model.NodeGroup
@@ -130,8 +145,11 @@ func (s *Server) trafficDistribution(panels []model.Panel) ([]trafficSlice, []tr
 				continue
 			}
 			counted[panelID] = true
-			slice.Upload += panelByID[panelID].Upload
-			slice.Download += panelByID[panelID].Download
+			p := panelByID[panelID]
+			slice.Upload += p.Upload
+			slice.Download += p.Download
+			slice.TotalUpload += p.TotalUpload
+			slice.TotalDownload += p.TotalDownload
 		}
 		byGroup = append(byGroup, slice)
 	}
@@ -140,9 +158,11 @@ func (s *Server) trafficDistribution(panels []model.Panel) ([]trafficSlice, []tr
 		if !counted[p.ID] {
 			rest.Upload += p.Upload
 			rest.Download += p.Download
+			rest.TotalUpload += p.TotalUpload
+			rest.TotalDownload += p.TotalDownload
 		}
 	}
-	if rest.Upload+rest.Download > 0 {
+	if rest.Upload+rest.Download > 0 || rest.TotalUpload+rest.TotalDownload > 0 {
 		byGroup = append(byGroup, rest)
 	}
 	return byPanel, byGroup

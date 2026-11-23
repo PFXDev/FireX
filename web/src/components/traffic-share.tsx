@@ -38,10 +38,18 @@ function percent(value: number, total: number) {
  * Colors follow the slice's position in the list the caller passes, so keep
  * that order stable across renders.
  */
-export function TrafficShareBar({ slices, ariaLabel }: { slices: ShareSlice[]; ariaLabel: string }) {
+export function TrafficShareBar({
+  slices,
+  ariaLabel,
+  emptyText = '当前周期还没有流量。',
+}: {
+  slices: ShareSlice[]
+  ariaLabel: string
+  emptyText?: string
+}) {
   const total = slices.reduce((sum, slice) => sum + slice.value, 0)
   if (total <= 0) {
-    return <p className="text-sm text-muted-foreground">当前周期还没有流量。</p>
+    return <p className="text-sm text-muted-foreground">{emptyText}</p>
   }
   return (
     <div className="flex flex-col gap-3">

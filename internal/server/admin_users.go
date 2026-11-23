@@ -348,23 +348,26 @@ type userRow struct {
 	TrafficReset     string   `json:"trafficReset"`
 	NextTrafficReset int64    `json:"nextTrafficReset"`
 	Used             int64    `json:"used"`
+	TotalUsed        int64    `json:"totalUsed"`
 	InboundCount     int      `json:"inboundCount"`
 	SyncState        string   `json:"syncState"`
 	SyncError        []string `json:"syncErrors"`
 	SubURL           string   `json:"subUrl"`
 	// Panels is the user's usage on each panel they hold a client on this
-	// period, with the plan's cap there (0 for none) and, when the panel is
-	// closed to them, why.
+	// period and all-time, with the plan's cap there (0 for none) and, when
+	// the panel is closed to them, why.
 	Panels []userPanelUsage `json:"panels"`
 }
 
 type userPanelUsage struct {
-	PanelID   uint   `json:"panelId"`
-	PanelName string `json:"panelName"`
-	Upload    int64  `json:"upload"`
-	Download  int64  `json:"download"`
-	Limit     int64  `json:"limit"`
-	Blocked   string `json:"blocked"`
+	PanelID       uint   `json:"panelId"`
+	PanelName     string `json:"panelName"`
+	Upload        int64  `json:"upload"`
+	Download      int64  `json:"download"`
+	TotalUpload   int64  `json:"totalUpload"`
+	TotalDownload int64  `json:"totalDownload"`
+	Limit         int64  `json:"limit"`
+	Blocked       string `json:"blocked"`
 }
 
 type userRequest struct {
@@ -413,6 +416,7 @@ func (s *Server) listUsers(c *gin.Context) {
 			TrafficReset:     model.TrafficResetNone,
 			NextTrafficReset: s.mgr.NextTrafficReset(&u, plan),
 			Used:             u.Upload + u.Download,
+			TotalUsed:        u.TotalUpload + u.TotalDownload,
 			SyncState:        model.SyncStateSynced,
 			SyncError:        []string{},
 			SubURL:           base + "/sub/" + u.SubToken,
@@ -431,6 +435,7 @@ func (s *Server) listUsers(c *gin.Context) {
 			row.Panels = append(row.Panels, userPanelUsage{
 				PanelID: rec.PanelID, PanelName: panelNames[rec.PanelID],
 				Upload: rec.Upload, Download: rec.Download,
+				TotalUpload: rec.TotalUpload, TotalDownload: rec.TotalDownload,
 				Limit: planLimits[u.PlanID][rec.PanelID], Blocked: blocked[rec.PanelID],
 			})
 		}
@@ -561,7 +566,9 @@ func (s *Server) updateUser(c *gin.Context) {
 	}
 	u.Remark = req.Remark
 	u.UpdatedAt = provision.NowMs()
-	if err := s.db.Save(&u).Error; err != nil {
+	// The traffic collector owns the usage columns; an edit must not write
+	// back the counters it read before a poll moved them.
+	if err := s.db.Omit("upload", "download", "total_upload", "total_download").Save(&u).Error; err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
@@ -692,7 +699,7 @@ func (s *Server) bulkUsers(c *gin.Context) {
 		case "enable", "disable":
 			u.Enabled = req.Action == "enable"
 			u.UpdatedAt = now
-			if err := s.db.Save(u).Error; err != nil {
+			if err := s.db.Omit("upload", "download", "total_upload", "total_download").Save(u).Error; err != nil {
 				failed++
 				if firstErr == nil {
 					firstErr = err
@@ -711,7 +718,7 @@ func (s *Server) bulkUsers(c *gin.Context) {
 			}
 			u.ExpiresAt = base + int64(req.ExtendDays)*24*60*60*1000
 			u.UpdatedAt = now
-			if err := s.db.Save(u).Error; err != nil {
+			if err := s.db.Omit("upload", "download", "total_upload", "total_download").Save(u).Error; err != nil {
 				failed++
 				if firstErr == nil {
 					firstErr = err

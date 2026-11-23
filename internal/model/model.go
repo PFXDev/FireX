@@ -78,6 +78,10 @@ type Panel struct {
 	// predating the columns count from zero: NULL + n stays NULL.
 	Upload   int64 `json:"upload" gorm:"not null;default:0"`
 	Download int64 `json:"download" gorm:"not null;default:0"`
+	// TotalUpload/TotalDownload are the all-time usage folded into this panel
+	// across every period; neither scheduled nor manual resets clear them.
+	TotalUpload   int64 `json:"totalUpload" gorm:"not null;default:0"`
+	TotalDownload int64 `json:"totalDownload" gorm:"not null;default:0"`
 	// TrafficPeriodStart is when the current period began; 0 means CreatedAt.
 	TrafficPeriodStart int64 `json:"trafficPeriodStart" gorm:"not null;default:0"`
 
@@ -482,6 +486,10 @@ type User struct {
 	TrafficLimit int64 `json:"trafficLimit"` // bytes, 0 = unlimited
 	Upload       int64 `json:"upload"`
 	Download     int64 `json:"download"`
+	// TotalUpload/TotalDownload are the user's all-time usage across every
+	// traffic period; neither scheduled nor manual resets clear them.
+	TotalUpload   int64 `json:"totalUpload" gorm:"not null;default:0"`
+	TotalDownload int64 `json:"totalDownload" gorm:"not null;default:0"`
 	// TrafficPeriodStart is when the current traffic period began: the last
 	// reset, or the moment the user's reset policy last changed. 0 means
 	// CreatedAt.
@@ -603,7 +611,21 @@ type UserPanel struct {
 	// inserts rows without these columns, and NULL + n stays NULL.
 	Upload   int64 `json:"upload" gorm:"not null;default:0"`
 	Download int64 `json:"download" gorm:"not null;default:0"`
+	// TotalUpload/TotalDownload are the user's all-time usage on this panel
+	// across every period; neither scheduled nor manual resets clear them.
+	TotalUpload   int64 `json:"totalUpload" gorm:"not null;default:0"`
+	TotalDownload int64 `json:"totalDownload" gorm:"not null;default:0"`
 
+	UpdatedAt int64 `json:"updatedAt"`
+}
+
+// TrafficTotal is the singleton all-time traffic counter across every FireX
+// user and panel. It only ever increases in the traffic collector, so resets
+// and deleting users or panels never make the global total move backwards.
+type TrafficTotal struct {
+	ID        uint  `json:"id" gorm:"primaryKey;autoIncrement:false"`
+	Upload    int64 `json:"upload" gorm:"not null;default:0"`
+	Download  int64 `json:"download" gorm:"not null;default:0"`
 	UpdatedAt int64 `json:"updatedAt"`
 }
 
@@ -734,7 +756,7 @@ func AllModels() []any {
 		&ExternalSubscription{}, &NodeGroupExternalSubscription{},
 		&Policy{}, &Rule{}, &RuleSet{},
 		&Profile{}, &ProfileNodeGroup{}, &Egress{}, &EgressMember{},
-		&Plan{}, &PlanPanelLimit{}, &PlanGroupLimit{}, &User{}, &UserPanel{}, &Setting{},
+		&Plan{}, &PlanPanelLimit{}, &PlanGroupLimit{}, &User{}, &UserPanel{}, &TrafficTotal{}, &Setting{},
 		&InboundConfig{}, &InboundTemplate{}, &InboundDeployment{},
 	}
 }
