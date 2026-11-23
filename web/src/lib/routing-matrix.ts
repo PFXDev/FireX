@@ -2,6 +2,7 @@ import type { Egress, Policy, RoutingMatrix, RuleSet } from '../api'
 
 /** A policy and its egresses, keyed by the column they belong to. */
 export type RoutingRow = {
+  _key?: string
   policy: Policy
   cells: Map<number, Egress>
 }

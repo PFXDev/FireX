@@ -465,12 +465,13 @@ type removedPanel struct {
 type snapshotEffects struct {
 	// discover holds panel ids; discoverNames names them for a preview, whose
 	// new panels are rolled back and have no id left to look up.
-	discover      []uint
-	discoverNames []string
-	invalidate    []uint
-	removed       []removedPanel
-	plans         []uint
-	tokenChanged  []string
+	discover         []uint
+	discoverNames    []string
+	invalidate       []uint
+	removed          []removedPanel
+	plans            []uint
+	tokenChanged     []string
+	extSubURLChanged []string
 }
 
 type snapshotResult struct {
@@ -536,7 +537,7 @@ func (s *Server) runSnapshot(req *snapshotRequest, dryRun, allowPanelRemoval boo
 			}
 		}
 		if doc.ExternalSubscriptions != nil {
-			if err := applySnapshotExternalSubscriptions(handle, doc.ExternalSubscriptions); err != nil {
+			if err := applySnapshotExternalSubscriptions(handle, doc.ExternalSubscriptions, eff); err != nil {
 				return err
 			}
 		}
@@ -955,7 +956,7 @@ func templateMap(raw string) map[string]any {
 	return out
 }
 
-func applySnapshotExternalSubscriptions(handle *gorm.DB, rows []snapshotExternalSubscription) error {
+func applySnapshotExternalSubscriptions(handle *gorm.DB, rows []snapshotExternalSubscription, eff *snapshotEffects) error {
 	var existing []model.ExternalSubscription
 	if err := handle.Find(&existing).Error; err != nil {
 		return err
@@ -990,6 +991,9 @@ func applySnapshotExternalSubscriptions(handle *gorm.DB, rows []snapshotExternal
 		listed[sub.Name] = true
 		if exists && stored.URL != sub.URL {
 			sub.LastCheckAt = 0
+			if eff != nil {
+				eff.extSubURLChanged = append(eff.extSubURLChanged, sub.Name)
+			}
 		}
 		switch {
 		case !exists:
@@ -1308,7 +1312,7 @@ func diffRows(changes []snapshotChange, section string, before, after keyedRows)
 	return changes
 }
 
-func diffSnapshots(before, after snapshotDoc, tokenChanged []string) []snapshotChange {
+func diffSnapshots(before, after snapshotDoc, tokenChanged, extSubURLChanged []string) []snapshotChange {
 	changes := []snapshotChange{}
 	panels := func(doc snapshotDoc) keyedRows {
 		return keyRows(doc.Panels, func(_ int, p snapshotPanel) string { return p.Name }, nil)
@@ -1335,6 +1339,22 @@ func diffSnapshots(before, after snapshotDoc, tokenChanged []string) []snapshotC
 		return keyRows(doc.InboundTemplates, func(_ int, t snapshotTemplate) string { return t.Name }, nil)
 	}
 	changes = diffRows(changes, "inboundTemplates", templates(before), templates(after))
+	extSubs := func(doc snapshotDoc) keyedRows {
+		return keyRows(doc.ExternalSubscriptions, func(_ int, s snapshotExternalSubscription) string { return s.Name }, nil)
+	}
+	changes = diffRows(changes, "externalSubscriptions", extSubs(before), extSubs(after))
+	for _, name := range extSubURLChanged {
+		urlChange := configChange{Path: "url"}
+		found := false
+		for i := range changes {
+			if changes[i].Section == "externalSubscriptions" && changes[i].Key == name {
+				changes[i].Fields, found = append(changes[i].Fields, urlChange), true
+			}
+		}
+		if !found {
+			changes = append(changes, snapshotChange{Section: "externalSubscriptions", Key: name, Action: "update", Fields: []configChange{urlChange}})
+		}
+	}
 	groups := func(doc snapshotDoc) keyedRows {
 		return keyRows(doc.NodeGroups, func(_ int, g snapshotNodeGroup) string { return g.Name }, nil)
 	}
@@ -1404,7 +1424,7 @@ func (r *snapshotResult) preview() snapshotPreview {
 		removed = append(removed, gone.panel.Name)
 	}
 	return snapshotPreview{
-		Changes:        diffSnapshots(r.before, r.after, r.effects.tokenChanged),
+		Changes:        diffSnapshots(r.before, r.after, r.effects.tokenChanged, r.effects.extSubURLChanged),
 		Discover:       jsonList(r.effects.discoverNames),
 		RemovedPanels:  removed,
 		ReconcilePlans: len(uniquePlans(r.effects.plans)),
@@ -1443,7 +1463,7 @@ type snapshotOutcome struct {
 func (s *Server) settleSnapshot(result *snapshotResult) snapshotOutcome {
 	eff := result.effects
 	out := snapshotOutcome{
-		Changes:            diffSnapshots(result.before, result.after, eff.tokenChanged),
+		Changes:            diffSnapshots(result.before, result.after, eff.tokenChanged, eff.extSubURLChanged),
 		Discover:           []snapshotDiscovery{},
 		PendingDeployments: []pendingDeployment{},
 	}

@@ -177,6 +177,7 @@ func (s *Server) routes() {
 
 	authed.GET("/users", s.listUsers)
 	authed.POST("/users", s.createUser)
+	authed.POST("/users/bulk", s.bulkUsers)
 	authed.PUT("/users/:id", s.updateUser)
 	authed.DELETE("/users/:id", s.deleteUser)
 	authed.POST("/users/:id/resync", s.resyncUser)

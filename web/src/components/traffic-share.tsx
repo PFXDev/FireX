@@ -1,5 +1,6 @@
 import { useRef } from 'react'
 
+import { NumberInput } from '@/components/number-input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatBytes } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -85,7 +86,8 @@ export type WeightSlice = {
 
 /**
  * WeightSplitter edits percentages that add up to 100: drag a divider to move
- * share between its neighbours, or use the arrow keys on it for 1% steps.
+ * share between its neighbours, use arrow keys for 1% steps, or enter an exact
+ * integer percentage in the legend input (siblings rebalance automatically).
  */
 export function WeightSplitter({
   slices,
@@ -106,6 +108,30 @@ export function WeightSplitter({
     const left = Math.min(pair - 1, Math.max(1, Math.round(upTo) - before))
     if (left === slices[i].weight) return
     onChange(slices.map((slice, j) => (j === i ? { ...slice, weight: left } : j === i + 1 ? { ...slice, weight: pair - left } : slice)))
+  }
+
+  const updateSliceWeight = (index: number, raw: number) => {
+    if (slices.length < 2) return
+    const max = 100 - (slices.length - 1)
+    const target = Math.min(max, Math.max(1, Math.round(raw)))
+    if (target === slices[index].weight) return
+    const rest = 100 - target
+    const others = slices.map((slice, idx) => ({ idx, weight: slice.weight })).filter((item) => item.idx !== index)
+    const otherSum = others.reduce((sum, item) => sum + item.weight, 0)
+    const nextWeights = slices.map((slice) => slice.weight)
+    nextWeights[index] = target
+    let allocated = 0
+    others.forEach((item, pos) => {
+      if (pos === others.length - 1) {
+        nextWeights[item.idx] = Math.max(1, rest - allocated)
+      } else {
+        const proportional = otherSum > 0 ? Math.round((item.weight / otherSum) * rest) : 1
+        const capped = Math.min(proportional, rest - allocated - (others.length - 1 - pos))
+        nextWeights[item.idx] = Math.max(1, capped)
+        allocated += nextWeights[item.idx]
+      }
+    })
+    onChange(slices.map((slice, idx) => ({ ...slice, weight: nextWeights[idx] })))
   }
 
   const startDrag = (i: number) => (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -170,7 +196,7 @@ export function WeightSplitter({
           )
         })}
       </div>
-      <ul className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
+      <ul className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
         {slices.map((slice, i) => (
           <li key={slice.key} className="flex min-w-0 items-center gap-2">
             <span
@@ -181,7 +207,23 @@ export function WeightSplitter({
             <span className="min-w-0 flex-1 truncate" title={slice.label}>
               {slice.label}
             </span>
-            <span className="tabular-nums">{slice.weight}%</span>
+            {!disabled && slices.length > 1 ? (
+              <div className="flex items-center gap-1">
+                <NumberInput
+                  aria-label={`${slice.label} 流量占比`}
+                  className="h-7 w-16 text-right tabular-nums"
+                  min={1}
+                  max={100 - (slices.length - 1)}
+                  step={1}
+                  integer
+                  value={slice.weight}
+                  onValueChange={(next) => updateSliceWeight(i, next)}
+                />
+                <span className="text-xs text-muted-foreground">%</span>
+              </div>
+            ) : (
+              <span className="tabular-nums">{slice.weight}%</span>
+            )}
           </li>
         ))}
       </ul>

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -55,5 +56,34 @@ func TestAgentHistoryListsFinishedSessions(t *testing.T) {
 	json.Unmarshal(h.mustDo(http.MethodGet, "/api/agent-sessions", nil), &out)
 	if len(out.Items) != 2 || !out.Items[0].Live || out.Items[1].State != "cancelled" || out.Items[1].Admin != "admin" {
 		t.Errorf("history = %+v, want the live session then the cancelled one", out.Items)
+	}
+}
+
+func TestAuditLogFilteringAndMetadata(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+	staff := makeOperator(t, h, "alice")
+	h.loginAs(staff.Username, "password123")
+	h.mustDo(http.MethodPost, "/api/users", map[string]any{"username": "bob", "planId": 0})
+	h.login()
+
+	var all struct {
+		Items   []struct{ Actor, Action, Target string } `json:"items"`
+		Total   int                                      `json:"total"`
+		Actors  []string                                 `json:"actors"`
+		Actions []string                                 `json:"actions"`
+	}
+	json.Unmarshal(h.mustDo(http.MethodGet, "/api/audit-logs", nil), &all)
+	if all.Total == 0 || len(all.Actors) < 2 || len(all.Actions) == 0 {
+		t.Fatalf("audit metadata incomplete: total=%d actors=%v actions=%v", all.Total, all.Actors, all.Actions)
+	}
+
+	var byActor struct {
+		Items []struct{ Actor, Action, Target string } `json:"items"`
+		Total int                                      `json:"total"`
+	}
+	json.Unmarshal(h.mustDo(http.MethodGet, "/api/audit-logs?actor=alice&action="+url.QueryEscape("新增用户")+"&q=bob", nil), &byActor)
+	if byActor.Total != 1 || len(byActor.Items) != 1 || byActor.Items[0].Target != "bob" {
+		t.Fatalf("filtered audit logs = %+v, want 1 entry for alice/bob", byActor)
 	}
 }

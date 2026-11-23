@@ -6,6 +6,7 @@ import { type AdminAccount, type AdminRole, api } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
+import { PasswordInput } from '@/components/password-input'
 import { StatusBadge } from '@/components/status-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -21,6 +22,7 @@ import {
 } from '@/components/ui/card'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -34,6 +36,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { useDirtyDialog } from '@/hooks/use-unsaved-guard'
 import { errorMessage, formatTime } from '@/lib/format'
 import { useSession } from '@/lib/session'
 
@@ -59,12 +62,27 @@ export function AdminsPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [initialDraft, setInitialDraft] = useState<Draft | null>(null)
   const [showErrors, setShowErrors] = useState(false)
   const [saving, setSaving] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<AdminAccount | null>(null)
   const [resetTarget, setResetTarget] = useState<AdminAccount | null>(null)
   const [newPassword, setNewPassword] = useState('')
   const [resetBusy, setResetBusy] = useState(false)
+
+  const closeDraft = useCallback(() => {
+    setDraft(null)
+    setInitialDraft(null)
+    setShowErrors(false)
+  }, [])
+  const draftDirty = Boolean(draft && initialDraft && JSON.stringify(draft) !== JSON.stringify(initialDraft))
+  const onDraftOpenChange = useDirtyDialog(draftDirty, saving, closeDraft)
+
+  const closeReset = useCallback(() => {
+    setResetTarget(null)
+    setNewPassword('')
+  }, [])
+  const onResetOpenChange = useDirtyDialog(Boolean(resetTarget && newPassword.length > 0), resetBusy, closeReset)
 
   const load = useCallback(async () => {
     try {
@@ -92,13 +110,23 @@ export function AdminsPage() {
   }
 
   const openCreate = () => {
+    const next = { ...emptyDraft }
     setShowErrors(false)
-    setDraft({ ...emptyDraft })
+    setInitialDraft(next)
+    setDraft(next)
   }
 
   const openEdit = (admin: AdminAccount) => {
+    const next: Draft = {
+      id: admin.id,
+      username: admin.username,
+      password: '',
+      role: admin.role,
+      canViewConfig: admin.canViewConfig,
+    }
     setShowErrors(false)
-    setDraft({ id: admin.id, username: admin.username, password: '', role: admin.role, canViewConfig: admin.canViewConfig })
+    setInitialDraft(next)
+    setDraft(next)
   }
 
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -127,7 +155,7 @@ export function AdminsPage() {
         })
         toast.success('管理员已创建')
       }
-      setDraft(null)
+      closeDraft()
       await revalidate()
     } catch (err) {
       toast.error(errorMessage(err, '保存失败'))
@@ -153,8 +181,7 @@ export function AdminsPage() {
     try {
       await api.post(`/admins/${resetTarget.id}/resetPassword`, { password: newPassword })
       toast.success(`已重置 ${resetTarget.username} 的密码，其所有会话都已失效`)
-      setResetTarget(null)
-      setNewPassword('')
+      closeReset()
       await revalidate()
     } catch (err) {
       toast.error(errorMessage(err, '重置密码失败'))
@@ -182,7 +209,9 @@ export function AdminsPage() {
         <AlertTitle>权限边界</AlertTitle>
         <AlertDescription>
           <p>超级管理员可以管理面板、入站、节点组、分流、模板、服务设置、系统更新，以及这里的其他管理员。</p>
-          <p>普通管理员只能管理用户：增删改用户、重置流量、重新下发、查看订阅。概览与套餐对他们只读，其余页面一律不出现。</p>
+          <p>
+            普通管理员默认只能管理用户（增删改用户、重置流量、重新下发、查看订阅）并只读查看概览与套餐；开启「只读查看配置」后，还可只读查看面板、入站、节点组、分流规则及订阅模板（入站敏感密钥会自动隐藏）。
+          </p>
         </AlertDescription>
       </Alert>
 
@@ -329,107 +358,106 @@ export function AdminsPage() {
           )}
         </CardContent>
         <CardFooter className="text-muted-foreground">
-          修改自己的密码请到「设置 → 账号安全」；修改后所有会话都会失效。
+          修改自己的密码请到
+          <a href="#/settings?tab=security" className="mx-1 underline underline-offset-4 hover:text-foreground">
+            设置 → 账号安全
+          </a>
+          ；修改后所有会话都会失效。
         </CardFooter>
       </Card>
 
-      <Dialog
-        open={draft !== null}
-        onOpenChange={(open) => {
-          if (!open && !saving) {
-            setDraft(null)
-            setShowErrors(false)
-          }
-        }}
-      >
-        <DialogContent>
+      <Dialog open={draft !== null} onOpenChange={onDraftOpenChange}>
+        <DialogContent className="flex flex-col overflow-hidden">
           {draft && (
             <form className="contents" noValidate onSubmit={save}>
               <DialogHeader>
                 <DialogTitle>{draft.id ? `编辑管理员 ${draft.username}` : '新建管理员'}</DialogTitle>
                 <DialogDescription>
-                  普通管理员只能管理用户和只读查看概览、套餐；超级管理员拥有全部权限。
+                  普通管理员只能管理用户和只读查看概览、套餐（可选开启配置只读）；超级管理员拥有全部权限。
                 </DialogDescription>
               </DialogHeader>
-              <FieldGroup>
-                <Field data-invalid={usernameInvalid || undefined} data-disabled={saving || undefined}>
-                  <FieldLabel htmlFor="admin-username">用户名</FieldLabel>
-                  <Input
-                    id="admin-username"
-                    value={draft.username}
-                    required
-                    autoComplete="off"
-                    aria-invalid={usernameInvalid || undefined}
-                    disabled={saving}
-                    onChange={(event) => setDraft({ ...draft, username: event.target.value })}
-                  />
-                  <FieldDescription>2–40 位字母、数字、连字符、下划线或点。</FieldDescription>
-                  {usernameInvalid && <FieldError>请输入用户名。</FieldError>}
-                </Field>
-
-                {!draft.id && (
-                  <Field data-invalid={passwordInvalid || undefined} data-disabled={saving || undefined}>
-                    <FieldLabel htmlFor="admin-password">初始密码</FieldLabel>
+              <DialogBody>
+                <FieldGroup>
+                  <Field data-invalid={usernameInvalid || undefined} data-disabled={saving || undefined}>
+                    <FieldLabel htmlFor="admin-username">用户名</FieldLabel>
                     <Input
-                      id="admin-password"
-                      type="password"
-                      autoComplete="new-password"
+                      id="admin-username"
+                      value={draft.username}
                       required
-                      minLength={8}
-                      aria-invalid={passwordInvalid || undefined}
+                      autoComplete="off"
+                      aria-invalid={usernameInvalid || undefined}
                       disabled={saving}
-                      value={draft.password}
-                      onChange={(event) => setDraft({ ...draft, password: event.target.value })}
+                      onChange={(event) => setDraft({ ...draft, username: event.target.value })}
                     />
-                    <FieldDescription>至少 8 位；创建后请通过安全渠道转交。</FieldDescription>
-                    {passwordInvalid && <FieldError>初始密码至少需要 8 位。</FieldError>}
+                    <FieldDescription>2–40 位字母、数字、连字符、下划线或点。</FieldDescription>
+                    {usernameInvalid && <FieldError>请输入用户名。</FieldError>}
                   </Field>
-                )}
 
-                <Field data-disabled={saving || undefined}>
-                  <FieldLabel htmlFor="admin-role">角色</FieldLabel>
-                  <Select
-                    items={[
-                      { value: 'operator', label: ROLE_LABEL.operator },
-                      { value: 'super_admin', label: ROLE_LABEL.super_admin },
-                    ]}
-                    value={draft.role}
-                    disabled={saving}
-                    onValueChange={(value) => setDraft({ ...draft, role: value as AdminRole })}
-                  >
-                    <SelectTrigger id="admin-role" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="operator">{ROLE_LABEL.operator}</SelectItem>
-                      <SelectItem value="super_admin">{ROLE_LABEL.super_admin}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FieldDescription>
-                    普通管理员只能管理用户；超级管理员可以管理其余全部内容与账号。
-                  </FieldDescription>
-                </Field>
+                  {!draft.id && (
+                    <Field data-invalid={passwordInvalid || undefined} data-disabled={saving || undefined}>
+                      <FieldLabel htmlFor="admin-password">初始密码</FieldLabel>
+                      <PasswordInput
+                        id="admin-password"
+                        autoComplete="new-password"
+                        required
+                        minLength={8}
+                        allowGenerate
+                        allowCopy
+                        aria-invalid={passwordInvalid || undefined}
+                        disabled={saving}
+                        value={draft.password}
+                        onChangeValue={(password) => setDraft({ ...draft, password })}
+                      />
+                      <FieldDescription>至少 8 位；可点击骰子生成随机密码并复制转交。</FieldDescription>
+                      {passwordInvalid && <FieldError>初始密码至少需要 8 位。</FieldError>}
+                    </Field>
+                  )}
 
-                {draft.role === 'operator' && (
-                  <Field orientation="horizontal" data-disabled={saving || undefined}>
-                    <FieldContent>
-                      <FieldLabel htmlFor="admin-can-view-config">只读查看配置</FieldLabel>
-                      <FieldDescription>
-                        允许查看面板、入站、节点组、分流与订阅模板，但不能做任何修改。入站密钥会被隐藏。
-                      </FieldDescription>
-                    </FieldContent>
-                    <Switch
-                      id="admin-can-view-config"
-                      checked={draft.canViewConfig}
+                  <Field data-disabled={saving || undefined}>
+                    <FieldLabel htmlFor="admin-role">角色</FieldLabel>
+                    <Select
+                      items={[
+                        { value: 'operator', label: ROLE_LABEL.operator },
+                        { value: 'super_admin', label: ROLE_LABEL.super_admin },
+                      ]}
+                      value={draft.role}
                       disabled={saving}
-                      onCheckedChange={(checked) => setDraft({ ...draft, canViewConfig: checked })}
-                    />
+                      onValueChange={(value) => setDraft({ ...draft, role: value as AdminRole })}
+                    >
+                      <SelectTrigger id="admin-role" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="operator">{ROLE_LABEL.operator}</SelectItem>
+                        <SelectItem value="super_admin">{ROLE_LABEL.super_admin}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>
+                      普通管理员主要管理用户；超级管理员可以管理其余全部内容与账号。
+                    </FieldDescription>
                   </Field>
-                )}
-              </FieldGroup>
+
+                  {draft.role === 'operator' && (
+                    <Field orientation="horizontal" data-disabled={saving || undefined}>
+                      <FieldContent>
+                        <FieldLabel htmlFor="admin-can-view-config">只读查看配置</FieldLabel>
+                        <FieldDescription>
+                          允许查看面板、入站、节点组、分流与订阅模板，但不能做任何修改。入站密钥会被隐藏。
+                        </FieldDescription>
+                      </FieldContent>
+                      <Switch
+                        id="admin-can-view-config"
+                        checked={draft.canViewConfig}
+                        disabled={saving}
+                        onCheckedChange={(checked) => setDraft({ ...draft, canViewConfig: checked })}
+                      />
+                    </Field>
+                  )}
+                </FieldGroup>
+              </DialogBody>
 
               <DialogFooter>
-                <Button type="button" variant="outline" disabled={saving} onClick={() => setDraft(null)}>
+                <Button type="button" variant="outline" disabled={saving} onClick={() => onDraftOpenChange(false)}>
                   取消
                 </Button>
                 <Button type="submit" disabled={saving}>
@@ -442,36 +470,34 @@ export function AdminsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={resetTarget !== null}
-        onOpenChange={(open) => {
-          if (!open && !resetBusy) setResetTarget(null)
-        }}
-      >
-        <DialogContent>
+      <Dialog open={resetTarget !== null} onOpenChange={onResetOpenChange}>
+        <DialogContent className="flex flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>重置 {resetTarget?.username} 的密码</DialogTitle>
             <DialogDescription>
               新密码立即生效，该管理员所有已登录会话都会失效，需要重新登录。
             </DialogDescription>
           </DialogHeader>
-          <Field data-invalid={resetInvalid || undefined} data-disabled={resetBusy || undefined}>
-            <FieldLabel htmlFor="admin-new-password">新密码</FieldLabel>
-            <Input
-              id="admin-new-password"
-              type="password"
-              autoComplete="new-password"
-              minLength={8}
-              aria-invalid={resetInvalid || undefined}
-              disabled={resetBusy}
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-            />
-            <FieldDescription>至少 8 位。</FieldDescription>
-            {resetInvalid && <FieldError>新密码至少需要 8 位。</FieldError>}
-          </Field>
+          <DialogBody>
+            <Field data-invalid={resetInvalid || undefined} data-disabled={resetBusy || undefined}>
+              <FieldLabel htmlFor="admin-new-password">新密码</FieldLabel>
+              <PasswordInput
+                id="admin-new-password"
+                autoComplete="new-password"
+                minLength={8}
+                allowGenerate
+                allowCopy
+                aria-invalid={resetInvalid || undefined}
+                disabled={resetBusy}
+                value={newPassword}
+                onChangeValue={setNewPassword}
+              />
+              <FieldDescription>至少 8 位；可生成随机密码并复制给对方。</FieldDescription>
+              {resetInvalid && <FieldError>新密码至少需要 8 位。</FieldError>}
+            </Field>
+          </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="outline" disabled={resetBusy} onClick={() => setResetTarget(null)}>
+            <Button type="button" variant="outline" disabled={resetBusy} onClick={() => onResetOpenChange(false)}>
               取消
             </Button>
             <Button type="button" disabled={resetBusy || newPassword.length < 8} onClick={() => void resetPassword()}>

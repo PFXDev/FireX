@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownIcon,
   ArrowLeftIcon,
+  ArrowRightIcon,
   ArrowUpIcon,
   ChevronDownIcon,
   EyeIcon,
   FileTextIcon,
+  GripVerticalIcon,
   LayoutTemplateIcon,
   ListTreeIcon,
   PencilIcon,
@@ -37,8 +39,11 @@ import {
   RefreshButton,
   TableSkeleton,
 } from "@/components/load-state";
+import { NumberInput } from "@/components/number-input";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
+import { StickySaveBar } from "@/components/sticky-save-bar";
+import { SearchInput } from "@/components/table-toolbar";
 import {
   Alert,
   AlertAction,
@@ -58,6 +63,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -70,7 +76,6 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -92,6 +97,11 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -112,7 +122,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useUnsavedGuard } from "@/hooks/use-unsaved-guard";
+import { useDirtyDialog, useUnsavedGuard } from "@/hooks/use-unsaved-guard";
 import { errorMessage } from "@/lib/format";
 import { useSession } from "@/lib/session";
 import { reportSyncError } from "@/lib/sync";
@@ -129,6 +139,58 @@ import { cn } from "@/lib/utils";
 
 /** profileId 0 addresses the default column every profile falls back to. */
 const DEFAULT_COLUMN = 0;
+
+let rowKeySeq = 0;
+function createRowKey(policyId?: number): string {
+  return policyId ? `policy-${policyId}` : `row-${++rowKeySeq}`;
+}
+
+function clonePolicy(policy: Policy): Policy {
+  return {
+    ...policy,
+    rules: policy.rules.map((rule) => ({ ...rule })),
+  };
+}
+
+function cloneRuleSet(set: RuleSet): RuleSet {
+  return { ...set };
+}
+
+function cloneEgress(egress: Egress): Egress {
+  return {
+    ...egress,
+    members: egress.members.map((member) => ({ ...member })),
+  };
+}
+
+function reorder<T>(list: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) {
+    return list;
+  }
+  const next = [...list];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
+
+type PolicyEditorState = {
+  index: number | null;
+  initial: Policy;
+  draft: Policy;
+};
+
+type RuleSetEditorState = {
+  index: number | null;
+  initial: RuleSet;
+  draft: RuleSet;
+};
+
+type CellEditorState = {
+  row: number;
+  profileId: number;
+  initial: Egress | null;
+  draft: Egress | null;
+};
 
 type ProfileDraft = {
   id?: number;
@@ -179,17 +241,14 @@ export function RoutingPage() {
   const [needsReview, setNeedsReview] = useState(false);
   const [matrixScrolled, setMatrixScrolled] = useState(false);
 
-  const [policyEditor, setPolicyEditor] = useState<number | null>(null);
-  const [ruleSetEditor, setRuleSetEditor] = useState<number | null>(null);
+  const [policyEditor, setPolicyEditor] = useState<PolicyEditorState | null>(null);
+  const [ruleSetEditor, setRuleSetEditor] = useState<RuleSetEditorState | null>(null);
   const [pendingRuleSetDelete, setPendingRuleSetDelete] = useState<
     number | null
   >(null);
-  const [cellEditor, setCellEditor] = useState<{
-    row: number;
-    profileId: number;
-    draft: Egress | null;
-  } | null>(null);
+  const [cellEditor, setCellEditor] = useState<CellEditorState | null>(null);
   const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
+  const [initialProfileDraft, setInitialProfileDraft] = useState<ProfileDraft | null>(null);
   const [pendingProfileDelete, setPendingProfileDelete] =
     useState<Profile | null>(null);
   const [pendingPolicyDelete, setPendingPolicyDelete] = useState<number | null>(
@@ -198,6 +257,9 @@ export function RoutingPage() {
   const [pendingPreset, setPendingPreset] = useState<RoutingPreset | null>(
     null,
   );
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [dragRowIndex, setDragRowIndex] = useState<number | null>(null);
+  const [dragOverRowIndex, setDragOverRowIndex] = useState<number | null>(null);
 
   const [previewProfile, setPreviewProfile] = useState<number>(DEFAULT_COLUMN);
   const [preview, setPreview] = useState<{
@@ -222,6 +284,7 @@ export function RoutingPage() {
       });
       setRows(
         matrix.policies.map((policy, index) => ({
+          _key: createRowKey(policy.id),
           policy,
           cells: byIndex.get(index) ?? new Map(),
         })),
@@ -270,8 +333,8 @@ export function RoutingPage() {
     setDirty(true);
   };
 
-  const save = async () => {
-    if (saving) return;
+  const save = async (): Promise<boolean> => {
+    if (saving) return false;
     setSaving(true);
     previewRequest.current++;
     setPreviewing(false);
@@ -280,9 +343,13 @@ export function RoutingPage() {
       await api.put("/routing", routingDocument(rows, ruleSets));
       setDirty(false);
       toast.success("分流已保存");
-      if (!(await load())) toast.warning("分流已保存，但刷新失败，请重新加载");
+      if (!(await load())) {
+        toast.warning("分流已保存，但刷新失败，请重新加载");
+      }
+      return true;
     } catch (err) {
       toast.error(errorMessage(err, "保存失败"));
+      return false;
     } finally {
       setSaving(false);
     }
@@ -303,6 +370,10 @@ export function RoutingPage() {
     } finally {
       if (requestId === previewRequest.current) setPreviewing(false);
     }
+  };
+
+  const saveAndPreview = async () => {
+    if (await save()) await runPreview();
   };
 
   useEffect(() => {
@@ -387,40 +458,42 @@ export function RoutingPage() {
 
   const openCellEditor = (row: number, profileId: number) => {
     const own = rows[row].cells.get(profileId);
+    const copy = own ? cloneEgress(own) : null;
     setCellEditor({
       row,
       profileId,
-      draft: own
-        ? { ...own, members: own.members.map((member) => ({ ...member })) }
-        : null,
+      initial: copy ? cloneEgress(copy) : null,
+      draft: copy,
     });
   };
 
-  const addPolicy = () => {
+  const openPolicyEditor = (index: number) => {
+    const target = clonePolicy(rows[index].policy);
+    setPolicyEditor({
+      index,
+      initial: clonePolicy(target),
+      draft: target,
+    });
+  };
+
+  const openAddPolicy = () => {
     let name = "新策略";
     for (let i = 2; rows.some((row) => row.policy.name === name); i++)
       name = `新策略 ${i}`;
-    const cells = new Map<number, Egress>();
-    cells.set(DEFAULT_COLUMN, {
-      ...blankEgress(DEFAULT_COLUMN),
-      members: [{ kind: "all-node-groups", ref: "" }],
+    const blank: Policy = {
+      id: 0,
+      name,
+      icon: "",
+      isFinal: false,
+      enabled: true,
+      remark: "",
+      rules: [],
+    };
+    setPolicyEditor({
+      index: null,
+      initial: clonePolicy(blank),
+      draft: blank,
     });
-    patchRows([
-      ...rows,
-      {
-        policy: {
-          id: 0,
-          name,
-          icon: "",
-          isFinal: false,
-          enabled: true,
-          remark: "",
-          rules: [],
-        },
-        cells,
-      },
-    ]);
-    setPolicyEditor(rows.length);
   };
 
   /**
@@ -428,27 +501,61 @@ export function RoutingPage() {
    * as well, but the draft has to follow too or the other cells would show a
    * dangling reference until then.
    */
-  const renamePolicy = (index: number, name: string) => {
-    const previous = rows[index].policy.name;
-    patchRows(
-      rows.map((row, i) => ({
-        ...row,
-        policy: i === index ? { ...row.policy, name } : row.policy,
-        cells: new Map(
-          [...row.cells.entries()].map(([profileId, egress]) => [
-            profileId,
-            {
-              ...egress,
-              members: egress.members.map((m) =>
-                m.kind === "policy" && m.ref === previous
-                  ? { ...m, ref: name }
-                  : m,
-              ),
-            },
-          ]),
-        ),
-      })),
-    );
+  const confirmPolicyEditor = (nextPolicy: Policy) => {
+    if (!policyEditor) return;
+    const normalized: Policy = {
+      ...clonePolicy(nextPolicy),
+      name: nextPolicy.name.trim(),
+    };
+    if (policyEditor.index === null) {
+      const cells = new Map<number, Egress>();
+      cells.set(DEFAULT_COLUMN, {
+        ...blankEgress(DEFAULT_COLUMN),
+        members: [{ kind: "all-node-groups", ref: "" }],
+      });
+      const baseRows = normalized.isFinal
+        ? rows.map((row) => ({ ...row, policy: { ...row.policy, isFinal: false } }))
+        : rows;
+      patchRows([
+        ...baseRows,
+        {
+          _key: createRowKey(),
+          policy: normalized,
+          cells,
+        },
+      ]);
+    } else {
+      const idx = policyEditor.index;
+      const previous = rows[idx].policy.name;
+      const renamed = previous !== normalized.name;
+      patchRows(
+        rows.map((row, i) => ({
+          ...row,
+          policy:
+            i === idx
+              ? normalized
+              : normalized.isFinal
+                ? { ...row.policy, isFinal: false }
+                : row.policy,
+          cells: renamed
+            ? new Map(
+                [...row.cells.entries()].map(([profileId, egress]) => [
+                  profileId,
+                  {
+                    ...egress,
+                    members: egress.members.map((m) =>
+                      m.kind === "policy" && m.ref === previous
+                        ? { ...m, ref: normalized.name }
+                        : m,
+                    ),
+                  },
+                ]),
+              )
+            : row.cells,
+        })),
+      );
+    }
+    setPolicyEditor(null);
   };
 
   const removePolicy = (index: number) => {
@@ -472,27 +579,44 @@ export function RoutingPage() {
     patchRows(stripped);
   };
 
-  const addRuleSet = () => {
+  const openRuleSetEditor = (index: number) => {
+    const target = cloneRuleSet(ruleSets[index]);
+    setRuleSetEditor({
+      index,
+      initial: cloneRuleSet(target),
+      draft: target,
+    });
+  };
+
+  const openAddRuleSet = () => {
     let name = "新规则集";
     for (let i = 2; ruleSets.some((set) => set.name === name); i++)
       name = `新规则集 ${i}`;
-    setRuleSets([...ruleSets, { id: 0, name, payload: "", remark: "" }]);
-    setDirty(true);
-    setRuleSetEditor(ruleSets.length);
-  };
-
-  const patchRuleSet = (index: number, values: Partial<RuleSet>) => {
-    setRuleSets(
-      ruleSets.map((set, i) => (i === index ? { ...set, ...values } : set)),
-    );
-    setDirty(true);
+    const blank: RuleSet = { id: 0, name, payload: "", remark: "" };
+    setRuleSetEditor({
+      index: null,
+      initial: cloneRuleSet(blank),
+      draft: blank,
+    });
   };
 
   /** RULE-SET rules name a set by bare name, so the draft rows follow a rename. */
-  const renameRuleSet = (index: number, name: string) => {
-    const previous = ruleSets[index].name;
-    patchRuleSet(index, { name });
-    setRows(renameRuleSetReferences(rows, previous, name));
+  const confirmRuleSetEditor = (nextSet: RuleSet) => {
+    if (!ruleSetEditor) return;
+    const normalized: RuleSet = { ...cloneRuleSet(nextSet), name: nextSet.name.trim() };
+    if (ruleSetEditor.index === null) {
+      setRuleSets([...ruleSets, normalized]);
+      setDirty(true);
+    } else {
+      const idx = ruleSetEditor.index;
+      const previous = ruleSets[idx].name;
+      setRuleSets(ruleSets.map((set, i) => (i === idx ? normalized : set)));
+      if (previous !== normalized.name) {
+        setRows(renameRuleSetReferences(rows, previous, normalized.name));
+      }
+      setDirty(true);
+    }
+    setRuleSetEditor(null);
   };
 
   const removeRuleSet = (index: number) => {
@@ -500,6 +624,11 @@ export function RoutingPage() {
     setRuleSets(ruleSets.filter((_, i) => i !== index));
     patchRows(dropRuleSetReferences(rows, gone));
   };
+
+  const closeProfileDraft = useCallback(() => {
+    setProfileDraft(null);
+    setInitialProfileDraft(null);
+  }, []);
 
   const saveProfile = async () => {
     if (!profileDraft?.name.trim() || profileSaving) return;
@@ -519,7 +648,7 @@ export function RoutingPage() {
         await api.post("/profiles", body);
         toast.success("方案已创建");
       }
-      setProfileDraft(null);
+      closeProfileDraft();
       await reloadProfiles();
     } catch (err) {
       toast.error(errorMessage(err, "保存失败"));
@@ -569,14 +698,30 @@ export function RoutingPage() {
     void reloadProfiles().finally(() => setRefreshingProfiles(false));
   };
 
-  const openNewProfile = () =>
-    setProfileDraft({
+  const openNewProfile = () => {
+    const next: ProfileDraft = {
       name: "",
       allGroups: false,
       enabled: true,
       remark: "",
       groupIds: [],
-    });
+    };
+    setInitialProfileDraft({ ...next, groupIds: [] });
+    setProfileDraft(next);
+  };
+
+  const openEditProfile = (profile: Profile) => {
+    const next: ProfileDraft = {
+      id: profile.id,
+      name: profile.name,
+      allGroups: profile.allGroups,
+      enabled: profile.enabled,
+      remark: profile.remark,
+      groupIds: [...profile.groupIds],
+    };
+    setInitialProfileDraft({ ...next, groupIds: [...profile.groupIds] });
+    setProfileDraft(next);
+  };
 
   if (loading || !options) {
     return (
@@ -631,8 +776,6 @@ export function RoutingPage() {
     );
   }
 
-  const editingRow = policyEditor !== null ? rows[policyEditor] : null;
-
   return (
     <div className="flex flex-col gap-6" aria-busy={saving} inert={saving}>
       <PageHeader
@@ -673,7 +816,7 @@ export function RoutingPage() {
         )}
         {!readOnly && (
           <>
-            <Button variant="outline" onClick={addPolicy}>
+            <Button variant="outline" onClick={openAddPolicy}>
               <PlusIcon data-icon="inline-start" />
               新建策略
             </Button>
@@ -719,7 +862,10 @@ export function RoutingPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>分流方案</CardTitle>
+          <CardTitle className="flex flex-wrap items-center gap-2">
+            <span>分流方案</span>
+            <Badge variant="secondary">即时生效</Badge>
+          </CardTitle>
           <CardDescription>
             方案的「可用节点组」决定它的用户能连上哪些入站——这是唯一会写到面板的设置。套餐绑方案，用户绑套餐。
           </CardDescription>
@@ -816,16 +962,7 @@ export function RoutingPage() {
                             variant="outline"
                             size="sm"
                             aria-label={`编辑方案 ${profile.name}`}
-                            onClick={() =>
-                              setProfileDraft({
-                                id: profile.id,
-                                name: profile.name,
-                                allGroups: profile.allGroups,
-                                enabled: profile.enabled,
-                                remark: profile.remark,
-                                groupIds: profile.groupIds,
-                              })
-                            }
+                            onClick={() => openEditProfile(profile)}
                           >
                             <PencilIcon data-icon="inline-start" />
                             <span className="hidden sm:inline">编辑</span>
@@ -852,9 +989,12 @@ export function RoutingPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>分流矩阵</CardTitle>
+          <CardTitle className="flex flex-wrap items-center gap-2">
+            <span>分流矩阵</span>
+            <Badge variant="outline">草稿统一保存</Badge>
+          </CardTitle>
           <CardDescription>
-            行的先后既是规则的匹配顺序，也是客户端里策略组的排列顺序。点行首编规则清单，点格子改出口。
+            行的先后既是规则的匹配顺序，也是客户端里策略组的排列顺序。点行首编规则清单，点格子改出口，可拖拽或用右侧箭头调整顺序。
           </CardDescription>
           {dirty && (
             <CardAction>
@@ -876,7 +1016,7 @@ export function RoutingPage() {
               </EmptyHeader>
               {!readOnly && (
                 <EmptyContent>
-                  <Button onClick={addPolicy}>
+                  <Button onClick={openAddPolicy}>
                     <PlusIcon data-icon="inline-start" />
                     新建策略
                   </Button>
@@ -939,32 +1079,74 @@ export function RoutingPage() {
             <TableBody>
               {rows.map((row, index) => (
                 <TableRow
-                  key={index}
+                  key={row._key ?? `row-${index}`}
                   data-disabled={!row.policy.enabled || undefined}
+                  className={cn(
+                    dragOverRowIndex === index &&
+                      dragRowIndex !== null &&
+                      dragRowIndex !== index &&
+                      "bg-primary/5 outline-1 outline-primary/40",
+                  )}
+                  onDragOver={(event) => {
+                    if (readOnly || dragRowIndex === null) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    if (dragOverRowIndex !== index) setDragOverRowIndex(index);
+                  }}
+                  onDrop={(event) => {
+                    if (readOnly || dragRowIndex === null) return;
+                    event.preventDefault();
+                    if (dragRowIndex !== index) {
+                      patchRows(reorder(rows, dragRowIndex, index));
+                    }
+                    setDragRowIndex(null);
+                    setDragOverRowIndex(null);
+                  }}
                 >
                   <TableCell className="sticky left-0 z-20 bg-card">
-                    <button
-                      type="button"
-                      className="flex w-full min-w-0 flex-col items-start gap-1 rounded-md text-left focus-visible:outline-ring"
-                      title={`${row.policy.name} · ${ruleCountLabel(row.policy.rules)}`}
-                      onClick={() => setPolicyEditor(index)}
-                    >
-                      <span className="flex w-full items-center gap-2 font-medium">
-                        {row.policy.icon && (
-                          <span className="shrink-0">{row.policy.icon}</span>
-                        )}
-                        <span className="truncate">{row.policy.name}</span>
-                        {row.policy.isFinal && (
-                          <Badge variant="outline">兜底</Badge>
-                        )}
-                        {!row.policy.enabled && (
-                          <StatusBadge tone="idle">停用</StatusBadge>
-                        )}
-                      </span>
-                      <span className="w-full truncate text-xs text-muted-foreground">
-                        {ruleCountLabel(row.policy.rules)}
-                      </span>
-                    </button>
+                    <div className="flex items-start gap-1">
+                      {!readOnly && (
+                        <span
+                          draggable
+                          title="拖拽调整策略顺序"
+                          aria-label={`拖拽调整 ${row.policy.name} 的顺序`}
+                          onDragStart={(event) => {
+                            setDragRowIndex(index);
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData("text/plain", String(index));
+                          }}
+                          onDragEnd={() => {
+                            setDragRowIndex(null);
+                            setDragOverRowIndex(null);
+                          }}
+                          className="mt-0.5 hidden shrink-0 cursor-grab rounded p-0.5 text-muted-foreground/70 hover:text-foreground active:cursor-grabbing sm:inline-flex"
+                        >
+                          <GripVerticalIcon className="size-4" />
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className="flex w-full min-w-0 flex-col items-start gap-1 rounded-md text-left focus-visible:outline-ring"
+                        title={`${row.policy.name} · ${ruleCountLabel(row.policy.rules)}`}
+                        onClick={() => openPolicyEditor(index)}
+                      >
+                        <span className="flex w-full items-center gap-2 font-medium">
+                          {row.policy.icon && (
+                            <span className="shrink-0">{row.policy.icon}</span>
+                          )}
+                          <span className="truncate">{row.policy.name}</span>
+                          {row.policy.isFinal && (
+                            <Badge variant="outline">兜底</Badge>
+                          )}
+                          {!row.policy.enabled && (
+                            <StatusBadge tone="idle">停用</StatusBadge>
+                          )}
+                        </span>
+                        <span className="w-full truncate text-xs text-muted-foreground">
+                          {ruleCountLabel(row.policy.rules)}
+                        </span>
+                      </button>
+                    </div>
                   </TableCell>
 
                   <CellButton
@@ -1043,13 +1225,16 @@ export function RoutingPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>规则集</CardTitle>
+          <CardTitle className="flex flex-wrap items-center gap-2">
+            <span>规则集</span>
+            <Badge variant="outline">草稿统一保存</Badge>
+          </CardTitle>
           <CardDescription>
             长的域名清单放在这里，策略里用一条「RULE-SET,规则集名称」引用。客户端每 6 小时自动拉取最新内容，套用预设也不会覆盖已有的同名规则集。和矩阵一起保存。
           </CardDescription>
           {!readOnly && (
             <CardAction>
-              <Button variant="outline" size="sm" onClick={addRuleSet}>
+              <Button variant="outline" size="sm" onClick={openAddRuleSet}>
                 <PlusIcon data-icon="inline-start" />
                 新建规则集
               </Button>
@@ -1120,7 +1305,7 @@ export function RoutingPage() {
                             variant="outline"
                             size="sm"
                             aria-label={`${readOnly ? "查看" : "编辑"}规则集 ${set.name}`}
-                            onClick={() => setRuleSetEditor(index)}
+                            onClick={() => openRuleSetEditor(index)}
                           >
                             {readOnly ? (
                               <EyeIcon data-icon="inline-start" />
@@ -1217,6 +1402,23 @@ export function RoutingPage() {
               <AlertDescription>
                 当前还有未保存的改动，先保存再预览才能看到它们。
               </AlertDescription>
+              {!readOnly && (
+                <AlertAction>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={saving || previewing}
+                    onClick={() => void saveAndPreview()}
+                  >
+                    {saving ? (
+                      <Spinner data-icon="inline-start" />
+                    ) : (
+                      <SaveIcon data-icon="inline-start" />
+                    )}
+                    保存并预览
+                  </Button>
+                </AlertAction>
+              )}
             </Alert>
           )}
           {preview?.error && (
@@ -1248,19 +1450,39 @@ export function RoutingPage() {
         </CardContent>
       </Card>
 
+      <StickySaveBar
+        visible={!readOnly && dirty}
+        saving={saving}
+        message="分流矩阵或规则集有未保存的改动"
+        saveLabel="保存分流"
+        savingLabel="保存中…"
+        onDiscard={() => setConfirmDiscard(true)}
+        onSave={() => void save()}
+      />
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        onOpenChange={setConfirmDiscard}
+        title="放弃分流矩阵和规则集的未保存改动？"
+        description="会重新从服务端加载最近一次已保存的分流策略与规则集，不影响已保存的分流方案。"
+        confirmLabel="放弃改动"
+        onConfirm={async () => {
+          if (!(await load())) throw new Error("重新加载失败");
+          toast.info("已恢复为上次保存的配置");
+        }}
+      />
+
       <RuleSetDialog
         readOnly={readOnly}
-        set={ruleSetEditor !== null ? (ruleSets[ruleSetEditor] ?? null) : null}
+        editor={ruleSetEditor}
         nameTaken={(name) =>
-          ruleSets.some((set, i) => i !== ruleSetEditor && set.name === name)
+          ruleSets.some((set, i) => i !== ruleSetEditor?.index && set.name === name)
+        }
+        onChange={(draft) =>
+          setRuleSetEditor((current) => (current ? { ...current, draft } : null))
         }
         onClose={() => setRuleSetEditor(null)}
-        onChange={(values) => {
-          if (ruleSetEditor !== null) patchRuleSet(ruleSetEditor, values);
-        }}
-        onRename={(name) => {
-          if (ruleSetEditor !== null) renameRuleSet(ruleSetEditor, name);
-        }}
+        onConfirm={confirmRuleSetEditor}
       />
 
       <ConfirmDialog
@@ -1285,30 +1507,17 @@ export function RoutingPage() {
 
       <PolicyDialog
         readOnly={readOnly}
-        row={editingRow}
+        editor={policyEditor}
         options={options}
         ruleSetNames={ruleSets.map((set) => set.name)}
+        nameTaken={(name) =>
+          rows.some((row, i) => i !== policyEditor?.index && row.policy.name === name)
+        }
+        onChange={(draft) =>
+          setPolicyEditor((current) => (current ? { ...current, draft } : null))
+        }
         onClose={() => setPolicyEditor(null)}
-        onChange={(policy) => {
-          if (policyEditor === null) return;
-          patchRows(
-            rows.map((row, i) =>
-              i === policyEditor ? { ...row, policy } : row,
-            ),
-          );
-        }}
-        onRename={(name) => {
-          if (policyEditor !== null) renamePolicy(policyEditor, name);
-        }}
-        onSetFinal={() => {
-          if (policyEditor === null) return;
-          patchRows(
-            rows.map((row, i) => ({
-              ...row,
-              policy: { ...row.policy, isFinal: i === policyEditor },
-            })),
-          );
-        }}
+        onConfirm={confirmPolicyEditor}
       />
 
       <EgressDialog
@@ -1322,6 +1531,7 @@ export function RoutingPage() {
         policyName={cellEditor ? rows[cellEditor.row].policy.name : ""}
         isFinal={cellEditor ? rows[cellEditor.row].policy.isFinal : false}
         isDefaultColumn={cellEditor?.profileId === DEFAULT_COLUMN}
+        initial={cellEditor?.initial ?? null}
         own={cellEditor?.draft ?? null}
         inherited={
           cellEditor && cellEditor.profileId !== DEFAULT_COLUMN
@@ -1335,7 +1545,7 @@ export function RoutingPage() {
         memberMissing={memberMissing}
         onClose={() => setCellEditor(null)}
         onChange={(egress) => {
-          setCellEditor((editor) => editor ? { ...editor, draft: egress } : null);
+          setCellEditor((editor) => (editor ? { ...editor, draft: egress } : null));
         }}
         onConfirm={() => {
           if (!cellEditor) return;
@@ -1346,10 +1556,11 @@ export function RoutingPage() {
 
       <ProfileDialog
         saving={profileSaving}
+        initialDraft={initialProfileDraft}
         draft={profileDraft}
         groups={groups}
         onChange={setProfileDraft}
-        onClose={() => setProfileDraft(null)}
+        onClose={closeProfileDraft}
         onSave={() => void saveProfile()}
       />
 
@@ -1493,19 +1704,25 @@ function CellButton({
 
 function RuleSetDialog({
   readOnly,
-  set,
+  editor,
   nameTaken,
-  onClose,
   onChange,
-  onRename,
+  onClose,
+  onConfirm,
 }: {
   readOnly: boolean;
-  set: RuleSet | null;
+  editor: RuleSetEditorState | null;
   nameTaken: (name: string) => boolean;
+  onChange: (draft: RuleSet) => void;
   onClose: () => void;
-  onChange: (values: Partial<RuleSet>) => void;
-  onRename: (name: string) => void;
+  onConfirm: (draft: RuleSet) => void;
 }) {
+  const set = editor?.draft ?? null;
+  const dirty =
+    !readOnly &&
+    editor !== null &&
+    JSON.stringify(editor.draft) !== JSON.stringify(editor.initial);
+  const onOpenChange = useDirtyDialog(dirty, false, onClose);
   const name = set?.name.trim() ?? "";
   const nameError = !set
     ? ""
@@ -1517,63 +1734,82 @@ function RuleSetDialog({
           ? "已有同名的规则集。"
           : "";
   return (
-    <Dialog open={set !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex flex-col sm:max-w-3xl">
+    <Dialog open={set !== null} onOpenChange={onOpenChange}>
+      <DialogContent className="flex flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{readOnly ? "查看规则集" : "编辑规则集"}</DialogTitle>
+          <DialogTitle>
+            {readOnly ? "查看规则集" : editor?.index === null ? "新建规则集" : "编辑规则集"}
+          </DialogTitle>
           <DialogDescription>
             客户端按 mihomo rule-provider 拉取这份清单。命中后走哪个出口，由引用它的策略决定。
           </DialogDescription>
         </DialogHeader>
-        {set && (
-          <FieldGroup className="min-w-0">
-            <Field data-invalid={nameError ? true : undefined}>
-              <FieldLabel htmlFor="rule-set-name">名称</FieldLabel>
-              <Input
-                id="rule-set-name"
-                readOnly={readOnly}
-                value={set.name}
-                aria-invalid={nameError ? true : undefined}
-                onChange={(event) => onRename(event.target.value)}
-              />
-              {nameError ? (
-                <FieldError>{nameError}</FieldError>
-              ) : (
+        <DialogBody>
+          {set && (
+            <FieldGroup className="min-w-0">
+              <Field data-invalid={nameError ? true : undefined}>
+                <FieldLabel htmlFor="rule-set-name">名称</FieldLabel>
+                <Input
+                  id="rule-set-name"
+                  readOnly={readOnly}
+                  value={set.name}
+                  aria-invalid={nameError ? true : undefined}
+                  onChange={(event) => onChange({ ...set, name: event.target.value })}
+                />
+                {nameError ? (
+                  <FieldError>{nameError}</FieldError>
+                ) : (
+                  <FieldDescription>
+                    策略里写「RULE-SET,{name}」引用它。改名时引用它的规则会跟着改。
+                  </FieldDescription>
+                )}
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="rule-set-payload">
+                  规则（{ruleSetLineCount(set.payload)} 条）
+                </FieldLabel>
+                <CodeTextarea
+                  id="rule-set-payload"
+                  readOnly={readOnly}
+                  rows={14}
+                  className="max-h-[50dvh] min-h-48"
+                  placeholder={"# Hugging Face\nGEOSITE,huggingface\nDOMAIN-SUFFIX,githubusercontent.com"}
+                  value={set.payload}
+                  onChange={(event) => onChange({ ...set, payload: event.target.value })}
+                />
                 <FieldDescription>
-                  策略里写「RULE-SET,{name}」引用它。改名时引用它的规则会跟着改。
+                  每行一条「类型,内容」，不写策略名；IP 类规则可在末尾加 ,no-resolve。# 开头的行是注释。不能再嵌套 RULE-SET。保存时会逐行检查。
                 </FieldDescription>
-              )}
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="rule-set-payload">
-                规则（{ruleSetLineCount(set.payload)} 条）
-              </FieldLabel>
-              <CodeTextarea
-                id="rule-set-payload"
-                readOnly={readOnly}
-                rows={14}
-                className="max-h-[50dvh] min-h-48"
-                placeholder={"# Hugging Face\nGEOSITE,huggingface\nDOMAIN-SUFFIX,githubusercontent.com"}
-                value={set.payload}
-                onChange={(event) => onChange({ payload: event.target.value })}
-              />
-              <FieldDescription>
-                每行一条「类型,内容」，不写策略名；IP 类规则可在末尾加 ,no-resolve。# 开头的行是注释。不能再嵌套 RULE-SET。保存时会逐行检查。
-              </FieldDescription>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="rule-set-remark">备注</FieldLabel>
-              <Input
-                id="rule-set-remark"
-                readOnly={readOnly}
-                value={set.remark}
-                onChange={(event) => onChange({ remark: event.target.value })}
-              />
-            </Field>
-          </FieldGroup>
-        )}
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="rule-set-remark">备注</FieldLabel>
+                <Input
+                  id="rule-set-remark"
+                  readOnly={readOnly}
+                  value={set.remark}
+                  onChange={(event) => onChange({ ...set, remark: event.target.value })}
+                />
+              </Field>
+            </FieldGroup>
+          )}
+        </DialogBody>
         <DialogFooter>
-          <Button onClick={onClose}>完成</Button>
+          {readOnly ? (
+            <Button onClick={onClose}>关闭</Button>
+          ) : (
+            <>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                取消
+              </Button>
+              <Button
+                type="button"
+                disabled={!set || Boolean(nameError)}
+                onClick={() => set && onConfirm(set)}
+              >
+                确定
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1582,322 +1818,412 @@ function RuleSetDialog({
 
 function PolicyDialog({
   readOnly,
-  row,
+  editor,
   options,
   ruleSetNames,
-  onClose,
+  nameTaken,
   onChange,
-  onRename,
-  onSetFinal,
+  onClose,
+  onConfirm,
 }: {
   readOnly: boolean;
-  row: Row | null;
+  editor: PolicyEditorState | null;
   options: RoutingMatrix["options"];
   ruleSetNames: string[];
-  onClose: () => void;
+  nameTaken: (name: string) => boolean;
   onChange: (policy: Policy) => void;
-  onRename: (name: string) => void;
-  onSetFinal: () => void;
+  onClose: () => void;
+  onConfirm: (policy: Policy) => void;
 }) {
-  const policy = row?.policy;
+  const [dragRuleIndex, setDragRuleIndex] = useState<number | null>(null);
+  const [dragOverRuleIndex, setDragOverRuleIndex] = useState<number | null>(null);
+  const policy = editor?.draft;
+  const isOriginalFinal = Boolean(editor?.initial.isFinal);
+  const dirty =
+    !readOnly &&
+    editor !== null &&
+    JSON.stringify(editor.draft) !== JSON.stringify(editor.initial);
+  const onOpenChange = useDirtyDialog(dirty, false, onClose);
+  useEffect(() => {
+    if (!editor) {
+      setDragRuleIndex(null);
+      setDragOverRuleIndex(null);
+    }
+  }, [editor]);
+  const trimmedName = policy?.name.trim() ?? "";
   const nameError = !policy
     ? ""
-    : !policy.name.trim()
+    : !trimmedName
       ? "请输入策略名称。"
       : policy.name.includes(",")
         ? "名称不能包含英文逗号。"
-        : "";
+        : nameTaken(trimmedName)
+          ? "已有同名的分流策略。"
+          : "";
   return (
-    <Dialog
-      open={policy !== undefined}
-      onOpenChange={(open) => !open && onClose()}
-    >
-      <DialogContent className="flex flex-col sm:max-w-3xl">
+    <Dialog open={policy !== undefined} onOpenChange={onOpenChange}>
+      <DialogContent className="flex flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{readOnly ? "查看分流策略" : "编辑分流策略"}</DialogTitle>
+          <DialogTitle>
+            {readOnly ? "查看分流策略" : editor?.index === null ? "新建分流策略" : "编辑分流策略"}
+          </DialogTitle>
           <DialogDescription>
             这份规则清单对所有方案都一样；每个方案走哪条线路，由矩阵里的出口决定。
           </DialogDescription>
         </DialogHeader>
-        {policy && (
-          <FieldGroup className="min-w-0 shrink-0">
-            <FieldGroup className="grid gap-4 sm:grid-cols-[6rem_1fr]">
-              <Field>
-                <FieldLabel htmlFor="policy-icon">图标</FieldLabel>
-                <Input
-                  id="policy-icon"
-                  readOnly={readOnly}
-                  placeholder="🤖"
-                  value={policy.icon}
-                  onChange={(event) =>
-                    onChange({ ...policy, icon: event.target.value })
-                  }
-                />
-              </Field>
-              <Field data-invalid={nameError ? true : undefined}>
-                <FieldLabel htmlFor="policy-name">名称</FieldLabel>
-                <Input
-                  id="policy-name"
-                  readOnly={readOnly}
-                  value={policy.name}
-                  aria-invalid={nameError ? true : undefined}
-                  onChange={(event) => onRename(event.target.value)}
-                />
-                {nameError ? (
-                  <FieldError>{nameError}</FieldError>
-                ) : (
-                  <FieldDescription>
-                    客户端里的策略组名称就是「图标 + 名称」。
-                  </FieldDescription>
-                )}
-              </Field>
-            </FieldGroup>
+        <DialogBody>
+          {policy && (
+            <FieldGroup className="min-w-0">
+              <FieldGroup className="grid gap-4 sm:grid-cols-[6rem_1fr]">
+                <Field>
+                  <FieldLabel htmlFor="policy-icon">图标</FieldLabel>
+                  <Input
+                    id="policy-icon"
+                    readOnly={readOnly}
+                    placeholder="🤖"
+                    value={policy.icon}
+                    onChange={(event) =>
+                      onChange({ ...policy, icon: event.target.value })
+                    }
+                  />
+                </Field>
+                <Field data-invalid={nameError ? true : undefined}>
+                  <FieldLabel htmlFor="policy-name">名称</FieldLabel>
+                  <Input
+                    id="policy-name"
+                    readOnly={readOnly}
+                    value={policy.name}
+                    aria-invalid={nameError ? true : undefined}
+                    onChange={(event) =>
+                      onChange({ ...policy, name: event.target.value })
+                    }
+                  />
+                  {nameError ? (
+                    <FieldError>{nameError}</FieldError>
+                  ) : (
+                    <FieldDescription>
+                      客户端里的策略组名称就是「图标 + 名称」。
+                    </FieldDescription>
+                  )}
+                </Field>
+              </FieldGroup>
 
-            <FieldGroup className="grid gap-4 sm:grid-cols-2">
-              <Field orientation="horizontal">
-                <FieldLabel htmlFor="policy-enabled">启用</FieldLabel>
-                <Switch
-                  id="policy-enabled"
-                  readOnly={readOnly}
-                  checked={policy.enabled}
-                  onCheckedChange={(enabled) =>
-                    onChange({ ...policy, enabled })
-                  }
-                />
-              </Field>
-              <Field orientation="horizontal">
-                <FieldLabel htmlFor="policy-final">
-                  作为兜底（MATCH）
-                </FieldLabel>
-                <Switch
-                  id="policy-final"
-                  readOnly={readOnly}
-                  checked={policy.isFinal}
-                  onCheckedChange={() => onSetFinal()}
-                />
-              </Field>
-            </FieldGroup>
+              <FieldGroup className="grid gap-4 sm:grid-cols-2">
+                <Field orientation="horizontal">
+                  <FieldLabel htmlFor="policy-enabled">启用</FieldLabel>
+                  <Switch
+                    id="policy-enabled"
+                    readOnly={readOnly}
+                    checked={policy.enabled}
+                    onCheckedChange={(enabled) =>
+                      onChange({ ...policy, enabled })
+                    }
+                  />
+                </Field>
+                <Field>
+                  <Field orientation="horizontal">
+                    <FieldLabel htmlFor="policy-final">
+                      作为兜底（MATCH）
+                    </FieldLabel>
+                    <Switch
+                      id="policy-final"
+                      readOnly={readOnly}
+                      disabled={readOnly || isOriginalFinal}
+                      checked={policy.isFinal}
+                      onCheckedChange={(checked) =>
+                        onChange({ ...policy, isFinal: Boolean(checked) })
+                      }
+                    />
+                  </Field>
+                  {policy.isFinal && (
+                    <FieldDescription>
+                      当前已是兜底策略，请到其他策略中开启以切换。
+                    </FieldDescription>
+                  )}
+                </Field>
+              </FieldGroup>
 
-            <FieldSet className="min-w-0">
-              <FieldLegend variant="label">
-                规则清单（{policy.rules.length} 条）
-              </FieldLegend>
-              <FieldDescription>
-                自上而下匹配。关掉开关的规则会保留但不下发。清单为空也没关系——那就是个纯粹给用户手切的选择器。长清单可以放进规则集，用 RULE-SET 引用。
-              </FieldDescription>
-              <datalist id="policy-rule-set-names">
-                {ruleSetNames.map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
-              <ScrollArea className="h-72 max-h-[40dvh] min-w-0 rounded-lg border">
-                <div className="flex flex-col gap-2 p-3">
-                  {policy.rules.map((rule, index) => (
-                    <div
-                      key={index}
-                      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[auto_11rem_minmax(0,1fr)_auto_auto]"
-                      data-disabled={rule.disabled || undefined}
-                    >
-                      <Switch
-                        aria-label={`规则 ${index + 1} ${rule.disabled ? "已停用" : "已启用"}`}
-                        readOnly={readOnly}
-                        checked={!rule.disabled}
-                        onCheckedChange={(enabled) =>
-                          onChange({
-                            ...policy,
-                            rules: policy.rules.map((r, i) =>
-                              i === index ? { ...r, disabled: !enabled } : r,
-                            ),
-                          })
-                        }
-                      />
-                      <Select
-                        readOnly={readOnly}
-                        items={options.ruleTypes.map((value) => ({
-                          value,
-                          label: value,
-                        }))}
-                        value={rule.type}
-                        onValueChange={(value) =>
-                          onChange({
-                            ...policy,
-                            rules: policy.rules.map((r, i) =>
-                              i === index ? { ...r, type: String(value) } : r,
-                            ),
-                          })
-                        }
-                      >
-                        <SelectTrigger
-                          className="col-span-2 w-full min-w-0 sm:col-span-1"
-                          aria-label={`规则 ${index + 1} 的匹配类型`}
-                        >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            {options.ruleTypes.map((value) => (
-                              <SelectItem key={value} value={value}>
-                                {value}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                      <Input
+              <FieldSet className="min-w-0">
+                <FieldLegend variant="label">
+                  规则清单（{policy.rules.length} 条）
+                </FieldLegend>
+                <FieldDescription>
+                  自上而下匹配。关掉开关的规则会保留但不下发。清单为空也没关系——那就是个纯粹给用户手切的选择器。长清单可以放进规则集，用 RULE-SET 引用。
+                </FieldDescription>
+                <datalist id="policy-rule-set-names">
+                  {ruleSetNames.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+                <ScrollArea className="h-72 max-h-[40dvh] min-w-0 rounded-lg border">
+                  <div className="flex flex-col gap-2 p-3">
+                    {policy.rules.map((rule, index) => (
+                      <div
+                        key={index}
                         className={cn(
-                          "col-span-3 sm:col-span-1",
-                          rule.disabled && "line-through opacity-60",
+                          "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md p-1 sm:grid-cols-[auto_11rem_minmax(0,1fr)_auto_auto]",
+                          dragOverRuleIndex === index &&
+                            dragRuleIndex !== null &&
+                            dragRuleIndex !== index &&
+                            "bg-primary/5 ring-1 ring-primary/40",
                         )}
-                        aria-label={`规则 ${index + 1} 的内容`}
-                        readOnly={readOnly}
-                        placeholder={
-                          rule.type === RULE_SET_TYPE
-                            ? "规则集名称"
-                            : "例如 openai"
-                        }
-                        list={
-                          rule.type === RULE_SET_TYPE
-                            ? "policy-rule-set-names"
-                            : undefined
-                        }
-                        aria-invalid={!rule.value.trim() || undefined}
-                        value={rule.value}
-                        onChange={(event) =>
-                          onChange({
-                            ...policy,
-                            rules: policy.rules.map((r, i) =>
-                              i === index
-                                ? { ...r, value: event.target.value }
-                                : r,
-                            ),
-                          })
-                        }
-                      />
-                      <Field
-                        orientation="horizontal"
-                        className="col-span-2 w-auto sm:col-span-1"
-                        data-disabled={
-                          !options.noResolveTypes[rule.type] || undefined
-                        }
-                      >
-                        <Checkbox
-                          id={`policy-rule-${index}-no-resolve`}
-                          aria-label={`规则 ${index + 1} 不解析域名`}
-                          readOnly={readOnly}
-                          disabled={!options.noResolveTypes[rule.type]}
-                          checked={
-                            rule.noResolve &&
-                            Boolean(options.noResolveTypes[rule.type])
+                        data-disabled={rule.disabled || undefined}
+                        onDragOver={(event) => {
+                          if (readOnly || dragRuleIndex === null) return;
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = "move";
+                          if (dragOverRuleIndex !== index) setDragOverRuleIndex(index);
+                        }}
+                        onDrop={(event) => {
+                          if (readOnly || dragRuleIndex === null) return;
+                          event.preventDefault();
+                          if (dragRuleIndex !== index) {
+                            onChange({
+                              ...policy,
+                              rules: reorder(policy.rules, dragRuleIndex, index),
+                            });
                           }
-                          onCheckedChange={(checked) =>
+                          setDragRuleIndex(null);
+                          setDragOverRuleIndex(null);
+                        }}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          {!readOnly && (
+                            <span
+                              draggable
+                              title="拖拽调整规则顺序"
+                              aria-label={`拖拽调整规则 ${index + 1} 顺序`}
+                              onDragStart={(event) => {
+                                setDragRuleIndex(index);
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("text/plain", String(index));
+                              }}
+                              onDragEnd={() => {
+                                setDragRuleIndex(null);
+                                setDragOverRuleIndex(null);
+                              }}
+                              className="hidden shrink-0 cursor-grab rounded p-0.5 text-muted-foreground/70 hover:text-foreground active:cursor-grabbing sm:inline-flex"
+                            >
+                              <GripVerticalIcon className="size-4" />
+                            </span>
+                          )}
+                          <Switch
+                            aria-label={`规则 ${index + 1} ${rule.disabled ? "已停用" : "已启用"}`}
+                            readOnly={readOnly}
+                            checked={!rule.disabled}
+                            onCheckedChange={(enabled) =>
+                              onChange({
+                                ...policy,
+                                rules: policy.rules.map((r, i) =>
+                                  i === index ? { ...r, disabled: !enabled } : r,
+                                ),
+                              })
+                            }
+                          />
+                        </div>
+                        <Select
+                          readOnly={readOnly}
+                          items={options.ruleTypes.map((value) => ({
+                            value,
+                            label: value,
+                          }))}
+                          value={rule.type}
+                          onValueChange={(value) =>
+                            onChange({
+                              ...policy,
+                              rules: policy.rules.map((r, i) =>
+                                i === index ? { ...r, type: String(value) } : r,
+                              ),
+                            })
+                          }
+                        >
+                          <SelectTrigger
+                            className="col-span-2 w-full min-w-0 sm:col-span-1"
+                            aria-label={`规则 ${index + 1} 的匹配类型`}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectGroup>
+                              {options.ruleTypes.map((value) => (
+                                <SelectItem key={value} value={value}>
+                                  {value}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                        <Input
+                          className={cn(
+                            "col-span-3 sm:col-span-1",
+                            rule.disabled && "line-through opacity-60",
+                          )}
+                          aria-label={`规则 ${index + 1} 的内容`}
+                          readOnly={readOnly}
+                          placeholder={
+                            rule.type === RULE_SET_TYPE
+                              ? "规则集名称"
+                              : "例如 openai"
+                          }
+                          list={
+                            rule.type === RULE_SET_TYPE
+                              ? "policy-rule-set-names"
+                              : undefined
+                          }
+                          aria-invalid={!rule.value.trim() || undefined}
+                          value={rule.value}
+                          onChange={(event) =>
                             onChange({
                               ...policy,
                               rules: policy.rules.map((r, i) =>
                                 i === index
-                                  ? { ...r, noResolve: Boolean(checked) }
+                                  ? { ...r, value: event.target.value }
                                   : r,
                               ),
                             })
                           }
                         />
-                        <FieldLabel
-                          htmlFor={`policy-rule-${index}-no-resolve`}
-                          className="font-normal text-muted-foreground"
+                        <Field
+                          orientation="horizontal"
+                          className="col-span-2 w-auto sm:col-span-1"
+                          data-disabled={
+                            !options.noResolveTypes[rule.type] || undefined
+                          }
                         >
-                          no-resolve
-                        </FieldLabel>
-                      </Field>
-                      {!readOnly && (
-                        <div className="flex items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`上移规则 ${index + 1}`}
-                            disabled={index === 0}
-                            onClick={() =>
+                          <Checkbox
+                            id={`policy-rule-${index}-no-resolve`}
+                            aria-label={`规则 ${index + 1} 不解析域名`}
+                            readOnly={readOnly}
+                            disabled={!options.noResolveTypes[rule.type]}
+                            checked={
+                              rule.noResolve &&
+                              Boolean(options.noResolveTypes[rule.type])
+                            }
+                            onCheckedChange={(checked) =>
                               onChange({
                                 ...policy,
-                                rules: move(policy.rules, index, -1),
+                                rules: policy.rules.map((r, i) =>
+                                  i === index
+                                    ? { ...r, noResolve: Boolean(checked) }
+                                    : r,
+                                ),
                               })
                             }
+                          />
+                          <FieldLabel
+                            htmlFor={`policy-rule-${index}-no-resolve`}
+                            className="font-normal text-muted-foreground"
                           >
-                            <ArrowUpIcon />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`下移规则 ${index + 1}`}
-                            disabled={index === policy.rules.length - 1}
-                            onClick={() =>
-                              onChange({
-                                ...policy,
-                                rules: move(policy.rules, index, 1),
-                              })
-                            }
-                          >
-                            <ArrowDownIcon />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`删除规则 ${index + 1}`}
-                            onClick={() =>
-                              onChange({
-                                ...policy,
-                                rules: policy.rules.filter((_, i) => i !== index),
-                              })
-                            }
-                          >
-                            <Trash2Icon />
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  {!readOnly && (
-                    <div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() =>
-                          onChange({
-                            ...policy,
-                            rules: [
-                              ...policy.rules,
-                              {
-                                type: "GEOSITE",
-                                value: "",
-                                noResolve: false,
-                                disabled: false,
-                              },
-                            ],
-                          })
-                        }
-                      >
-                        <PlusIcon data-icon="inline-start" />
-                        添加规则
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              </ScrollArea>
-            </FieldSet>
+                            no-resolve
+                          </FieldLabel>
+                        </Field>
+                        {!readOnly && (
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`上移规则 ${index + 1}`}
+                              disabled={index === 0}
+                              onClick={() =>
+                                onChange({
+                                  ...policy,
+                                  rules: move(policy.rules, index, -1),
+                                })
+                              }
+                            >
+                              <ArrowUpIcon />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`下移规则 ${index + 1}`}
+                              disabled={index === policy.rules.length - 1}
+                              onClick={() =>
+                                onChange({
+                                  ...policy,
+                                  rules: move(policy.rules, index, 1),
+                                })
+                              }
+                            >
+                              <ArrowDownIcon />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`删除规则 ${index + 1}`}
+                              onClick={() =>
+                                onChange({
+                                  ...policy,
+                                  rules: policy.rules.filter((_, i) => i !== index),
+                                })
+                              }
+                            >
+                              <Trash2Icon />
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {!readOnly && (
+                      <div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            onChange({
+                              ...policy,
+                              rules: [
+                                ...policy.rules,
+                                {
+                                  type: "GEOSITE",
+                                  value: "",
+                                  noResolve: false,
+                                  disabled: false,
+                                },
+                              ],
+                            })
+                          }
+                        >
+                          <PlusIcon data-icon="inline-start" />
+                          添加规则
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </ScrollArea>
+              </FieldSet>
 
-            <Field>
-              <FieldLabel htmlFor="policy-remark">备注</FieldLabel>
-              <Input
-                id="policy-remark"
-                readOnly={readOnly}
-                value={policy.remark}
-                onChange={(event) =>
-                  onChange({ ...policy, remark: event.target.value })
-                }
-              />
-            </Field>
-          </FieldGroup>
-        )}
+              <Field>
+                <FieldLabel htmlFor="policy-remark">备注</FieldLabel>
+                <Input
+                  id="policy-remark"
+                  readOnly={readOnly}
+                  value={policy.remark}
+                  onChange={(event) =>
+                    onChange({ ...policy, remark: event.target.value })
+                  }
+                />
+              </Field>
+            </FieldGroup>
+          )}
+        </DialogBody>
         <DialogFooter>
-          <Button onClick={onClose}>完成</Button>
+          {readOnly ? (
+            <Button onClick={onClose}>关闭</Button>
+          ) : (
+            <>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                取消
+              </Button>
+              <Button
+                type="button"
+                disabled={!policy || Boolean(nameError)}
+                onClick={() => policy && onConfirm(policy)}
+              >
+                确定
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1911,6 +2237,7 @@ function EgressDialog({
   profileName,
   isFinal,
   isDefaultColumn,
+  initial,
   own,
   inherited,
   options,
@@ -1929,6 +2256,7 @@ function EgressDialog({
   /** The MATCH policy must be emitted in every column, even when hidden in clients. */
   isFinal: boolean;
   isDefaultColumn: boolean;
+  initial: Egress | null;
   own: Egress | null;
   inherited: Egress | null;
   options: RoutingMatrix["options"];
@@ -1940,6 +2268,19 @@ function EgressDialog({
   onChange: (egress: Egress | null) => void;
   onConfirm: () => void;
 }) {
+  const [dragMemberIndex, setDragMemberIndex] = useState<number | null>(null);
+  const [dragOverMemberIndex, setDragOverMemberIndex] = useState<number | null>(null);
+  useEffect(() => {
+    if (!open) {
+      setDragMemberIndex(null);
+      setDragOverMemberIndex(null);
+    }
+  }, [open]);
+
+  const dirty =
+    !readOnly && open && JSON.stringify(own) !== JSON.stringify(initial);
+  const onOpenChange = useDirtyDialog(dirty, false, onClose);
+
   const mode: "inherit" | "custom" | "hidden" =
     own === null ? "inherit" : own.hidden ? "hidden" : "custom";
   const current = own ?? inherited;
@@ -1957,8 +2298,8 @@ function EgressDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="sm:max-w-xl">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex flex-col overflow-hidden sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>
             「{policyName}」在{profileName}下的出口
@@ -1970,248 +2311,299 @@ function EgressDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <FieldGroup>
-          {!isDefaultColumn && (
-            <Field>
-              <FieldLabel htmlFor="egress-mode">这一格</FieldLabel>
-              <Select
-                readOnly={readOnly}
-                items={[
-                  { value: "inherit", label: "跟随默认" },
-                  { value: "custom", label: "自定义出口" },
-                  // A final cell already stored as hidden (from before the
-                  // server refused it) still has to display, so it can be
-                  // switched back.
-                  ...(isFinal && mode !== "hidden"
-                    ? []
-                    : [
-                        {
-                          value: "hidden",
-                          label: "不下发（这个方案没有这条分流）",
-                        },
-                      ]),
-                ]}
-                value={mode}
-                onValueChange={(value) =>
-                  setMode(value as "inherit" | "custom" | "hidden")
-                }
-              >
-                <SelectTrigger id="egress-mode" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value="inherit">跟随默认</SelectItem>
-                    <SelectItem value="custom">自定义出口</SelectItem>
-                    {(!isFinal || mode === "hidden") && (
-                      <SelectItem value="hidden">
-                        不下发（这个方案没有这条分流）
-                      </SelectItem>
-                    )}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              {mode === "hidden" && (
-                <FieldDescription>
-                  它的策略组和规则都不会下发，这类流量会落到后面的规则或兜底。
-                </FieldDescription>
-              )}
-              {isFinal && (
-                <FieldDescription>
-                  兜底策略每个方案都必须下发，但可以在客户端隐藏。
-                </FieldDescription>
-              )}
-            </Field>
-          )}
-
-          {mode !== "hidden" && current && (
-            <>
-              <Field orientation="horizontal">
-                <FieldContent>
-                  <FieldLabel htmlFor="egress-client-hidden">
-                    在客户端隐藏
-                  </FieldLabel>
-                  <FieldDescription id="egress-client-hidden-description">
-                    保留策略组和分流规则，只在支持隐藏的客户端中收起展示。配置文件中仍可查看。
-                  </FieldDescription>
-                </FieldContent>
-                <Switch
-                  id="egress-client-hidden"
+        <DialogBody>
+          <FieldGroup>
+            {!isDefaultColumn && (
+              <Field>
+                <FieldLabel htmlFor="egress-mode">这一格</FieldLabel>
+                <Select
                   readOnly={readOnly}
-                  checked={current.clientHidden ?? false}
-                  aria-describedby="egress-client-hidden-description"
-                  onCheckedChange={(checked) => patch({ clientHidden: checked })}
-                />
-              </Field>
-              <FieldGroup className="grid gap-4 sm:grid-cols-2">
-                <Field>
-                  <FieldLabel htmlFor="egress-type">选择方式</FieldLabel>
-                  <Select
-                    readOnly={readOnly}
-                    items={options.groupTypes.map((value) => ({
-                      value,
-                      label: value,
-                    }))}
-                    value={current.type}
-                    onValueChange={(value) => patch({ type: String(value) })}
-                  >
-                    <SelectTrigger id="egress-type" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {options.groupTypes.map((value) => (
-                          <SelectItem key={value} value={value}>
-                            {value}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                {current.type !== "select" && (
-                  <Field>
-                    <FieldLabel htmlFor="egress-interval">
-                      测速间隔 (秒)
-                    </FieldLabel>
-                    <Input
-                      id="egress-interval"
-                      readOnly={readOnly}
-                      type="number"
-                      min={0}
-                      value={current.interval}
-                      onChange={(event) =>
-                        patch({ interval: Number(event.target.value) })
-                      }
-                    />
-                  </Field>
+                  items={[
+                    { value: "inherit", label: "跟随默认" },
+                    { value: "custom", label: "自定义出口" },
+                    // A final cell already stored as hidden (from before the
+                    // server refused it) still has to display, so it can be
+                    // switched back.
+                    ...(isFinal && mode !== "hidden"
+                      ? []
+                      : [
+                          {
+                            value: "hidden",
+                            label: "不下发（这个方案没有这条分流）",
+                          },
+                        ]),
+                  ]}
+                  value={mode}
+                  onValueChange={(value) =>
+                    setMode(value as "inherit" | "custom" | "hidden")
+                  }
+                >
+                  <SelectTrigger id="egress-mode" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="inherit">跟随默认</SelectItem>
+                      <SelectItem value="custom">自定义出口</SelectItem>
+                      {(!isFinal || mode === "hidden") && (
+                        <SelectItem value="hidden">
+                          不下发（这个方案没有这条分流）
+                        </SelectItem>
+                      )}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                {mode === "hidden" && (
+                  <FieldDescription>
+                    它的策略组和规则都不会下发，这类流量会落到后面的规则或兜底。
+                  </FieldDescription>
                 )}
-              </FieldGroup>
-              {current.type !== "select" && (
+                {isFinal && (
+                  <FieldDescription>
+                    兜底策略每个方案都必须下发，但可以在客户端隐藏。
+                  </FieldDescription>
+                )}
+              </Field>
+            )}
+
+            {mode !== "hidden" && current && (
+              <>
+                <Field orientation="horizontal">
+                  <FieldContent>
+                    <FieldLabel htmlFor="egress-client-hidden">
+                      在客户端隐藏
+                    </FieldLabel>
+                    <FieldDescription id="egress-client-hidden-description">
+                      保留策略组和分流规则，只在支持隐藏的客户端中收起展示。配置文件中仍可查看。
+                    </FieldDescription>
+                  </FieldContent>
+                  <Switch
+                    id="egress-client-hidden"
+                    readOnly={readOnly}
+                    checked={current.clientHidden ?? false}
+                    aria-describedby="egress-client-hidden-description"
+                    onCheckedChange={(checked) => patch({ clientHidden: checked })}
+                  />
+                </Field>
                 <FieldGroup className="grid gap-4 sm:grid-cols-2">
                   <Field>
-                    <FieldLabel htmlFor="egress-test-url">测速地址</FieldLabel>
-                    <Input
-                      id="egress-test-url"
+                    <FieldLabel htmlFor="egress-type">选择方式</FieldLabel>
+                    <Select
                       readOnly={readOnly}
-                      placeholder="留空用 gstatic generate_204"
-                      value={current.testUrl}
-                      onChange={(event) =>
-                        patch({ testUrl: event.target.value })
-                      }
-                    />
+                      items={options.groupTypes.map((value) => ({
+                        value,
+                        label: value,
+                      }))}
+                      value={current.type}
+                      onValueChange={(value) => patch({ type: String(value) })}
+                    >
+                      <SelectTrigger id="egress-type" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {options.groupTypes.map((value) => (
+                            <SelectItem key={value} value={value}>
+                              {value}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                   </Field>
-                  {current.type === "url-test" && (
+                  {current.type !== "select" && (
                     <Field>
-                      <FieldLabel htmlFor="egress-tolerance">
-                        切换容差 (毫秒)
+                      <FieldLabel htmlFor="egress-interval">
+                        测速间隔 (秒)
                       </FieldLabel>
-                      <Input
-                        id="egress-tolerance"
+                      <NumberInput
+                        id="egress-interval"
                         readOnly={readOnly}
-                        type="number"
                         min={0}
-                        value={current.tolerance}
-                        onChange={(event) =>
-                          patch({ tolerance: Number(event.target.value) })
-                        }
+                        integer
+                        value={current.interval}
+                        onValueChange={(interval) => patch({ interval })}
                       />
-                      <FieldDescription>
-                        新节点要比当前快这么多才切换。
-                      </FieldDescription>
                     </Field>
                   )}
                 </FieldGroup>
-              )}
-
-              <FieldSet>
-                <FieldLegend variant="label">成员</FieldLegend>
-                <FieldDescription>
-                  顺序就是客户端里的排列顺序，解析不到的成员会被自动跳过。
-                </FieldDescription>
-                <div className="flex flex-wrap items-center gap-2">
-                  {current.members.map((member, index) => (
-                    <Badge
-                      key={index}
-                      variant={memberMissing(member) ? "destructive" : "secondary"}
-                      className={readOnly ? undefined : "pr-0.5"}
-                      title={
-                        memberMissing(member)
-                          ? "找不到这个成员，渲染时会跳过"
-                          : undefined
-                      }
-                    >
-                      {memberMissing(member) && (
-                        <TriangleAlertIcon data-icon="inline-start" />
-                      )}
-                      {memberLabel(member)}
-                      {!readOnly && (
-                        <>
-                          <Button
-                            variant="ghost"
-                            size="icon-xs"
-                            className="size-4"
-                            aria-label={`把成员 ${index + 1} 前移`}
-                            disabled={index === 0}
-                            onClick={() =>
-                              patch({ members: move(current.members, index, -1) })
-                            }
-                          >
-                            <ArrowLeftIcon />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon-xs"
-                            className="size-4"
-                            aria-label={`移除成员 ${index + 1}`}
-                            onClick={() =>
-                              patch({
-                                members: current.members.filter(
-                                  (_, i) => i !== index,
-                                ),
-                              })
-                            }
-                          >
-                            <XIcon />
-                          </Button>
-                        </>
-                      )}
-                    </Badge>
-                  ))}
-                  {!readOnly && (
-                    <MemberPicker
-                      groups={groups}
-                      policies={policies.filter((p) => p.name !== policyName)}
-                      builtins={options.builtins}
-                      onPick={(member) =>
-                        patch({ members: [...current.members, member] })
-                      }
-                    />
-                  )}
-                </div>
-                {current.members.length === 0 && (
-                  <FieldDescription>
-                    成员为空的策略组会被渲染时丢弃，指向它的规则会落到兜底。
-                  </FieldDescription>
+                {current.type !== "select" && (
+                  <FieldGroup className="grid gap-4 sm:grid-cols-2">
+                    <Field>
+                      <FieldLabel htmlFor="egress-test-url">测速地址</FieldLabel>
+                      <Input
+                        id="egress-test-url"
+                        readOnly={readOnly}
+                        placeholder="留空用 gstatic generate_204"
+                        value={current.testUrl}
+                        onChange={(event) =>
+                          patch({ testUrl: event.target.value })
+                        }
+                      />
+                    </Field>
+                    {current.type === "url-test" && (
+                      <Field>
+                        <FieldLabel htmlFor="egress-tolerance">
+                          切换容差 (毫秒)
+                        </FieldLabel>
+                        <NumberInput
+                          id="egress-tolerance"
+                          readOnly={readOnly}
+                          min={0}
+                          integer
+                          value={current.tolerance}
+                          onValueChange={(tolerance) => patch({ tolerance })}
+                        />
+                        <FieldDescription>
+                          新节点要比当前快这么多才切换。
+                        </FieldDescription>
+                      </Field>
+                    )}
+                  </FieldGroup>
                 )}
-              </FieldSet>
-            </>
-          )}
 
-          {mode === "inherit" && inherited && (
-            <FieldDescription>
-              当前跟随默认：{inherited.type} ·{" "}
-              {inherited.members.map(memberLabel).join(" · ") || "（空）"}
-            </FieldDescription>
-          )}
-        </FieldGroup>
+                <FieldSet>
+                  <FieldLegend variant="label">成员</FieldLegend>
+                  <FieldDescription>
+                    顺序就是客户端里的排列顺序，支持拖拽或左右按钮调整；解析不到的成员会被自动跳过。
+                  </FieldDescription>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {current.members.map((member, index) => (
+                      <Badge
+                        key={`${member.kind}:${member.ref}:${index}`}
+                        variant={memberMissing(member) ? "destructive" : "secondary"}
+                        className={cn(
+                          readOnly ? undefined : "pl-1.5 pr-0.5",
+                          dragOverMemberIndex === index &&
+                            dragMemberIndex !== null &&
+                            dragMemberIndex !== index &&
+                            "ring-2 ring-primary",
+                        )}
+                        draggable={!readOnly}
+                        onDragStart={(event) => {
+                          if (readOnly) return;
+                          setDragMemberIndex(index);
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData("text/plain", String(index));
+                        }}
+                        onDragOver={(event) => {
+                          if (readOnly || dragMemberIndex === null) return;
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = "move";
+                          if (dragOverMemberIndex !== index)
+                            setDragOverMemberIndex(index);
+                        }}
+                        onDrop={(event) => {
+                          if (readOnly || dragMemberIndex === null) return;
+                          event.preventDefault();
+                          if (dragMemberIndex !== index) {
+                            patch({
+                              members: reorder(current.members, dragMemberIndex, index),
+                            });
+                          }
+                          setDragMemberIndex(null);
+                          setDragOverMemberIndex(null);
+                        }}
+                        onDragEnd={() => {
+                          setDragMemberIndex(null);
+                          setDragOverMemberIndex(null);
+                        }}
+                        title={
+                          memberMissing(member)
+                            ? "找不到这个成员，渲染时会跳过"
+                            : undefined
+                        }
+                      >
+                        {!readOnly && (
+                          <GripVerticalIcon className="size-3 shrink-0 cursor-grab text-muted-foreground" />
+                        )}
+                        {memberMissing(member) && (
+                          <TriangleAlertIcon data-icon="inline-start" />
+                        )}
+                        {memberLabel(member)}
+                        {!readOnly && (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              className="size-4"
+                              aria-label={`把成员 ${index + 1} 前移`}
+                              disabled={index === 0}
+                              onClick={() =>
+                                patch({ members: move(current.members, index, -1) })
+                              }
+                            >
+                              <ArrowLeftIcon />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              className="size-4"
+                              aria-label={`把成员 ${index + 1} 后移`}
+                              disabled={index === current.members.length - 1}
+                              onClick={() =>
+                                patch({ members: move(current.members, index, 1) })
+                              }
+                            >
+                              <ArrowRightIcon />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              className="size-4"
+                              aria-label={`移除成员 ${index + 1}`}
+                              onClick={() =>
+                                patch({
+                                  members: current.members.filter(
+                                    (_, i) => i !== index,
+                                  ),
+                                })
+                              }
+                            >
+                              <XIcon />
+                            </Button>
+                          </>
+                        )}
+                      </Badge>
+                    ))}
+                    {!readOnly && (
+                      <MemberPicker
+                        groups={groups}
+                        policies={policies.filter((p) => p.name !== policyName)}
+                        builtins={options.builtins}
+                        existingMembers={current.members}
+                        onPick={(member) =>
+                          patch({ members: [...current.members, member] })
+                        }
+                      />
+                    )}
+                  </div>
+                  {current.members.length === 0 && (
+                    <FieldDescription>
+                      成员为空的策略组会被渲染时丢弃，指向它的规则会落到兜底。
+                    </FieldDescription>
+                  )}
+                </FieldSet>
+              </>
+            )}
+
+            {mode === "inherit" && inherited && (
+              <FieldDescription>
+                当前跟随默认：{inherited.type} ·{" "}
+                {inherited.members.map(memberLabel).join(" · ") || "（空）"}
+              </FieldDescription>
+            )}
+          </FieldGroup>
+        </DialogBody>
 
         <DialogFooter>
           {readOnly ? (
             <Button onClick={onClose}>关闭</Button>
           ) : (
             <>
-              <Button variant="outline" onClick={onClose}>取消</Button>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                取消
+              </Button>
               <Button onClick={onConfirm}>确认</Button>
             </>
           )}
@@ -2225,84 +2617,207 @@ function MemberPicker({
   groups,
   policies,
   builtins,
+  existingMembers,
   onPick,
 }: {
   groups: NodeGroup[];
   policies: Policy[];
   builtins: string[];
+  existingMembers: EgressMember[];
   onPick: (member: EgressMember) => void;
 }) {
-  const pick = (kind: MemberKind, ref: string) => onPick({ kind, ref });
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const hasMember = (kind: MemberKind, ref: string) =>
+    existingMembers.some((member) => member.kind === kind && member.ref === ref);
+
+  const pick = (kind: MemberKind, ref: string) => {
+    if (hasMember(kind, ref)) return;
+    onPick({ kind, ref });
+    setOpen(false);
+    setSearch("");
+  };
+
+  const keyword = search.trim().toLocaleLowerCase("zh-CN");
+  const matches = (label: string) =>
+    !keyword || label.toLocaleLowerCase("zh-CN").includes(keyword);
+
+  const dynamicCandidates: { kind: MemberKind; ref: string; label: string }[] = [
+    { kind: "all-node-groups", ref: "", label: "全部节点组（按方案收窄）" },
+    { kind: "all-inbounds", ref: "", label: "全部入站" },
+  ];
+  const dynamicItems = dynamicCandidates.filter((item) => matches(item.label));
+
+  const filteredGroups = groups.filter((group) =>
+    matches(group.emoji ? `${group.emoji} ${group.name}` : group.name),
+  );
+  const filteredPolicies = policies.filter((policy) =>
+    matches(policy.icon ? `${policy.icon} ${policy.name}` : policy.name),
+  );
+  const filteredBuiltins = builtins
+    .map((builtin) => ({
+      builtin,
+      label: builtin === "DIRECT-V6" ? "DIRECT-V6（直连，IPv6 优先）" : builtin,
+    }))
+    .filter((item) => matches(item.label));
+
+  const hasAnyResult =
+    dynamicItems.length > 0 ||
+    filteredGroups.length > 0 ||
+    filteredPolicies.length > 0 ||
+    filteredBuiltins.length > 0;
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger render={<Button variant="outline" size="sm" />}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setSearch("");
+      }}
+    >
+      <PopoverTrigger render={<Button type="button" variant="outline" size="sm" />}>
         <PlusIcon data-icon="inline-start" />
         添加成员
         <ChevronDownIcon data-icon="inline-end" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="start"
-        className="max-h-80 min-w-56 overflow-y-auto"
-      >
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>动态展开</DropdownMenuLabel>
-          <DropdownMenuItem onClick={() => pick("all-node-groups", "")}>
-            全部节点组（按方案收窄）
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => pick("all-inbounds", "")}>
-            全部入站
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        {groups.length > 0 && (
-          <>
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>节点组</DropdownMenuLabel>
-              {groups.map((group) => (
-                <DropdownMenuItem
-                  key={group.id}
-                  onClick={() => pick("node-group", group.name)}
-                >
-                  {group.emoji ? `${group.emoji} ${group.name}` : group.name}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-          </>
-        )}
-        {policies.length > 0 && (
-          <>
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>分流策略</DropdownMenuLabel>
-              {policies.map((policy) => (
-                <DropdownMenuItem
-                  key={policy.name}
-                  onClick={() => pick("policy", policy.name)}
-                >
-                  {policy.icon ? `${policy.icon} ${policy.name}` : policy.name}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-          </>
-        )}
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>内置策略</DropdownMenuLabel>
-          {builtins.map((builtin) => (
-            <DropdownMenuItem
-              key={builtin}
-              onClick={() => pick("builtin", builtin)}
-            >
-              {builtin === "DIRECT-V6" ? "DIRECT-V6（直连，IPv6 优先）" : builtin}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 p-0">
+        <div className="border-b p-2">
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="搜索节点组、策略或内置…"
+            ariaLabel="搜索出口成员"
+            clearLabel="清除搜索"
+            className="sm:w-full"
+          />
+        </div>
+        <div className="max-h-72 overflow-y-auto p-1">
+          {!hasAnyResult ? (
+            <p className="px-2 py-4 text-center text-xs text-muted-foreground">
+              没有匹配的成员
+            </p>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {dynamicItems.length > 0 && (
+                <div>
+                  <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
+                    动态展开
+                  </div>
+                  {dynamicItems.map((item) => {
+                    const added = hasMember(item.kind, item.ref);
+                    return (
+                      <button
+                        key={item.kind}
+                        type="button"
+                        disabled={added}
+                        onClick={() => pick(item.kind, item.ref)}
+                        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+                      >
+                        <span className="truncate">{item.label}</span>
+                        {added && (
+                          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                            已添加
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {filteredGroups.length > 0 && (
+                <div className="border-t pt-1">
+                  <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
+                    节点组
+                  </div>
+                  {filteredGroups.map((group) => {
+                    const added = hasMember("node-group", group.name);
+                    const label = group.emoji ? `${group.emoji} ${group.name}` : group.name;
+                    return (
+                      <button
+                        key={group.id}
+                        type="button"
+                        disabled={added}
+                        onClick={() => pick("node-group", group.name)}
+                        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+                      >
+                        <span className="truncate">{label}</span>
+                        {added && (
+                          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                            已添加
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {filteredPolicies.length > 0 && (
+                <div className="border-t pt-1">
+                  <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
+                    分流策略
+                  </div>
+                  {filteredPolicies.map((policy) => {
+                    const added = hasMember("policy", policy.name);
+                    const label = policy.icon ? `${policy.icon} ${policy.name}` : policy.name;
+                    return (
+                      <button
+                        key={policy.name}
+                        type="button"
+                        disabled={added}
+                        onClick={() => pick("policy", policy.name)}
+                        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+                      >
+                        <span className="truncate">{label}</span>
+                        {added && (
+                          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                            已添加
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {filteredBuiltins.length > 0 && (
+                <div className="border-t pt-1">
+                  <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
+                    内置策略
+                  </div>
+                  {filteredBuiltins.map((item) => {
+                    const added = hasMember("builtin", item.builtin);
+                    return (
+                      <button
+                        key={item.builtin}
+                        type="button"
+                        disabled={added}
+                        onClick={() => pick("builtin", item.builtin)}
+                        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+                      >
+                        <span className="truncate">{item.label}</span>
+                        {added && (
+                          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                            已添加
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
 function ProfileDialog({
+  initialDraft,
   draft,
   saving,
   groups,
@@ -2310,6 +2825,7 @@ function ProfileDialog({
   onClose,
   onSave,
 }: {
+  initialDraft: ProfileDraft | null;
   draft: ProfileDraft | null;
   saving: boolean;
   groups: NodeGroup[];
@@ -2322,11 +2838,15 @@ function ProfileDialog({
   useEffect(() => {
     if (!open) setAttempted(false);
   }, [open]);
+  const dirty = Boolean(
+    draft && initialDraft && JSON.stringify(draft) !== JSON.stringify(initialDraft),
+  );
+  const onOpenChange = useDirtyDialog(dirty, saving, onClose);
   const nameInvalid = attempted && !draft?.name.trim();
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && !saving && onClose()}>
-      <DialogContent className="sm:max-w-xl" showCloseButton={!saving}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex flex-col overflow-hidden sm:max-w-xl" showCloseButton={!saving}>
         <form
           className="contents"
           noValidate
@@ -2345,108 +2865,115 @@ function ProfileDialog({
               可用节点组决定这个方案的用户能连上哪些入站。保存后会立刻同步到相关面板。
             </DialogDescription>
           </DialogHeader>
-          {draft && (
-            <FieldSet disabled={saving}>
-              <FieldGroup>
-                <Field data-invalid={nameInvalid || undefined}>
-                  <FieldLabel htmlFor="profile-name">名称</FieldLabel>
-                  <Input
-                    id="profile-name"
-                    required
-                    placeholder="VIP"
-                    value={draft.name}
-                    aria-invalid={nameInvalid || undefined}
-                    onChange={(event) =>
-                      onChange({ ...draft, name: event.target.value })
-                    }
-                  />
-                  {nameInvalid && <FieldError>请输入方案名称。</FieldError>}
-                </Field>
+          <DialogBody>
+            {draft && (
+              <FieldSet disabled={saving}>
+                <FieldGroup>
+                  <Field data-invalid={nameInvalid || undefined}>
+                    <FieldLabel htmlFor="profile-name">名称</FieldLabel>
+                    <Input
+                      id="profile-name"
+                      required
+                      placeholder="VIP"
+                      value={draft.name}
+                      aria-invalid={nameInvalid || undefined}
+                      onChange={(event) =>
+                        onChange({ ...draft, name: event.target.value })
+                      }
+                    />
+                    {nameInvalid && <FieldError>请输入方案名称。</FieldError>}
+                  </Field>
 
-                <Field orientation="horizontal">
-                  <FieldLabel htmlFor="profile-all">包含全部节点组</FieldLabel>
-                  <Switch
-                    id="profile-all"
-                    checked={draft.allGroups}
-                    onCheckedChange={(allGroups) =>
-                      onChange({ ...draft, allGroups })
-                    }
-                  />
-                </Field>
+                  <Field orientation="horizontal">
+                    <FieldLabel htmlFor="profile-all">包含全部节点组</FieldLabel>
+                    <Switch
+                      id="profile-all"
+                      checked={draft.allGroups}
+                      onCheckedChange={(allGroups) =>
+                        onChange({ ...draft, allGroups })
+                      }
+                    />
+                  </Field>
 
-                {!draft.allGroups && (
-                  <FieldSet>
-                    <FieldLegend variant="label">
-                      可用节点组（已选 {draft.groupIds.length} 个）
-                    </FieldLegend>
-                    <ScrollArea className="h-56 rounded-lg border">
-                      <FieldGroup className="gap-2 p-3">
-                        {groups.length === 0 ? (
-                          <FieldDescription>
-                            还没有节点组，先去「节点组」页建一个。
-                          </FieldDescription>
-                        ) : (
-                          groups.map((group) => (
-                            <Field key={group.id} orientation="horizontal">
-                              <Checkbox
-                                id={`profile-group-${group.id}`}
-                                checked={draft.groupIds.includes(group.id)}
-                                onCheckedChange={() =>
-                                  onChange({
-                                    ...draft,
-                                    groupIds: draft.groupIds.includes(group.id)
-                                      ? draft.groupIds.filter(
-                                          (id) => id !== group.id,
-                                        )
-                                      : [...draft.groupIds, group.id],
-                                  })
-                                }
-                              />
-                              <FieldLabel htmlFor={`profile-group-${group.id}`}>
-                                <span>
-                                  {group.emoji
-                                    ? `${group.emoji} ${group.name}`
-                                    : group.name}
-                                </span>
-                                <span className="text-xs text-muted-foreground">
-                                  {group.usableInbounds} 个入站
-                                </span>
-                                {!group.enabled && (
-                                  <StatusBadge tone="idle">停用</StatusBadge>
-                                )}
-                              </FieldLabel>
-                            </Field>
-                          ))
-                        )}
-                      </FieldGroup>
-                    </ScrollArea>
-                  </FieldSet>
-                )}
+                  {!draft.allGroups && (
+                    <FieldSet>
+                      <FieldLegend variant="label">
+                        可用节点组（已选 {draft.groupIds.length} 个）
+                      </FieldLegend>
+                      <ScrollArea className="h-56 rounded-lg border">
+                        <FieldGroup className="gap-2 p-3">
+                          {groups.length === 0 ? (
+                            <FieldDescription>
+                              还没有节点组，先去「节点组」页建一个。
+                            </FieldDescription>
+                          ) : (
+                            groups.map((group) => (
+                              <Field key={group.id} orientation="horizontal">
+                                <Checkbox
+                                  id={`profile-group-${group.id}`}
+                                  checked={draft.groupIds.includes(group.id)}
+                                  onCheckedChange={() =>
+                                    onChange({
+                                      ...draft,
+                                      groupIds: draft.groupIds.includes(group.id)
+                                        ? draft.groupIds.filter(
+                                            (id) => id !== group.id,
+                                          )
+                                        : [...draft.groupIds, group.id],
+                                    })
+                                  }
+                                />
+                                <FieldLabel htmlFor={`profile-group-${group.id}`}>
+                                  <span>
+                                    {group.emoji
+                                      ? `${group.emoji} ${group.name}`
+                                      : group.name}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground">
+                                    {group.usableInbounds} 个入站
+                                  </span>
+                                  {!group.enabled && (
+                                    <StatusBadge tone="idle">停用</StatusBadge>
+                                  )}
+                                </FieldLabel>
+                              </Field>
+                            ))
+                          )}
+                        </FieldGroup>
+                      </ScrollArea>
+                    </FieldSet>
+                  )}
 
-                <Field orientation="horizontal">
-                  <FieldLabel htmlFor="profile-enabled">启用</FieldLabel>
-                  <Switch
-                    id="profile-enabled"
-                    checked={draft.enabled}
-                    onCheckedChange={(enabled) => onChange({ ...draft, enabled })}
-                  />
-                </Field>
+                  <Field orientation="horizontal">
+                    <FieldLabel htmlFor="profile-enabled">启用</FieldLabel>
+                    <Switch
+                      id="profile-enabled"
+                      checked={draft.enabled}
+                      onCheckedChange={(enabled) => onChange({ ...draft, enabled })}
+                    />
+                  </Field>
 
-                <Field>
-                  <FieldLabel htmlFor="profile-remark">备注</FieldLabel>
-                  <Input
-                    id="profile-remark"
-                    value={draft.remark}
-                    onChange={(event) =>
-                      onChange({ ...draft, remark: event.target.value })
-                    }
-                  />
-                </Field>
-              </FieldGroup>
-            </FieldSet>
-          )}
+                  <Field>
+                    <FieldLabel htmlFor="profile-remark">备注</FieldLabel>
+                    <Input
+                      id="profile-remark"
+                      value={draft.remark}
+                      onChange={(event) =>
+                        onChange({ ...draft, remark: event.target.value })
+                      }
+                    />
+                  </Field>
+                </FieldGroup>
+              </FieldSet>
+            )}
+          </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="outline" disabled={saving} onClick={onClose}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={saving}
+              onClick={() => onOpenChange(false)}
+            >
               取消
             </Button>
             <Button type="submit" disabled={saving}>

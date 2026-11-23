@@ -1,6 +1,22 @@
-import { type FormEvent, useCallback, useEffect, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { CloudUploadIcon, EyeIcon, FileCogIcon, HistoryIcon, LayersIcon, LayoutTemplateIcon, MousePointerClickIcon, RefreshCwIcon, SaveIcon, ServerIcon, ShieldCheckIcon, TriangleAlertIcon, UnlinkIcon } from 'lucide-react'
+import {
+  CheckIcon,
+  CloudUploadIcon,
+  EyeIcon,
+  FileCogIcon,
+  HistoryIcon,
+  LayersIcon,
+  LayoutTemplateIcon,
+  MousePointerClickIcon,
+  RefreshCwIcon,
+  SaveIcon,
+  SearchXIcon,
+  ServerIcon,
+  ShieldCheckIcon,
+  TriangleAlertIcon,
+  UnlinkIcon,
+} from 'lucide-react'
 
 import { api, type Inbound, type InboundDeployment } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -8,11 +24,21 @@ import { ChangesTable, ConfigEditor, type ConfigChange, type Parameters } from '
 import { FieldsSkeleton, ListSkeleton, LoadErrorAlert, RefreshButton } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
 import { ConfigStateBadge, StatusBadge } from '@/components/status-badge'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { StickySaveBar } from '@/components/sticky-save-bar'
+import { SearchInput } from '@/components/table-toolbar'
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
@@ -20,9 +46,10 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { confirmUnsavedNavigation, useUnsavedGuard } from '@/hooks/use-unsaved-guard'
+import { navigateHash, useHashLocation } from '@/hooks/use-hash-route'
+import { requestUnsavedConfirmation, useDirtyDialog, useUnsavedGuard } from '@/hooks/use-unsaved-guard'
 import { errorMessage, formatTime } from '@/lib/format'
-import { hashID, inboundLabel as label, inboundTitle } from '@/lib/inbound'
+import { inboundLabel as label, inboundTitle } from '@/lib/inbound'
 import { useSession } from '@/lib/session'
 import { reportSyncError } from '@/lib/sync'
 
@@ -43,31 +70,49 @@ type Preview = {
   targetRevision: string
 }
 
+type ListFilter = 'all' | 'managed' | 'issues'
+
+const LIST_FILTER_ITEMS: Array<{ value: ListFilter; label: string }> = [
+  { value: 'all', label: '全部入站' },
+  { value: 'managed', label: '已接管' },
+  { value: 'issues', label: '需处理' },
+]
+
 const modeLabels: Record<InboundDeployment['mode'], string> = { update: '更新', create: '新建', rebind: '重新绑定' }
 
 export function InboundConfigsPage() {
   const { readOnly } = useSession()
+  const { params } = useHashLocation()
+  const selectedID = Number(params.get('id')) || null
+
   const [inbounds, setInbounds] = useState<Inbound[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
-  const [selectedID, setSelectedID] = useState<number | null>(hashID)
+  const [listQuery, setListQuery] = useState('')
+  const [listFilter, setListFilter] = useState<ListFilter>('all')
   const [detail, setDetail] = useState<Detail | null>(null)
   const [draft, setDraft] = useState<Parameters>({})
   const [invalid, setInvalid] = useState(false)
   const [reveal, setReveal] = useState(false)
   const [busy, setBusy] = useState(false)
   const [releasing, setReleasing] = useState(false)
+  const [adoptingPanel, setAdoptingPanel] = useState(false)
   const [templateName, setTemplateName] = useState<string | null>(null)
+  const [initialTemplateName, setInitialTemplateName] = useState('')
   const [deploying, setDeploying] = useState(false)
   const [rebindID, setRebindID] = useState(0)
   const [preview, setPreview] = useState<Preview | null>(null)
   const [deployError, setDeployError] = useState('')
   const [detailError, setDetailError] = useState('')
-  const [pending, setPending] = useState<'save' | 'template' | 'preview' | 'deploy' | 'takeover' | null>(null)
+  const [pending, setPending] = useState<'save' | 'template' | 'preview' | 'deploy' | 'takeover' | 'adoptPanel' | null>(null)
 
   const selected = inbounds.find((inbound) => inbound.id === selectedID) ?? null
   const dirty = !!detail?.parameters && (invalid || JSON.stringify(draft) !== JSON.stringify(detail.parameters))
   useUnsavedGuard(dirty)
+
+  const templateDirty = templateName !== null && templateName !== initialTemplateName
+  const closeTemplateDialog = useCallback(() => setTemplateName(null), [])
+  const onTemplateOpenChange = useDirtyDialog(templateDirty, pending === 'template', closeTemplateDialog)
 
   const loadList = useCallback(async () => {
     setLoading(true)
@@ -119,16 +164,9 @@ export function InboundConfigsPage() {
     if (selectedID) void loadDetail(selectedID)
   }, [selectedID, loadDetail])
 
-  useEffect(() => {
-    const onHash = () => setSelectedID(hashID())
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [])
-
   const select = (id: number) => {
-    if (id === selectedID || !confirmUnsavedNavigation()) return
-    window.history.replaceState(window.history.state, '', `#/inbound-configs?id=${id}`)
-    setSelectedID(id)
+    if (id === selectedID) return
+    void navigateHash(`#/inbound-configs?id=${id}`)
   }
 
   // Every mutation returns the fresh detail; the list carries the state badges.
@@ -153,8 +191,10 @@ export function InboundConfigsPage() {
     mutate(() => api.post<Detail>(`/inbounds/${id}/config`, deployment ? { deploymentId: deployment.id } : {}), '已接管入站配置', 'takeover').catch(() => undefined)
   const save = () =>
     mutate(() => api.put<Detail>(`/inbounds/${id}/config`, { revision: detail?.config?.revision, parameters: draft }), '配置已保存，下发后生效', 'save').catch(() => undefined)
-  const restore = (deployment: InboundDeployment) => {
-    if (!confirmUnsavedNavigation()) return
+  const adoptPanelConfig = () =>
+    mutate(() => api.put<Detail>(`/inbounds/${id}/config`, { revision: detail?.config?.revision, adoptPanel: true }), '已采用面板当前配置并同步', 'adoptPanel')
+  const restore = async (deployment: InboundDeployment) => {
+    if (dirty && !(await requestUnsavedConfirmation('载入备份会覆盖尚未保存的编辑。确定继续？'))) return
     void mutate(() => api.put<Detail>(`/inbounds/${id}/config`, { revision: detail?.config?.revision, deploymentId: deployment.id }), '已载入下发前的备份，预览后下发即可恢复').catch(() => undefined)
   }
   // Rethrows so ConfirmDialog stays open on failure.
@@ -169,7 +209,7 @@ export function InboundConfigsPage() {
       const result = await api.post<{ template: { id: number } }>('/inbound-templates', { name: templateName, inboundId: id })
       toast.success('已另存为模板，节点相关字段已去除')
       setTemplateName(null)
-      window.location.hash = `#/inbound-templates?id=${result.template.id}`
+      void navigateHash(`#/inbound-templates?id=${result.template.id}`)
     } catch (err) {
       toast.error(errorMessage(err, '保存模板失败'))
     } finally {
@@ -239,7 +279,19 @@ export function InboundConfigsPage() {
   // conflict on create is then the hint that it was renumbered.
   const chooseTarget = !!selected?.missing || rebindID !== 0 || preview?.mode === 'create' || deployError.includes('重新绑定')
 
-  const panels = [...new Set(inbounds.map((row) => row.panelName))]
+  const filteredInbounds = useMemo(() => {
+    const keyword = listQuery.trim().toLocaleLowerCase('zh-CN')
+    return inbounds.filter((row) => {
+      if (listFilter === 'managed' && !row.configState) return false
+      if (listFilter === 'issues' && !['pending', 'drifted', 'missing'].includes(row.configState)) return false
+      if (!keyword) return true
+      return [inboundTitle(row), row.panelName, String(row.remoteId), String(row.port), row.inboundTag].some((text) =>
+        text.toLocaleLowerCase('zh-CN').includes(keyword),
+      )
+    })
+  }, [inbounds, listQuery, listFilter])
+
+  const panels = useMemo(() => [...new Set(filteredInbounds.map((row) => row.panelName))], [filteredInbounds])
   const managed = !!detail?.config
 
   const firstLoad = loading && inbounds.length === 0
@@ -254,7 +306,7 @@ export function InboundConfigsPage() {
           <RefreshButton loading={loading} disabled={busy} onClick={refresh} />
         </CardAction>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
+      <CardContent className="flex flex-col gap-3">
         {loadError && <LoadErrorAlert title="入站加载失败" message={loadError} retrying={loading} onRetry={() => void loadList()} />}
         {firstLoad ? (
           <ListSkeleton />
@@ -279,27 +331,68 @@ export function InboundConfigsPage() {
             </Empty>
           )
         ) : (
-          <nav className="flex min-w-0 flex-col gap-4" aria-label="入站">
-            {panels.map((panelName) => (
-              <div key={panelName} className="flex min-w-0 flex-col gap-1">
-                <span className="px-2 text-xs text-muted-foreground">{panelName}</span>
-                {inbounds.filter((row) => row.panelName === panelName).map((row) => (
-                  <Button
-                    key={row.id}
-                    type="button"
-                    variant={row.id === selectedID ? 'secondary' : 'ghost'}
-                    className="h-auto w-full justify-between gap-2 py-2"
-                    aria-current={row.id === selectedID ? 'page' : undefined}
-                    disabled={busy}
-                    onClick={() => select(row.id)}
-                  >
-                    <span className="min-w-0 truncate">{inboundTitle(row)} · #{row.remoteId}</span>
-                    {(row.configState || row.missing) && <ConfigStateBadge state={row.configState} />}
-                  </Button>
+          <>
+            <div className="flex flex-col gap-2">
+              <SearchInput
+                value={listQuery}
+                onChange={setListQuery}
+                placeholder="搜索入站或面板…"
+                ariaLabel="搜索入站列表"
+                className="sm:w-full"
+              />
+              <Select
+                items={LIST_FILTER_ITEMS}
+                value={listFilter}
+                onValueChange={(value) => setListFilter((value as ListFilter) || 'all')}
+              >
+                <SelectTrigger aria-label="筛选入站状态" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {LIST_FILTER_ITEMS.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+            {filteredInbounds.length === 0 ? (
+              <Empty className="py-6">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <SearchXIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>没有匹配的入站</EmptyTitle>
+                  <EmptyDescription>尝试调整搜索词或筛选状态。</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              <nav className="flex min-w-0 flex-col gap-4" aria-label="入站">
+                {panels.map((panelName) => (
+                  <div key={panelName} className="flex min-w-0 flex-col gap-1">
+                    <span className="px-2 text-xs text-muted-foreground">{panelName}</span>
+                    {filteredInbounds.filter((row) => row.panelName === panelName).map((row) => (
+                      <Button
+                        key={row.id}
+                        type="button"
+                        variant={row.id === selectedID ? 'secondary' : 'ghost'}
+                        className="h-auto w-full justify-between gap-2 py-2"
+                        aria-current={row.id === selectedID ? 'page' : undefined}
+                        disabled={busy}
+                        onClick={() => select(row.id)}
+                      >
+                        <span className="min-w-0 truncate">{inboundTitle(row)} · #{row.remoteId}</span>
+                        {(row.configState || row.missing) && <ConfigStateBadge state={row.configState} />}
+                      </Button>
+                    ))}
+                  </div>
                 ))}
-              </div>
-            ))}
-          </nav>
+              </nav>
+            )}
+          </>
         )}
       </CardContent>
     </Card>
@@ -368,7 +461,17 @@ export function InboundConfigsPage() {
                           <UnlinkIcon data-icon="inline-start" />
                           释放接管
                         </Button>
-                        <Button type="button" variant="outline" size="sm" disabled={busy || dirty} onClick={() => setTemplateName(`${label(selected)} 模板`)}>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={busy || dirty}
+                          onClick={() => {
+                            const nextName = `${label(selected)} 模板`
+                            setInitialTemplateName(nextName)
+                            setTemplateName(nextName)
+                          }}
+                        >
                           <LayoutTemplateIcon data-icon="inline-start" />
                           另存为模板
                         </Button>
@@ -389,7 +492,23 @@ export function InboundConfigsPage() {
                       <Alert variant="destructive">
                         <TriangleAlertIcon />
                         <AlertTitle>面板配置在 FireX 之外被修改</AlertTitle>
-                        <AlertDescription>预览并下发可恢复为接管配置。若面板上的改动是有意的，可先释放接管再重新接管当前配置。</AlertDescription>
+                        <AlertDescription>
+                          预览并下发可恢复为 FireX 的接管配置。若面板上的改动是有意的，可直接采用面板当前配置。
+                        </AlertDescription>
+                        {!readOnly && (
+                          <AlertAction>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={busy || dirty}
+                              onClick={() => setAdoptingPanel(true)}
+                            >
+                              <CheckIcon data-icon="inline-start" />
+                              采用面板配置
+                            </Button>
+                          </AlertAction>
+                        )}
                       </Alert>
                     )}
                     {detail.state === 'missing' && (
@@ -407,7 +526,15 @@ export function InboundConfigsPage() {
                             <Switch id="reveal-config" checked={reveal} onCheckedChange={setReveal} />
                           </Field>
                         )}
-                        <ConfigEditor key={selected.id} parameters={draft} onChange={setDraft} onInvalidChange={setInvalid} disabled={readOnly || busy} reveal={reveal} />
+                        <ConfigEditor
+                          key={selected.id}
+                          parameters={draft}
+                          onChange={setDraft}
+                          onInvalidChange={setInvalid}
+                          disabled={readOnly || busy}
+                          reveal={reveal}
+                          onRequestReveal={() => setReveal(true)}
+                        />
                       </FieldGroup>
                     ) : (
                       <Empty className="border">
@@ -476,7 +603,7 @@ export function InboundConfigsPage() {
                               <TableCell>
                                 <div className="flex justify-end">
                                   {!readOnly && row.hasBackup && (
-                                    <Button type="button" variant="outline" size="sm" disabled={busy || dirty} onClick={() => (managed ? restore(row) : void takeOver(row))}>
+                                    <Button type="button" variant="outline" size="sm" disabled={busy || dirty} onClick={() => void (managed ? restore(row) : takeOver(row))}>
                                       <HistoryIcon data-icon="inline-start" />
                                       {managed ? '载入下发前配置' : '从此备份接管'}
                                     </Button>
@@ -490,6 +617,19 @@ export function InboundConfigsPage() {
                     )}
                   </CardContent>
                 </Card>
+
+                <StickySaveBar
+                  visible={managed && !readOnly && dirty}
+                  message={invalid ? '存在无效的 JSON 编辑，请先修正后再保存' : '入站配置有未保存的改动'}
+                  saving={pending === 'save'}
+                  disabled={busy || invalid}
+                  saveLabel="保存配置"
+                  onDiscard={() => {
+                    setDraft(detail.parameters ?? {})
+                    setInvalid(false)
+                  }}
+                  onSave={() => void save()}
+                />
               </>
             )}
           </div>
@@ -497,67 +637,69 @@ export function InboundConfigsPage() {
       )}
 
       <Dialog open={deploying} onOpenChange={(open) => !busy && setDeploying(open)}>
-        <DialogContent className="sm:max-w-3xl">
+        <DialogContent className="flex flex-col overflow-hidden sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>下发入站配置</DialogTitle>
             <DialogDescription>
               {selected && `${label(selected)} · ${selected.panelName}`}。只写入一次，随后读回验证；目标的客户端与流量计数保持不变。
             </DialogDescription>
           </DialogHeader>
-          {chooseTarget && (
-            <Field data-disabled={busy || undefined}>
-              <FieldLabel htmlFor="deploy-target">面板目标</FieldLabel>
-              <Select
-                items={[{ value: 0, label: '在面板上重新创建' }, ...rebindCandidates.map((row) => ({ value: row.id, label: candidateLabel(row) }))]}
-                value={rebindID}
-                disabled={busy}
-                onValueChange={(value) => {
-                  setRebindID(value ?? 0)
-                  void runPreview(value ?? 0)
-                }}
-              >
-                <SelectTrigger id="deploy-target" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value={0}>在面板上重新创建</SelectItem>
-                    {rebindCandidates.map((row) => (
-                      <SelectItem key={row.id} value={row.id}>{candidateLabel(row)}</SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <FieldDescription>面板数据库被覆盖后，同一入站可能换了编号并被发现为新入站。绑定会合并那条记录，并写回接管配置。</FieldDescription>
-            </Field>
-          )}
-          {deployError && (
-            <Alert variant="destructive">
-              <TriangleAlertIcon />
-              <AlertTitle>需要核对</AlertTitle>
-              <AlertDescription>{deployError}</AlertDescription>
-            </Alert>
-          )}
-          {pending === 'preview' && <FieldsSkeleton fields={3} />}
-          {preview && (
-            <div className="flex min-w-0 flex-col gap-4">
-              <Alert>
-                <CloudUploadIcon />
-                <AlertTitle>
-                  {preview.panelName} · {modeLabels[preview.mode]}{preview.remoteId ? `面板入站 #${preview.remoteId}` : '面板入站'}
-                </AlertTitle>
-                <AlertDescription className="break-all">{preview.baseUrl}</AlertDescription>
+          <DialogBody className="flex flex-col gap-4">
+            {chooseTarget && (
+              <Field data-disabled={busy || undefined}>
+                <FieldLabel htmlFor="deploy-target">面板目标</FieldLabel>
+                <Select
+                  items={[{ value: 0, label: '在面板上重新创建' }, ...rebindCandidates.map((row) => ({ value: row.id, label: candidateLabel(row) }))]}
+                  value={rebindID}
+                  disabled={busy}
+                  onValueChange={(value) => {
+                    setRebindID(value ?? 0)
+                    void runPreview(value ?? 0)
+                  }}
+                >
+                  <SelectTrigger id="deploy-target" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={0}>在面板上重新创建</SelectItem>
+                      {rebindCandidates.map((row) => (
+                        <SelectItem key={row.id} value={row.id}>{candidateLabel(row)}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>面板数据库被覆盖后，同一入站可能换了编号并被发现为新入站。绑定会合并那条记录，并写回接管配置。</FieldDescription>
+              </Field>
+            )}
+            {deployError && (
+              <Alert variant="destructive">
+                <TriangleAlertIcon />
+                <AlertTitle>需要核对</AlertTitle>
+                <AlertDescription>{deployError}</AlertDescription>
               </Alert>
-              {preview.warnings.map((warning) => (
-                <Alert key={warning} variant="warning">
-                  <TriangleAlertIcon />
-                  <AlertTitle>REALITY 回落限速</AlertTitle>
-                  <AlertDescription>{warning}</AlertDescription>
+            )}
+            {pending === 'preview' && <FieldsSkeleton fields={3} />}
+            {preview && (
+              <div className="flex min-w-0 flex-col gap-4">
+                <Alert>
+                  <CloudUploadIcon />
+                  <AlertTitle>
+                    {preview.panelName} · {modeLabels[preview.mode]}{preview.remoteId ? `面板入站 #${preview.remoteId}` : '面板入站'}
+                  </AlertTitle>
+                  <AlertDescription className="break-all">{preview.baseUrl}</AlertDescription>
                 </Alert>
-              ))}
-              <ChangesTable changes={preview.changes} reveal={reveal} />
-            </div>
-          )}
+                {preview.warnings.map((warning) => (
+                  <Alert key={warning} variant="warning">
+                    <TriangleAlertIcon />
+                    <AlertTitle>REALITY 回落限速</AlertTitle>
+                    <AlertDescription>{warning}</AlertDescription>
+                  </Alert>
+                ))}
+                <ChangesTable changes={preview.changes} reveal={reveal} />
+              </div>
+            )}
+          </DialogBody>
           <DialogFooter>
             <Button type="button" variant="outline" disabled={busy} onClick={() => setDeploying(false)}>取消</Button>
             <Button type="button" variant="outline" disabled={busy} onClick={() => void runPreview(rebindID)}>
@@ -572,20 +714,22 @@ export function InboundConfigsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={templateName !== null} onOpenChange={(open) => !busy && !open && setTemplateName(null)}>
-        <DialogContent>
+      <Dialog open={templateName !== null} onOpenChange={onTemplateOpenChange}>
+        <DialogContent className="flex flex-col overflow-hidden sm:max-w-md">
           <form className="contents" noValidate onSubmit={saveTemplate}>
             <DialogHeader>
               <DialogTitle>另存为模板</DialogTitle>
               <DialogDescription>模板保留协议、加密、密钥、REALITY 目标与回落限速，去除监听地址、端口、PROXY 与回落路由等节点字段。</DialogDescription>
             </DialogHeader>
-            <FieldGroup>
-              <Field data-invalid={!templateName?.trim() || undefined} data-disabled={busy || undefined}>
-                <FieldLabel htmlFor="template-name">模板名称</FieldLabel>
-                <Input id="template-name" value={templateName ?? ''} disabled={busy} aria-invalid={!templateName?.trim() || undefined} onChange={(event) => setTemplateName(event.target.value)} />
-                {!templateName?.trim() && <FieldError>请输入模板名称。</FieldError>}
-              </Field>
-            </FieldGroup>
+            <DialogBody>
+              <FieldGroup>
+                <Field data-invalid={!templateName?.trim() || undefined} data-disabled={busy || undefined}>
+                  <FieldLabel htmlFor="template-name">模板名称</FieldLabel>
+                  <Input id="template-name" value={templateName ?? ''} disabled={busy} aria-invalid={!templateName?.trim() || undefined} onChange={(event) => setTemplateName(event.target.value)} />
+                  {!templateName?.trim() && <FieldError>请输入模板名称。</FieldError>}
+                </Field>
+              </FieldGroup>
+            </DialogBody>
             <DialogFooter>
               <Button type="button" variant="outline" disabled={busy} onClick={() => setTemplateName(null)}>取消</Button>
               <Button type="submit" disabled={busy || !templateName?.trim()}>
@@ -604,6 +748,15 @@ export function InboundConfigsPage() {
         description="FireX 将不再保存此入站的配置，也不再报告面板偏离。面板本身不会改动，下发记录会保留。"
         confirmLabel="释放接管"
         onConfirm={release}
+      />
+
+      <ConfirmDialog
+        open={adoptingPanel}
+        onOpenChange={setAdoptingPanel}
+        title="采用面板当前配置？"
+        description="将用最近一次从面板同步到的配置覆盖 FireX 当前保存的接管配置，并立即标记为已同步。"
+        confirmLabel="采用配置"
+        onConfirm={adoptPanelConfig}
       />
     </div>
   )

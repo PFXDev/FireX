@@ -1,8 +1,10 @@
-import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   BotIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CircleDashedIcon,
   CopyIcon,
   GitMergeIcon,
@@ -26,6 +28,7 @@ import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader,
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -38,6 +41,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+import { usePageVisible } from '@/hooks/use-page-visible'
 import { reportSyncError } from '@/lib/sync'
 import { copyText, errorMessage, formatTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -55,6 +59,7 @@ const SECTION_LABEL: Record<string, string> = {
   inbounds: '入站',
   inboundTemplates: '入站模板',
   nodeGroups: '节点组',
+  externalSubscriptions: '外部订阅',
   profiles: '分流方案',
   policies: '分流策略',
   egresses: '出口',
@@ -121,26 +126,41 @@ export function AgentPage() {
 
   // Poll while the agent can still act: it may read, submit or resubmit at any
   // moment, and the page has to follow without a reload.
+  const visible = usePageVisible()
+  const [, setTimeTick] = useState(0)
   const submissionsRef = useRef(0)
   useEffect(() => {
     submissionsRef.current = session?.submissions ?? 0
   }, [session?.submissions])
   const liveId = session?.live ? session.id : null
   useEffect(() => {
-    if (liveId === null) return
-    const timer = window.setInterval(async () => {
+    if (liveId === null || !visible) return
+    let cancelled = false
+    const poll = async () => {
       try {
         const res = await api.get<{ session: AgentSession }>(`/agent-sessions/${liveId}`)
-        if (res.session.state === 'submitted' && res.session.submissions > submissionsRef.current && submissionsRef.current > 0) {
+        if (cancelled) return
+        if (
+          res.session.state === 'submitted' &&
+          res.session.submissions > submissionsRef.current &&
+          submissionsRef.current > 0
+        ) {
           toast.info('agent 提交了新版本，差异已更新')
         }
         adopt(res.session)
       } catch {
         // A transient failure is retried on the next tick.
       }
-    }, POLL_MS)
-    return () => window.clearInterval(timer)
-  }, [liveId, adopt])
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), POLL_MS)
+    const tickTimer = window.setInterval(() => setTimeTick((tick) => tick + 1), 30000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      window.clearInterval(tickTimer)
+    }
+  }, [liveId, visible, adopt])
 
   return (
     <div className="flex flex-col gap-6">
@@ -400,17 +420,37 @@ function FieldValue({ value, side }: { value: unknown; side: 'before' | 'after' 
   return <CodeBlock className={cn('max-h-48', tone)}>{text}</CodeBlock>
 }
 
-function ChangeRow({ change }: { change: SnapshotChange }) {
+function ChangeRow({
+  change,
+  expanded = true,
+  onToggle,
+}: {
+  change: SnapshotChange
+  expanded?: boolean
+  onToggle?: () => void
+}) {
+  const hasFields = Boolean(change.fields && change.fields.length > 0)
   return (
     <li className="flex flex-col gap-2 rounded-lg border p-3">
       <div className="flex flex-wrap items-center gap-2">
+        {hasFields && onToggle && (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={expanded ? `折叠 ${change.key} 字段变更` : `展开 ${change.key} 字段变更`}
+            className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-ring"
+          >
+            {expanded ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
+          </button>
+        )}
         <StatusBadge tone={ACTION_TONE[change.action]}>{ACTION_LABEL[change.action]}</StatusBadge>
         <span className="text-xs text-muted-foreground">{SECTION_LABEL[change.section] ?? change.section}</span>
         <span className="font-medium break-all">{change.key}</span>
       </div>
-      {change.fields && change.fields.length > 0 && (
+      {hasFields && expanded && (
         <dl className="flex flex-col gap-1.5">
-          {change.fields.map((field) => (
+          {change.fields!.map((field) => (
             <div key={field.path} className="grid items-start gap-1 sm:grid-cols-[10rem_1fr]">
               <dt className="pt-0.5">
                 <CodeText>{field.path}</CodeText>
@@ -425,6 +465,114 @@ function ChangeRow({ change }: { change: SnapshotChange }) {
         </dl>
       )}
     </li>
+  )
+}
+
+function ChangesDiffSection({
+  title,
+  changes,
+}: {
+  title: string
+  changes: SnapshotChange[]
+}) {
+  const [sectionFilter, setSectionFilter] = useState<string>('all')
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
+
+  const sectionCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const change of changes) {
+      counts.set(change.section, (counts.get(change.section) ?? 0) + 1)
+    }
+    return [...counts.entries()]
+  }, [changes])
+
+  const activeSection =
+    sectionFilter === 'all' || sectionCounts.some(([section]) => section === sectionFilter)
+      ? sectionFilter
+      : 'all'
+
+  const visibleChanges = useMemo(
+    () => (activeSection === 'all' ? changes : changes.filter((c) => c.section === activeSection)),
+    [activeSection, changes],
+  )
+
+  const expandableKeys = useMemo(
+    () =>
+      visibleChanges
+        .filter((c) => c.fields && c.fields.length > 0)
+        .map((c) => `${c.section}/${c.key}`),
+    [visibleChanges],
+  )
+  const allCollapsed = expandableKeys.length > 0 && expandableKeys.every((key) => collapsed.has(key))
+
+  const toggleAll = () => {
+    setCollapsed((current) => {
+      const next = new Set(current)
+      if (allCollapsed) {
+        for (const key of expandableKeys) next.delete(key)
+      } else {
+        for (const key of expandableKeys) next.add(key)
+      }
+      return next
+    })
+  }
+
+  const toggleOne = (key: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm font-medium">{title}</span>
+        {changes.length > 5 && expandableKeys.length > 0 && (
+          <Button type="button" variant="ghost" size="xs" onClick={toggleAll}>
+            {allCollapsed ? '全部展开' : '全部折叠'}
+          </Button>
+        )}
+      </div>
+      {changes.length > 5 && sectionCounts.length > 1 && (
+        <div className="flex flex-wrap gap-1.5">
+          <Button
+            type="button"
+            size="xs"
+            variant={activeSection === 'all' ? 'default' : 'outline'}
+            onClick={() => setSectionFilter('all')}
+          >
+            全部 ({changes.length})
+          </Button>
+          {sectionCounts.map(([section, count]) => (
+            <Button
+              key={section}
+              type="button"
+              size="xs"
+              variant={activeSection === section ? 'default' : 'outline'}
+              onClick={() => setSectionFilter(section)}
+            >
+              {SECTION_LABEL[section] ?? section} ({count})
+            </Button>
+          ))}
+        </div>
+      )}
+      <ul className="flex flex-col gap-2">
+        {visibleChanges.map((change) => {
+          const key = `${change.section}/${change.key}`
+          return (
+            <ChangeRow
+              key={key}
+              change={change}
+              expanded={!collapsed.has(key)}
+              onToggle={() => toggleOne(key)}
+            />
+          )
+        })}
+      </ul>
+    </div>
   )
 }
 
@@ -539,14 +687,7 @@ function ReviewCard({ session, onChange }: { session: AgentSession; onChange: (n
             </ul>
           )}
 
-          <div className="flex flex-col gap-2">
-            <span className="text-sm font-medium">差异（{preview?.changes.length ?? 0} 项）</span>
-            <ul className="flex flex-col gap-2">
-              {preview?.changes.map((change) => (
-                <ChangeRow key={`${change.section}/${change.key}`} change={change} />
-              ))}
-            </ul>
-          </div>
+          <ChangesDiffSection title={`差异（${preview?.changes.length ?? 0} 项）`} changes={preview?.changes ?? []} />
         </CardContent>
         <CardFooter className="flex-col items-stretch gap-2 sm:flex-row sm:items-center">
           {session.stale ? (
@@ -585,23 +726,28 @@ function ReviewCard({ session, onChange }: { session: AgentSession; onChange: (n
       />
 
       <Dialog open={returnOpen} onOpenChange={(open) => !returning && setReturnOpen(open)}>
-        <DialogContent>
+        <DialogContent className="flex flex-col overflow-hidden">
           <form className="contents" onSubmit={sendBack}>
             <DialogHeader>
               <DialogTitle>退回给 agent</DialogTitle>
               <DialogDescription>agent 会读到这段意见，按它修改后重新提交，令牌继续有效。</DialogDescription>
             </DialogHeader>
-            <Field data-disabled={returning || undefined}>
-              <FieldLabel htmlFor="agent-feedback">意见</FieldLabel>
-              <Textarea
-                id="agent-feedback"
-                rows={4}
-                disabled={returning}
-                value={feedback}
-                onChange={(event) => setFeedback(event.target.value)}
-              />
-            </Field>
+            <DialogBody>
+              <Field data-disabled={returning || undefined}>
+                <FieldLabel htmlFor="agent-feedback">意见</FieldLabel>
+                <Textarea
+                  id="agent-feedback"
+                  rows={4}
+                  disabled={returning}
+                  value={feedback}
+                  onChange={(event) => setFeedback(event.target.value)}
+                />
+              </Field>
+            </DialogBody>
             <DialogFooter>
+              <Button type="button" variant="outline" disabled={returning} onClick={() => setReturnOpen(false)}>
+                取消
+              </Button>
               <Button type="submit" disabled={returning || !feedback.trim()}>
                 {returning ? <Spinner data-icon="inline-start" /> : <Undo2Icon data-icon="inline-start" />}
                 {returning ? '退回中…' : '退回'}
@@ -753,18 +899,25 @@ function HistoryCard({ reloadKey }: { reloadKey: string }) {
                 {items.map((item) => {
                   const [label, tone] = historyStatus(item)
                   return (
-                    <TableRow key={item.id} className="cursor-pointer" onClick={() => setOpenId(item.id)}>
+                    <TableRow key={item.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setOpenId(item.id)}>
                       <TableCell className="max-w-80">
-                        <div className="flex flex-col gap-0.5">
-                          <span className="truncate font-medium" title={item.task}>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setOpenId(item.id)
+                          }}
+                          className="flex w-full min-w-0 flex-col items-start gap-0.5 rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <span className="max-w-full truncate font-medium" title={item.task}>
                             {item.task || <span className="text-muted-foreground">（未填写任务）</span>}
                           </span>
                           {item.summary && (
-                            <span className="truncate text-xs text-muted-foreground" title={item.summary}>
+                            <span className="max-w-full truncate text-xs text-muted-foreground" title={item.summary}>
                               {item.summary}
                             </span>
                           )}
-                        </div>
+                        </button>
                       </TableCell>
                       <TableCell>
                         <StatusBadge tone={tone}>{label}</StatusBadge>
@@ -824,7 +977,7 @@ function HistoryDialog({ id, onClose }: { id: number | null; onClose: () => void
               : '加载中…'}
           </DialogDescription>
         </DialogHeader>
-        <div className="-mx-4 flex min-h-0 flex-col gap-4 overflow-y-auto px-4 text-sm">
+        <DialogBody className="flex flex-col gap-4 text-sm">
           {loadError && <LoadErrorAlert title="加载失败" message={loadError} />}
           {!session && !loadError && <Skeleton className="h-32 w-full" />}
           {session && (
@@ -853,22 +1006,17 @@ function HistoryDialog({ id, onClose }: { id: number | null; onClose: () => void
                 </Alert>
               )}
               {changes.length > 0 ? (
-                <div className="flex flex-col gap-2">
-                  <span className="font-medium">
-                    {session.state === 'merged' ? '合并的差异' : '最后一次提交的差异'}（{changes.length} 项）
-                  </span>
-                  <ul className="flex flex-col gap-2">
-                    {changes.map((change) => (
-                      <ChangeRow key={`${change.section}/${change.key}`} change={change} />
-                    ))}
-                  </ul>
-                </div>
+                <ChangesDiffSection
+                  key={session.id}
+                  title={`${session.state === 'merged' ? '合并的差异' : '最后一次提交的差异'}（${changes.length} 项）`}
+                  changes={changes}
+                />
               ) : (
                 <p className="text-muted-foreground">agent 没有提交过修改。</p>
               )}
             </>
           )}
-        </div>
+        </DialogBody>
       </DialogContent>
     </Dialog>
   )

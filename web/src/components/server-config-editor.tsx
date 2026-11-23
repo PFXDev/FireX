@@ -5,6 +5,9 @@ import { toast } from 'sonner'
 import { ApiError, api, type ServerConfig, type ServerConfigResponse } from '@/api'
 import { CodeText } from '@/components/code-display'
 import { FieldsSkeleton, LoadErrorAlert } from '@/components/load-state'
+import { NumberInput } from '@/components/number-input'
+import { PasswordInput } from '@/components/password-input'
+import { StickySaveBar } from '@/components/sticky-save-bar'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,8 +17,9 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
-import { confirmUnsavedNavigation, useUnsavedGuard } from '@/hooks/use-unsaved-guard'
+import { requestUnsavedConfirmation, useUnsavedGuard } from '@/hooks/use-unsaved-guard'
 import { errorMessage } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
 const channelItems = [
   { value: 'stable', label: 'stable · 正式版' },
@@ -30,7 +34,7 @@ const sourceItems = [
   { value: 'proxy', label: '镜像代理' },
 ]
 
-export function ServerConfigEditor() {
+export function ServerConfigEditor({ onSaved }: { onSaved?: () => void }) {
   const [saved, setSaved] = useState<ServerConfigResponse | null>(null)
   const [draft, setDraft] = useState<ServerConfig | null>(null)
   const [clearPassword, setClearPassword] = useState(false)
@@ -70,7 +74,9 @@ export function ServerConfigEditor() {
     return request
   }, [])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    void load()
+  }, [load])
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -90,6 +96,7 @@ export function ServerConfigEditor() {
       })
       accept(response)
       toast.success(response.restartRequired ? '配置已保存，部分设置需重启 FireX 后生效' : '配置已保存并已生效')
+      onSaved?.()
     } catch (err) {
       setSaveError(errorMessage(err, '保存服务端配置失败'))
       if (err instanceof ApiError) setFields(err.fields)
@@ -98,22 +105,50 @@ export function ServerConfigEditor() {
     }
   }
 
-  const textField = (key: keyof Omit<ServerConfig, 'update' | 'debug' | 'backup' | 'blockV2rayClients'>, label: string, description: string, placeholder?: string) => (
-    <ConfigTextField key={key} name={key} label={label} description={description} placeholder={placeholder}
-      restart={restartBound.has(key)} pending={!!saved?.restartFields.includes(key)}
-      value={draft?.[key] ?? ''} error={fields[key]} disabled={busy || (key === 'adminPassword' && clearPassword)}
+  const textField = (
+    key: keyof Omit<ServerConfig, 'update' | 'debug' | 'backup' | 'blockV2rayClients'>,
+    label: string,
+    description: string,
+    placeholder?: string,
+  ) => (
+    <ConfigTextField
+      key={key}
+      name={key}
+      label={label}
+      description={description}
+      placeholder={placeholder}
+      restart={restartBound.has(key)}
+      pending={!!saved?.restartFields.includes(key)}
+      value={draft?.[key] ?? ''}
+      error={fields[key]}
+      disabled={busy || (key === 'adminPassword' && clearPassword)}
       password={key === 'adminPassword'}
-      onChange={(value) => setDraft((current) => current && { ...current, [key]: value })} />
+      onChange={(value) => setDraft((current) => current && { ...current, [key]: value })}
+    />
   )
 
-  const updateTextField = (key: 'checkInterval' | 'proxyBaseUrl' | 'repo', label: string, description: string, placeholder?: string) => (
-    <ConfigTextField name={`update.${key}`} label={label} description={description} placeholder={placeholder}
-      value={draft?.update[key] ?? ''} error={fields[`update.${key}`]} disabled={busy}
-      onChange={(value) => setDraft((current) => current && { ...current, update: { ...current.update, [key]: value } })} />
+  const updateTextField = (
+    key: 'checkInterval' | 'proxyBaseUrl' | 'repo',
+    label: string,
+    description: string,
+    placeholder?: string,
+    muted = false,
+  ) => (
+    <ConfigTextField
+      name={`update.${key}`}
+      label={label}
+      description={description}
+      placeholder={placeholder}
+      value={draft?.update[key] ?? ''}
+      error={fields[`update.${key}`]}
+      disabled={busy}
+      muted={muted}
+      onChange={(value) => setDraft((current) => current && { ...current, update: { ...current.update, [key]: value } })}
+    />
   )
 
   return (
-    <form onSubmit={save} aria-busy={busy}>
+    <form className="flex flex-col gap-4" onSubmit={save} aria-busy={busy}>
       <Card>
         <CardHeader>
           <CardTitle>服务端配置</CardTitle>
@@ -129,7 +164,9 @@ export function ServerConfigEditor() {
               message={loadError}
               retrying={loading}
               onRetry={() => {
-                if (confirmUnsavedNavigation()) void load()
+                void requestUnsavedConfirmation().then((ok) => {
+                  if (ok) void load()
+                })
               }}
             />
           )}
@@ -157,18 +194,30 @@ export function ServerConfigEditor() {
                     <Field orientation="horizontal" data-disabled={busy || undefined}>
                       <FieldContent>
                         <FieldLabel htmlFor="server-block-v2ray-clients">拦截 v2ray / xray 客户端订阅</FieldLabel>
-                        <FieldDescription id="server-block-v2ray-clients-description">默认开启。UA 包含 v2ray 或 xray 的客户端仅收到“请使用FlClash”占位节点；关闭后恢复正常订阅。</FieldDescription>
+                        <FieldDescription id="server-block-v2ray-clients-description">
+                          默认开启。UA 包含 v2ray 或 xray 的客户端仅收到“请使用FlClash”占位节点；关闭后恢复正常订阅。
+                        </FieldDescription>
                       </FieldContent>
-                      <Switch id="server-block-v2ray-clients" checked={draft.blockV2rayClients} disabled={busy} aria-describedby="server-block-v2ray-clients-description"
-                        onCheckedChange={(blockV2rayClients) => setDraft({ ...draft, blockV2rayClients })} />
+                      <Switch
+                        id="server-block-v2ray-clients"
+                        checked={draft.blockV2rayClients}
+                        disabled={busy}
+                        aria-describedby="server-block-v2ray-clients-description"
+                        onCheckedChange={(blockV2rayClients) => setDraft({ ...draft, blockV2rayClients })}
+                      />
                     </Field>
                     <Field orientation="horizontal" data-disabled={busy || undefined}>
                       <FieldContent>
                         <FieldLabel htmlFor="server-debug">调试日志</FieldLabel>
                         <FieldDescription id="server-debug-description">开启详细日志和 SQL 跟踪。</FieldDescription>
                       </FieldContent>
-                      <Switch id="server-debug" checked={draft.debug} disabled={busy} aria-describedby="server-debug-description"
-                        onCheckedChange={(debug) => setDraft({ ...draft, debug })} />
+                      <Switch
+                        id="server-debug"
+                        checked={draft.debug}
+                        disabled={busy}
+                        aria-describedby="server-debug-description"
+                        onCheckedChange={(debug) => setDraft({ ...draft, debug })}
+                      />
                     </Field>
                   </FieldGroup>
                 </FieldSet>
@@ -187,20 +236,45 @@ export function ServerConfigEditor() {
                     <Field orientation="horizontal" data-disabled={busy || undefined}>
                       <FieldContent>
                         <FieldLabel htmlFor="server-backup-enabled">定时自动备份</FieldLabel>
-                        <FieldDescription id="server-backup-enabled-description">保留最近几份，清除旧备份，存储在数据目录的 backups 子目录。</FieldDescription>
+                        <FieldDescription id="server-backup-enabled-description">
+                          保留最近几份，清除旧备份，存储在数据目录的 backups 子目录。
+                        </FieldDescription>
                       </FieldContent>
-                      <Switch id="server-backup-enabled" checked={draft.backup.enabled} disabled={busy} aria-describedby="server-backup-enabled-description"
-                        onCheckedChange={(enabled) => setDraft({ ...draft, backup: { ...draft.backup, enabled } })} />
+                      <Switch
+                        id="server-backup-enabled"
+                        checked={draft.backup.enabled}
+                        disabled={busy}
+                        aria-describedby="server-backup-enabled-description"
+                        onCheckedChange={(enabled) => setDraft({ ...draft, backup: { ...draft.backup, enabled } })}
+                      />
                     </Field>
-                    <FieldGroup className="grid sm:grid-cols-2">
-                      <ConfigTextField name="backup.interval" label="备份间隔" description="至少 10m，例如 6h 或 24h。" placeholder="24h"
-                        value={draft.backup.interval ?? ''} error={fields['backup.interval']} disabled={busy}
-                        onChange={(value) => setDraft({ ...draft, backup: { ...draft.backup, interval: value } })} />
+                    {!draft.backup.enabled && (
+                      <FieldDescription>开启「定时自动备份」后以下参数生效。</FieldDescription>
+                    )}
+                    <FieldGroup className={cn('grid sm:grid-cols-2 transition-opacity', !draft.backup.enabled && 'opacity-60')}>
+                      <ConfigTextField
+                        name="backup.interval"
+                        label="备份间隔"
+                        description="至少 10m，例如 6h 或 24h。"
+                        placeholder="24h"
+                        value={draft.backup.interval ?? ''}
+                        error={fields['backup.interval']}
+                        disabled={busy}
+                        onChange={(value) => setDraft({ ...draft, backup: { ...draft.backup, interval: value } })}
+                      />
                       <Field data-invalid={!!fields['backup.keep'] || undefined} data-disabled={busy || undefined}>
                         <FieldLabel htmlFor="server-backup-keep">保留份数</FieldLabel>
-                        <Input id="server-backup-keep" type="number" min={1} max={1000} value={draft.backup.keep ?? ''} disabled={busy}
-                          onChange={(event) => setDraft({ ...draft, backup: { ...draft.backup, keep: Number(event.target.value) } })}
-                          aria-invalid={!!fields['backup.keep'] || undefined} aria-describedby={fields['backup.keep'] ? 'server-backup-keep-error' : 'server-backup-keep-description'} />
+                        <NumberInput
+                          id="server-backup-keep"
+                          min={1}
+                          max={1000}
+                          integer
+                          value={draft.backup.keep ?? 0}
+                          disabled={busy}
+                          onValueChange={(keep) => setDraft({ ...draft, backup: { ...draft.backup, keep } })}
+                          aria-invalid={!!fields['backup.keep'] || undefined}
+                          aria-describedby={fields['backup.keep'] ? 'server-backup-keep-error' : 'server-backup-keep-description'}
+                        />
                         <FieldDescription id="server-backup-keep-description">1–1000 份；手动和上传的备份不参与清理。</FieldDescription>
                         {fields['backup.keep'] && <FieldError id="server-backup-keep-error">{fields['backup.keep']}</FieldError>}
                       </Field>
@@ -213,10 +287,17 @@ export function ServerConfigEditor() {
                     <Field orientation="horizontal" data-disabled={busy || undefined}>
                       <FieldContent>
                         <FieldLabel htmlFor="server-update-enabled">自动检查更新</FieldLabel>
-                        <FieldDescription id="server-update-enabled-description">stable 通道自动安装正式版；dev 通道下载后等待手动确认。</FieldDescription>
+                        <FieldDescription id="server-update-enabled-description">
+                          stable 通道自动安装正式版；dev 通道下载后等待手动确认。
+                        </FieldDescription>
                       </FieldContent>
-                      <Switch id="server-update-enabled" checked={draft.update.enabled} disabled={busy} aria-describedby="server-update-enabled-description"
-                        onCheckedChange={(enabled) => setDraft({ ...draft, update: { ...draft.update, enabled } })} />
+                      <Switch
+                        id="server-update-enabled"
+                        checked={draft.update.enabled}
+                        disabled={busy}
+                        aria-describedby="server-update-enabled-description"
+                        onCheckedChange={(enabled) => setDraft({ ...draft, update: { ...draft.update, enabled } })}
+                      />
                     </Field>
                     <FieldGroup className="grid sm:grid-cols-2">
                       {(['channel', 'source'] as const).map((key) => {
@@ -226,14 +307,31 @@ export function ServerConfigEditor() {
                         return (
                           <Field key={key} data-invalid={!!error || undefined} data-disabled={busy || undefined}>
                             <FieldLabel htmlFor={id}>{key === 'channel' ? '更新通道' : '下载来源'}</FieldLabel>
-                            <Select items={options} value={draft.update[key]} disabled={busy}
-                              onValueChange={(value) => { if (value) setDraft({ ...draft, update: { ...draft.update, [key]: value } }) }}>
-                              <SelectTrigger id={id} className="w-full" aria-invalid={!!error || undefined} aria-describedby={error ? `${id}-error` : undefined}>
+                            <Select
+                              items={options}
+                              value={draft.update[key]}
+                              disabled={busy}
+                              onValueChange={(value) => {
+                                if (value) setDraft({ ...draft, update: { ...draft.update, [key]: value } })
+                              }}
+                            >
+                              <SelectTrigger
+                                id={id}
+                                className="w-full"
+                                aria-invalid={!!error || undefined}
+                                aria-describedby={error ? `${id}-error` : undefined}
+                              >
                                 <SelectValue />
                               </SelectTrigger>
-                              <SelectContent><SelectGroup>
-                                {options.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
-                              </SelectGroup></SelectContent>
+                              <SelectContent>
+                                <SelectGroup>
+                                  {options.map((item) => (
+                                    <SelectItem key={item.value} value={item.value}>
+                                      {item.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              </SelectContent>
                             </Select>
                             {error && <FieldError id={`${id}-error`}>{error}</FieldError>}
                           </Field>
@@ -241,7 +339,15 @@ export function ServerConfigEditor() {
                       })}
                       {updateTextField('checkInterval', '更新检查间隔', '至少 1m；关闭自动检查时保留此设置。', '1h')}
                       {updateTextField('repo', '发布仓库', 'GitHub 仓库，格式为 owner/name。', 'PFXDev/FireX')}
-                      {updateTextField('proxyBaseUrl', '镜像地址', '选择镜像代理时用于下载更新。', 'https://dl.repo.chycloud.top')}
+                      {updateTextField(
+                        'proxyBaseUrl',
+                        '镜像地址',
+                        draft.update.source === 'proxy'
+                          ? '通过镜像代理下载更新包的基础地址。'
+                          : '下载来源选择「镜像代理」时生效。',
+                        'https://dl.repo.chycloud.top',
+                        draft.update.source !== 'proxy',
+                      )}
                     </FieldGroup>
                   </FieldGroup>
                 </FieldSet>
@@ -280,20 +386,60 @@ export function ServerConfigEditor() {
             {saving ? <Spinner data-icon="inline-start" /> : <SaveIcon data-icon="inline-start" />}
             {saving ? '保存中…' : '保存配置'}
           </Button>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => {
-            if (confirmUnsavedNavigation()) void load()
-          }}>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              void requestUnsavedConfirmation().then((ok) => {
+                if (ok) void load()
+              })
+            }}
+          >
             {loading ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
             {loading ? '加载中…' : '重新加载配置'}
           </Button>
-          {saved && <p role="status" className="text-sm text-muted-foreground">{dirty ? '有未保存的更改' : saved.restartRequired ? '已保存，部分设置等待重启' : '与当前运行配置一致'}</p>}
+          {saved && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {dirty ? '有未保存的更改' : saved.restartRequired ? '已保存，部分设置等待重启' : '与当前运行配置一致'}
+            </p>
+          )}
         </CardFooter>
       </Card>
+
+      <StickySaveBar
+        visible={dirty}
+        saving={saving}
+        disabled={busy}
+        message="服务端配置有未保存的改动"
+        saveLabel="保存配置"
+        saveType="submit"
+        onDiscard={() => {
+          if (!saved) return
+          setDraft(saved.config)
+          setClearPassword(false)
+          setFields({})
+          setSaveError('')
+        }}
+      />
     </form>
   )
 }
 
-function ConfigTextField({ name, label, description, placeholder, value, onChange, disabled, error, password = false, restart = false, pending = false }: {
+function ConfigTextField({
+  name,
+  label,
+  description,
+  placeholder,
+  value,
+  onChange,
+  disabled,
+  error,
+  password = false,
+  restart = false,
+  pending = false,
+  muted = false,
+}: {
   name: string
   label: string
   description: string
@@ -307,17 +453,45 @@ function ConfigTextField({ name, label, description, placeholder, value, onChang
   restart?: boolean
   /** A saved value is waiting for that restart. */
   pending?: boolean
+  muted?: boolean
 }) {
   const id = `server-${name}`
   return (
-    <Field data-invalid={!!error || undefined} data-disabled={disabled || undefined}>
+    <Field
+      className={cn(muted && 'opacity-60 transition-opacity')}
+      data-invalid={!!error || undefined}
+      data-disabled={disabled || undefined}
+    >
       <FieldLabel htmlFor={id}>
         {label}
         {restart && <Badge variant={pending ? 'warning' : 'outline'}>{pending ? '等待重启' : '需重启'}</Badge>}
       </FieldLabel>
-      <Input id={id} value={value} type={password ? 'password' : 'text'} autoComplete={password ? 'new-password' : 'off'}
-        spellCheck={false} placeholder={placeholder} disabled={disabled} onChange={(event) => onChange(event.target.value)}
-        aria-invalid={!!error || undefined} aria-describedby={`${id}-description${error ? ` ${id}-error` : ''}`} />
+      {password ? (
+        <PasswordInput
+          id={id}
+          value={value}
+          autoComplete="new-password"
+          spellCheck={false}
+          placeholder={placeholder}
+          disabled={disabled}
+          onChangeValue={onChange}
+          aria-invalid={!!error || undefined}
+          aria-describedby={`${id}-description${error ? ` ${id}-error` : ''}`}
+        />
+      ) : (
+        <Input
+          id={id}
+          value={value}
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={placeholder}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+          aria-invalid={!!error || undefined}
+          aria-describedby={`${id}-description${error ? ` ${id}-error` : ''}`}
+        />
+      )}
       <FieldDescription id={`${id}-description`}>{description}</FieldDescription>
       {error && <FieldError id={`${id}-error`}>{error}</FieldError>}
     </Field>

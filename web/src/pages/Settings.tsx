@@ -2,21 +2,22 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   ChevronDownIcon,
+  EyeIcon,
   FileCode2Icon,
   InfoIcon,
   LayoutTemplateIcon,
   RotateCcwIcon,
   SaveIcon,
-  EyeIcon,
   ShieldCheckIcon,
 } from 'lucide-react'
 
 import { ApiError, api } from '@/api'
 import { CodeText, CodeTextarea } from '@/components/code-display'
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { confirmUnsavedNavigation, useUnsavedGuard } from '@/hooks/use-unsaved-guard'
 import { FieldsSkeleton, LoadErrorAlert } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
+import { PasswordInput } from '@/components/password-input'
+import { StickySaveBar } from '@/components/sticky-save-bar'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -30,10 +31,11 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { replaceHash, useHashLocation } from '@/hooks/use-hash-route'
+import { requestUnsavedConfirmation, useUnsavedGuard } from '@/hooks/use-unsaved-guard'
 import { errorMessage } from '@/lib/format'
 import { useSession } from '@/lib/session'
 
@@ -55,6 +57,9 @@ export function SettingsPage() {
   const { isSuperAdmin, canViewConfig } = useSession()
   // An operator with the view switch reads the template; only a super admin edits it.
   const readOnly = !isSuperAdmin
+  const { params } = useHashLocation()
+  const activeTab = params.get('tab') === 'security' ? 'security' : 'template'
+
   const [tpl, setTpl] = useState<TemplateResponse | null>(null)
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(true)
@@ -193,13 +198,23 @@ export function SettingsPage() {
           title="最新设置加载失败"
           message={loadError}
           retrying={loading}
-          onRetry={templateBusy ? undefined : () => {
-            if (confirmUnsavedNavigation()) void load()
-          }}
+          onRetry={
+            templateBusy
+              ? undefined
+              : () => {
+                  void requestUnsavedConfirmation().then((ok) => {
+                    if (ok) void load()
+                  })
+                }
+          }
         />
       )}
 
-      <Tabs defaultValue="template" className="flex flex-col gap-4">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => replaceHash(value === 'security' ? '#/settings?tab=security' : '#/settings')}
+        className="flex flex-col gap-4"
+      >
         <TabsList className="w-full sm:w-fit">
           <TabsTrigger value="template">
             <FileCode2Icon />
@@ -213,6 +228,7 @@ export function SettingsPage() {
 
         <TabsContent value="template">
           <form
+            className="flex flex-col gap-4"
             aria-busy={templateBusy}
             onSubmit={(event) => {
               event.preventDefault()
@@ -314,6 +330,16 @@ export function SettingsPage() {
                 </CardFooter>
               )}
             </Card>
+
+            <StickySaveBar
+              visible={!readOnly && dirty && activeTab === 'template'}
+              saving={saving}
+              disabled={templateBusy}
+              message="Clash 订阅模板有未保存的改动"
+              saveLabel="保存模板"
+              saveType="submit"
+              onDiscard={() => setText(savedTemplate)}
+            />
           </form>
         </TabsContent>
 
@@ -334,21 +360,22 @@ export function SettingsPage() {
   )
 }
 
-
 /** PasswordCard is the account-security form both roles share. */
 function PasswordCard() {
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
   const [attempted, setAttempted] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const currentInvalid = attempted && current.length === 0
   const nextInvalid = attempted && next.length < 8
+  const confirmInvalid = (attempted || confirm.length > 0) && confirm !== next
 
   const changePassword = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setAttempted(true)
-    if (!current || next.length < 8) return
+    if (!current || next.length < 8 || confirm !== next) return
 
     setBusy(true)
     try {
@@ -372,24 +399,22 @@ function PasswordCard() {
           <FieldGroup className="max-w-md">
             <Field data-invalid={currentInvalid || undefined}>
               <FieldLabel htmlFor="pw-current">当前密码</FieldLabel>
-              <Input
+              <PasswordInput
                 id="pw-current"
-                type="password"
                 autoComplete="current-password"
                 required
                 aria-invalid={currentInvalid || undefined}
                 aria-describedby={currentInvalid ? 'pw-current-error' : undefined}
                 disabled={busy}
                 value={current}
-                onChange={(event) => setCurrent(event.target.value)}
+                onChangeValue={setCurrent}
               />
               {currentInvalid && <FieldError id="pw-current-error">请输入当前密码。</FieldError>}
             </Field>
             <Field data-invalid={nextInvalid || undefined}>
               <FieldLabel htmlFor="pw-new">新密码</FieldLabel>
-              <Input
+              <PasswordInput
                 id="pw-new"
-                type="password"
                 autoComplete="new-password"
                 required
                 minLength={8}
@@ -397,13 +422,27 @@ function PasswordCard() {
                 aria-describedby={nextInvalid ? 'pw-new-error' : 'pw-new-description'}
                 disabled={busy}
                 value={next}
-                onChange={(event) => setNext(event.target.value)}
+                onChangeValue={setNext}
               />
               {nextInvalid ? (
                 <FieldError id="pw-new-error">新密码至少需要 8 位。</FieldError>
               ) : (
                 <FieldDescription id="pw-new-description">至少 8 位字符。</FieldDescription>
               )}
+            </Field>
+            <Field data-invalid={confirmInvalid || undefined}>
+              <FieldLabel htmlFor="pw-confirm">确认新密码</FieldLabel>
+              <PasswordInput
+                id="pw-confirm"
+                autoComplete="new-password"
+                required
+                aria-invalid={confirmInvalid || undefined}
+                aria-describedby={confirmInvalid ? 'pw-confirm-error' : undefined}
+                disabled={busy}
+                value={confirm}
+                onChangeValue={setConfirm}
+              />
+              {confirmInvalid && <FieldError id="pw-confirm-error">两次输入的新密码不一致。</FieldError>}
             </Field>
           </FieldGroup>
         </CardContent>

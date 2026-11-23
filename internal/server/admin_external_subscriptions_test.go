@@ -329,7 +329,7 @@ func TestExternalSubscriptionAPIGroupAndSnapshot(t *testing.T) {
 	if strings.Contains(string(encoded), "secret-token") || strings.Contains(string(encoded), "password") {
 		t.Error("snapshot exposed a subscription URL or cached credentials")
 	}
-	if err := applySnapshotExternalSubscriptions(h.db.DB, doc.ExternalSubscriptions); err != nil {
+	if err := applySnapshotExternalSubscriptions(h.db.DB, doc.ExternalSubscriptions, nil); err != nil {
 		t.Fatalf("reapply external subscriptions: %v", err)
 	}
 	if err := applySnapshotNodeGroups(h.db.DB, doc.NodeGroups); err != nil {

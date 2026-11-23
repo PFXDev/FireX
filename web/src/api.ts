@@ -543,6 +543,7 @@ export interface SubscriptionPreview {
     name: string
     protocol: string
     panelId: number
+    panelName?: string
     externalSubscriptionId: number
     externalSubscriptionName: string
     clashSupported: boolean
@@ -664,6 +665,14 @@ export interface AuditLog {
   path: string
   ip: string
   createdAt: number
+}
+
+export interface AuditLogPage {
+  items: AuditLog[]
+  more: boolean
+  total?: number
+  actors?: string[]
+  actions?: string[]
 }
 
 export interface ServerConfig {

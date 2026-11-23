@@ -930,3 +930,161 @@ func TestSubscriptionUpdateIntervalFollowsConfig(t *testing.T) {
 		t.Errorf("Profile-Update-Interval = %q, want 24", got)
 	}
 }
+
+func TestPanelTestReusesStoredTokenByIDWhenURLChanges(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+	var panelRow model.Panel
+	h.db.First(&panelRow)
+	second := paneltest.New("tok")
+	defer second.Close()
+
+	// Changing baseUrl while leaving apiToken blank must still look up the stored token by panel id.
+	raw := h.mustDo(http.MethodPost, "/api/panels/test", map[string]any{
+		"id":      panelRow.ID,
+		"baseUrl": second.URL(),
+	})
+	var out struct {
+		Inbounds int `json:"inbounds"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode test response: %v", err)
+	}
+}
+
+func TestBulkUpdateInboundsGroupVisionAndRemoveMissing(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+
+	var group model.NodeGroup
+	h.db.First(&group)
+	// Create a second group with no members yet.
+	var createdGroup struct {
+		Group model.NodeGroup `json:"group"`
+	}
+	json.Unmarshal(h.mustDo(http.MethodPost, "/api/node-groups", map[string]any{
+		"name":       "新分组",
+		"type":       "select",
+		"inboundIds": []uint{},
+	}), &createdGroup)
+
+	var inbounds []model.Inbound
+	h.db.Order("id ASC").Find(&inbounds)
+	if len(inbounds) < 2 {
+		t.Fatalf("expected at least 2 inbounds, got %d", len(inbounds))
+	}
+
+	// Bulk add to node group.
+	h.mustDo(http.MethodPost, "/api/inbounds/bulk", map[string]any{
+		"ids":          []uint{inbounds[0].ID, inbounds[1].ID},
+		"addToGroupId": createdGroup.Group.ID,
+	})
+	var linkCount int64
+	h.db.Model(&model.NodeGroupInbound{}).Where("group_id = ?", createdGroup.Group.ID).Count(&linkCount)
+	if linkCount != 2 {
+		t.Fatalf("bulk addToGroupId linked %d inbounds, want 2", linkCount)
+	}
+
+	// Vision validation rejects unsupported transport.
+	h.db.Model(&inbounds[1]).Update("network", "ws")
+	if resp, _ := h.do(http.MethodPost, "/api/inbounds/bulk", map[string]any{
+		"ids":    []uint{inbounds[0].ID, inbounds[1].ID},
+		"vision": true,
+	}); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bulk vision on ws inbound = %d, want 400", resp.StatusCode)
+	}
+
+	// Valid bulk vision succeeds.
+	h.mustDo(http.MethodPost, "/api/inbounds/bulk", map[string]any{
+		"ids":    []uint{inbounds[0].ID},
+		"vision": true,
+	})
+	h.db.First(&inbounds[0], inbounds[0].ID)
+	if inbounds[0].Vision == nil || !*inbounds[0].Vision {
+		t.Fatal("bulk vision did not enable Vision")
+	}
+
+	// Remove missing refuses live inbounds, accepts missing ones.
+	if resp, _ := h.do(http.MethodPost, "/api/inbounds/bulk", map[string]any{
+		"ids":           []uint{inbounds[1].ID},
+		"removeMissing": true,
+	}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("bulk remove live inbound = %d, want 409", resp.StatusCode)
+	}
+	h.db.Model(&inbounds[1]).Update("missing", true)
+	h.mustDo(http.MethodPost, "/api/inbounds/bulk", map[string]any{
+		"ids":           []uint{inbounds[1].ID},
+		"removeMissing": true,
+	})
+	var remaining int64
+	h.db.Model(&model.Inbound{}).Where("id = ?", inbounds[1].ID).Count(&remaining)
+	if remaining != 0 {
+		t.Fatal("bulk removeMissing did not delete missing inbound")
+	}
+}
+
+func TestPreviewSubscriptionIncludesPanelNameAndBulkUsers(t *testing.T) {
+	h := newHarness(t)
+	u := h.seed()
+
+	var preview struct {
+		Entries []struct {
+			PanelID   uint   `json:"panelId"`
+			PanelName string `json:"panelName"`
+		} `json:"entries"`
+	}
+	json.Unmarshal(h.mustDo(http.MethodGet, "/api/users/"+itoa(u.ID)+"/subscription", nil), &preview)
+	if len(preview.Entries) == 0 || preview.Entries[0].PanelName != "p1" {
+		t.Fatalf("subscription preview entries = %+v, want panelName p1", preview.Entries)
+	}
+
+	// Give the user a finite expiry so extend modifies it; create a permanent user that extend skips.
+	baseExpiry := provision.NowMs() + 86400*1000
+	h.db.Model(u).Update("expires_at", baseExpiry)
+	var permRes struct {
+		User model.User `json:"user"`
+	}
+	json.Unmarshal(h.mustDo(http.MethodPost, "/api/users", map[string]any{
+		"username": "permuser",
+		"planId":   u.PlanID,
+	}), &permRes)
+	h.db.Model(&permRes.User).Update("expires_at", 0)
+
+	h.mustDo(http.MethodPost, "/api/users/bulk", map[string]any{
+		"ids":        []uint{u.ID, permRes.User.ID},
+		"action":     "extend",
+		"extendDays": 7,
+	})
+	var updatedU, updatedPerm model.User
+	h.db.First(&updatedU, u.ID)
+	h.db.First(&updatedPerm, permRes.User.ID)
+	if updatedU.ExpiresAt <= baseExpiry {
+		t.Fatalf("extended expiry = %d, want > %d", updatedU.ExpiresAt, baseExpiry)
+	}
+	if updatedPerm.ExpiresAt != 0 {
+		t.Fatalf("permanent user expiry changed to %d", updatedPerm.ExpiresAt)
+	}
+
+	h.mustDo(http.MethodPost, "/api/users/bulk", map[string]any{
+		"ids":    []uint{u.ID},
+		"action": "disable",
+	})
+	h.db.First(&updatedU, u.ID)
+	if updatedU.Enabled {
+		t.Fatal("bulk disable did not disable user")
+	}
+
+	h.mustDo(http.MethodPost, "/api/users/bulk", map[string]any{
+		"ids":    []uint{u.ID},
+		"action": "enable",
+	})
+	h.db.First(&updatedU, u.ID)
+	if !updatedU.Enabled {
+		t.Fatal("bulk enable did not enable user")
+	}
+
+	h.mustDo(http.MethodPost, "/api/users/bulk", map[string]any{
+		"ids":    []uint{u.ID},
+		"action": "resync",
+	})
+}

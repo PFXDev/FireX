@@ -166,20 +166,38 @@ func (s *Server) updateInboundConfig(c *gin.Context) {
 		Revision     uint            `json:"revision"`
 		Parameters   json.RawMessage `json:"parameters"`
 		DeploymentID uint            `json:"deploymentId"`
+		AdoptPanel   bool            `json:"adoptPanel"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	if (len(req.Parameters) == 0) == (req.DeploymentID == 0) {
-		failMsg(c, http.StatusBadRequest, "请提供参数或备份来源之一")
+	sources := 0
+	if len(req.Parameters) > 0 {
+		sources++
+	}
+	if req.DeploymentID != 0 {
+		sources++
+	}
+	if req.AdoptPanel {
+		sources++
+	}
+	if sources != 1 {
+		failMsg(c, http.StatusBadRequest, "请提供参数、备份来源或采用面板配置之一")
 		return
 	}
 	var config map[string]any
 	var err error
-	if req.DeploymentID != 0 {
+	switch {
+	case req.AdoptPanel:
+		if inbound.Missing || inbound.Config == "" {
+			err = fmt.Errorf("入站已在面板消失或尚未同步，无法采用面板配置")
+		} else {
+			config, err = panel.EditableConfiguration(inbound.Config)
+		}
+	case req.DeploymentID != 0:
 		config, err = s.deploymentBackup(inbound.ID, req.DeploymentID)
-	} else {
+	default:
 		config, err = panel.EditableConfiguration(string(req.Parameters))
 	}
 	if err == nil {
@@ -190,8 +208,12 @@ func (s *Server) updateInboundConfig(c *gin.Context) {
 		return
 	}
 	encoded, _ := json.Marshal(config)
-	result := s.db.Model(&model.InboundConfig{}).Where("inbound_id = ? AND revision = ?", inbound.ID, req.Revision).
-		Updates(map[string]any{"config": string(encoded), "revision": req.Revision + 1, "updated_at": provision.NowMs()})
+	updates := map[string]any{"config": string(encoded), "revision": req.Revision + 1, "updated_at": provision.NowMs()}
+	if req.AdoptPanel {
+		updates["applied"] = string(encoded)
+		updates["applied_revision"] = req.Revision + 1
+	}
+	result := s.db.Model(&model.InboundConfig{}).Where("inbound_id = ? AND revision = ?", inbound.ID, req.Revision).Updates(updates)
 	if result.Error != nil {
 		fail(c, http.StatusInternalServerError, result.Error)
 		return

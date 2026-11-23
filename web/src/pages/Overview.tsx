@@ -16,9 +16,9 @@ import {
 import { api } from '@/api'
 import type { LivePanelStat, Overview } from '@/api'
 import { CodeText } from '@/components/code-display'
+import { InfoPopover } from '@/components/info-popover'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
 import { OverviewLiveSection } from '@/components/overview-live'
-import { useSession } from '@/lib/session'
 import { PageHeader } from '@/components/page-header'
 import { PanelStatusBadge, StatusBadge } from '@/components/status-badge'
 import { foldSlices, TrafficShareBar } from '@/components/traffic-share'
@@ -49,7 +49,10 @@ import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useLiveStats, type LiveStatus } from '@/hooks/use-live-stats'
+import { usePageVisible } from '@/hooks/use-page-visible'
 import { errorMessage, formatBytes, formatSpeed, formatTime } from '@/lib/format'
+import { canAccess } from '@/lib/navigation'
+import { useSession } from '@/lib/session'
 
 const POLL_INTERVAL_MS = 15_000
 
@@ -68,10 +71,16 @@ export function OverviewPage() {
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
   const [syncing, setSyncing] = useState(false)
   // A full sync discovers panels and rewrites routing, which operators cannot do.
-  const { isSuperAdmin } = useSession()
+  const { isSuperAdmin, canViewConfig } = useSession()
   const live = useLiveStats()
+  const visible = usePageVisible()
   const [syncProblems, setSyncProblems] = useState<SyncProblem[]>([])
   const activeRefresh = useRef<Promise<boolean> | null>(null)
+  const hasLoadedRef = useRef(false)
+
+  const access = { isSuperAdmin, canViewConfig }
+  const canViewPanels = canAccess('panels', access)
+  const canViewInbounds = canAccess('inbounds', access)
 
   const refresh = useCallback((mode: RefreshMode = 'background'): Promise<boolean> => {
     if (activeRefresh.current) return activeRefresh.current
@@ -89,6 +98,7 @@ export function OverviewPage() {
         setData(next)
         setLoadError(null)
         setLastUpdated(Date.now())
+        hasLoadedRef.current = true
         return true
       } catch (err) {
         setLoadError(errorMessage(err, '无法加载总览数据'))
@@ -105,6 +115,7 @@ export function OverviewPage() {
   }, [])
 
   useEffect(() => {
+    if (!visible) return
     let cancelled = false
     let timer: number | undefined
 
@@ -115,12 +126,12 @@ export function OverviewPage() {
       }
     }
 
-    void poll('initial')
+    void poll(hasLoadedRef.current ? 'background' : 'initial')
     return () => {
       cancelled = true
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [refresh])
+  }, [refresh, visible])
 
   const syncNow = async () => {
     setSyncing(true)
@@ -257,10 +268,10 @@ export function OverviewPage() {
             <Button
               variant="outline"
               size="sm"
-              render={<a href={data.failedSyncs > 0 ? '#/users' : '#/panels'} />}
+              render={<a href={data.failedSyncs > 0 ? '#/users?status=failed' : '#/panels'} />}
               nativeButton={false}
             >
-              {data.failedSyncs > 0 ? '查看用户' : '查看面板'}
+              {data.failedSyncs > 0 ? '查看异常用户' : '查看面板'}
               <ArrowRightIcon data-icon="inline-end" />
             </Button>
           </AlertAction>
@@ -270,82 +281,100 @@ export function OverviewPage() {
       <OverviewLiveSection live={live} />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>面板</CardTitle>
-            <CardDescription>控制平面连通状态</CardDescription>
-            <CardAction>
-              <StatusBadge tone={counts.panels === 0 ? 'idle' : onlinePanels === counts.panels ? 'good' : 'bad'}>
-                <ServerIcon data-icon="inline-start" />
-                {counts.panels === 0
-                  ? '尚未配置'
-                  : onlinePanels === counts.panels
-                    ? '全部在线'
-                    : `${counts.panels - onlinePanels} 个异常`}
-              </StatusBadge>
-            </CardAction>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <div className="flex items-end gap-2">
-              <strong className="font-heading text-3xl font-semibold tabular-nums">{onlinePanels}</strong>
-              <span className="pb-1 text-sm text-muted-foreground">/ {counts.panels} 在线</span>
-            </div>
-            <Progress value={panelRate}>
-              <ProgressLabel>在线率</ProgressLabel>
-              <ProgressValue>{() => `${panelRate}%`}</ProgressValue>
-            </Progress>
-          </CardContent>
-        </Card>
+        <KpiLink href={canViewPanels ? '#/panels' : undefined} label="前往面板管理">
+          <Card className={canViewPanels ? 'h-full transition-colors group-hover:border-primary/40' : 'h-full'}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-1.5">
+                面板
+                {canViewPanels && <ArrowRightIcon className="size-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />}
+              </CardTitle>
+              <CardDescription>控制平面连通状态</CardDescription>
+              <CardAction>
+                <StatusBadge tone={counts.panels === 0 ? 'idle' : onlinePanels === counts.panels ? 'good' : 'bad'}>
+                  <ServerIcon data-icon="inline-start" />
+                  {counts.panels === 0
+                    ? '尚未配置'
+                    : onlinePanels === counts.panels
+                      ? '全部在线'
+                      : `${counts.panels - onlinePanels} 个异常`}
+                </StatusBadge>
+              </CardAction>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex items-end gap-2">
+                <strong className="font-heading text-3xl font-semibold tabular-nums">{onlinePanels}</strong>
+                <span className="pb-1 text-sm text-muted-foreground">/ {counts.panels} 在线</span>
+              </div>
+              <Progress value={panelRate}>
+                <ProgressLabel>在线率</ProgressLabel>
+                <ProgressValue>{() => `${panelRate}%`}</ProgressValue>
+              </Progress>
+            </CardContent>
+          </Card>
+        </KpiLink>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>入站</CardTitle>
-            <CardDescription>可用节点与失联情况</CardDescription>
-            <CardAction>
-              <StatusBadge tone={counts.inbounds === 0 ? 'idle' : counts.missingInbounds > 0 ? 'bad' : 'good'}>
-                <LayersIcon data-icon="inline-start" />
-                {counts.inbounds === 0
-                  ? '尚未发现'
-                  : counts.missingInbounds > 0
-                    ? `${counts.missingInbounds} 个失联`
-                    : '状态正常'}
-              </StatusBadge>
-            </CardAction>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <div className="flex items-end gap-2">
-              <strong className="font-heading text-3xl font-semibold tabular-nums">{counts.enabledInbounds}</strong>
-              <span className="pb-1 text-sm text-muted-foreground">/ {counts.inbounds} 启用</span>
-            </div>
-            <Progress value={nodeRate}>
-              <ProgressLabel>启用率</ProgressLabel>
-              <ProgressValue>{() => `${nodeRate}%`}</ProgressValue>
-            </Progress>
-          </CardContent>
-        </Card>
+        <KpiLink
+          href={canViewInbounds ? (counts.missingInbounds > 0 ? '#/inbounds?status=missing' : '#/inbounds') : undefined}
+          label="前往入站管理"
+        >
+          <Card className={canViewInbounds ? 'h-full transition-colors group-hover:border-primary/40' : 'h-full'}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-1.5">
+                入站
+                {canViewInbounds && <ArrowRightIcon className="size-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />}
+              </CardTitle>
+              <CardDescription>可用节点与失联情况</CardDescription>
+              <CardAction>
+                <StatusBadge tone={counts.inbounds === 0 ? 'idle' : counts.missingInbounds > 0 ? 'bad' : 'good'}>
+                  <LayersIcon data-icon="inline-start" />
+                  {counts.inbounds === 0
+                    ? '尚未发现'
+                    : counts.missingInbounds > 0
+                      ? `${counts.missingInbounds} 个失联`
+                      : '状态正常'}
+                </StatusBadge>
+              </CardAction>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex items-end gap-2">
+                <strong className="font-heading text-3xl font-semibold tabular-nums">{counts.enabledInbounds}</strong>
+                <span className="pb-1 text-sm text-muted-foreground">/ {counts.inbounds} 启用</span>
+              </div>
+              <Progress value={nodeRate}>
+                <ProgressLabel>启用率</ProgressLabel>
+                <ProgressValue>{() => `${nodeRate}%`}</ProgressValue>
+              </Progress>
+            </CardContent>
+          </Card>
+        </KpiLink>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>用户</CardTitle>
-            <CardDescription>账户可用状态 · {counts.plans} 个套餐</CardDescription>
-            <CardAction>
-              <Badge variant={counts.users === 0 ? 'outline' : 'secondary'}>
-                <UsersIcon data-icon="inline-start" />
-                {counts.users === 0 ? '尚无用户' : `${counts.activeUsers} 个可用`}
-              </Badge>
-            </CardAction>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <div className="flex items-end gap-2">
-              <strong className="font-heading text-3xl font-semibold tabular-nums">{counts.activeUsers}</strong>
-              <span className="pb-1 text-sm text-muted-foreground">/ {counts.users} 可用</span>
-            </div>
-            <Progress value={userRate}>
-              <ProgressLabel>可用率</ProgressLabel>
-              <ProgressValue>{() => `${userRate}%`}</ProgressValue>
-            </Progress>
-          </CardContent>
-        </Card>
+        <KpiLink href={data.failedSyncs > 0 ? '#/users?status=failed' : '#/users'} label="前往用户管理">
+          <Card className="h-full transition-colors group-hover:border-primary/40">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-1.5">
+                用户
+                <ArrowRightIcon className="size-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+              </CardTitle>
+              <CardDescription>账户可用状态 · {counts.plans} 个套餐</CardDescription>
+              <CardAction>
+                <Badge variant={counts.users === 0 ? 'outline' : 'secondary'}>
+                  <UsersIcon data-icon="inline-start" />
+                  {counts.users === 0 ? '尚无用户' : `${counts.activeUsers} 个可用`}
+                </Badge>
+              </CardAction>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex items-end gap-2">
+                <strong className="font-heading text-3xl font-semibold tabular-nums">{counts.activeUsers}</strong>
+                <span className="pb-1 text-sm text-muted-foreground">/ {counts.users} 可用</span>
+              </div>
+              <Progress value={userRate}>
+                <ProgressLabel>可用率</ProgressLabel>
+                <ProgressValue>{() => `${userRate}%`}</ProgressValue>
+              </Progress>
+            </CardContent>
+          </Card>
+        </KpiLink>
 
         <Card>
           <CardHeader>
@@ -397,12 +426,14 @@ export function OverviewPage() {
                 <EmptyTitle>还没有面板</EmptyTitle>
                 <EmptyDescription>添加第一个 3X-UI 面板后，这里会持续展示连通状态。</EmptyDescription>
               </EmptyHeader>
-              <EmptyContent>
-                <Button render={<a href="#/panels" />} nativeButton={false}>
-                  <PlusIcon data-icon="inline-start" />
-                  添加面板
-                </Button>
-              </EmptyContent>
+              {canViewPanels && (
+                <EmptyContent>
+                  <Button render={<a href="#/panels" />} nativeButton={false}>
+                    <PlusIcon data-icon="inline-start" />
+                    添加面板
+                  </Button>
+                </EmptyContent>
+              )}
             </Empty>
           ) : (
             <Table>
@@ -433,10 +464,31 @@ export function OverviewPage() {
                   return (
                     <TableRow key={panel.id}>
                       <TableCell>
-                        <span className="font-medium">{panel.name}</span>
+                        {canViewPanels ? (
+                          <a href="#/panels" className="font-medium underline-offset-4 hover:underline">
+                            {panel.name}
+                          </a>
+                        ) : (
+                          <span className="font-medium">{panel.name}</span>
+                        )}
                       </TableCell>
                       <TableCell>
-                        <PanelStatusBadge status={effectiveStatus} />
+                        <div className="flex items-center gap-1.5">
+                          <PanelStatusBadge status={effectiveStatus} />
+                          {effectiveError && (
+                            <span className="lg:hidden">
+                              <InfoPopover
+                                label={`查看 ${panel.name} 的错误信息`}
+                                title={`${panel.name} 最近错误`}
+                                content={effectiveError}
+                                copyValue={effectiveError}
+                                className="text-destructive"
+                              >
+                                <TriangleAlertIcon className="size-3.5" />
+                              </InfoPopover>
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       {showLiveColumns && (
                         <>
@@ -479,12 +531,20 @@ export function OverviewPage() {
                         </span>
                       </TableCell>
                       <TableCell className="hidden lg:table-cell">
-                        <CodeText
-                          className="block max-w-80 truncate"
-                          title={effectiveError || undefined}
-                        >
-                          {effectiveError || '—'}
-                        </CodeText>
+                        {effectiveError ? (
+                          <InfoPopover
+                            label={`查看 ${panel.name} 的错误信息`}
+                            title={`${panel.name} 最近错误`}
+                            content={effectiveError}
+                            copyValue={effectiveError}
+                          >
+                            <CodeText className="block max-w-80 truncate underline decoration-dotted underline-offset-4">
+                              {effectiveError}
+                            </CodeText>
+                          </InfoPopover>
+                        ) : (
+                          <CodeText>—</CodeText>
+                        )}
                       </TableCell>
                     </TableRow>
                   )
@@ -495,6 +555,23 @@ export function OverviewPage() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+function KpiLink({
+  href,
+  label,
+  children,
+}: {
+  href?: string
+  label: string
+  children: React.ReactNode
+}) {
+  if (!href) return <>{children}</>
+  return (
+    <a href={href} aria-label={label} className="group block rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+      {children}
+    </a>
   )
 }
 

@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PencilIcon, PlusIcon, TicketIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react'
+import { PencilIcon, PlusIcon, SearchXIcon, TicketIcon, Trash2Icon, TriangleAlertIcon, XIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api } from '@/api'
 import type { NodeGroup, Panel, Plan, Profile, TrafficReset } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { InfoPopover } from '@/components/info-popover'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
+import { NumberInput } from '@/components/number-input'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
+import { SearchInput, SortableHead, TableToolbar, type SortDirection } from '@/components/table-toolbar'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -21,6 +24,7 @@ import {
 } from '@/components/ui/card'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -35,9 +39,11 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useDirtyDialog } from '@/hooks/use-unsaved-guard'
 import { bytesToGb, errorMessage, formatQuota, gbToBytes, TRAFFIC_RESET_LABELS } from '@/lib/format'
-import { reportSyncError } from '@/lib/sync'
 import { useSession } from '@/lib/session'
+import { reportSyncError } from '@/lib/sync'
+import { cn } from '@/lib/utils'
 
 type Draft = {
   id?: number
@@ -56,6 +62,16 @@ type Draft = {
   /** Per-user quota on each node group in GB, keyed by group id; 0 or absent = none. */
   groupLimitsGb: Record<number, number>
 }
+
+type StatusFilter = 'all' | 'enabled' | 'disabled' | 'unbound'
+type SortKey = 'name' | 'trafficBytes' | 'durationDays' | 'userCount' | 'enabled'
+
+const STATUS_FILTER_ITEMS: Array<{ value: StatusFilter; label: string }> = [
+  { value: 'all', label: '全部状态' },
+  { value: 'enabled', label: '已启用' },
+  { value: 'disabled', label: '已停用' },
+  { value: 'unbound', label: '未绑定方案' },
+]
 
 const trafficResetItems = (Object.keys(TRAFFIC_RESET_LABELS) as TrafficReset[]).map((value) => ({
   value,
@@ -90,7 +106,12 @@ export function PlansPage() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [sortKey, setSortKey] = useState<SortKey | null>(null)
+  const [sortDir, setSortDir] = useState<SortDirection>('asc')
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [initialDraft, setInitialDraft] = useState<Draft | null>(null)
   const [showErrors, setShowErrors] = useState(false)
   const [saving, setSaving] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<Plan | null>(null)
@@ -129,14 +150,62 @@ export function PlansPage() {
     if (!(await load())) toast.error('操作已完成，但列表刷新失败，请手动重试')
   }
 
-  const openCreate = () => {
+  const draftDirty = Boolean(draft && initialDraft && JSON.stringify(draft) !== JSON.stringify(initialDraft))
+  const closeDraft = useCallback(() => {
+    setDraft(null)
     setShowErrors(false)
-    setDraft({ ...emptyDraft })
+  }, [])
+  const onDraftOpenChange = useDirtyDialog(draftDirty, saving, closeDraft)
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((current) => (current === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir(key === 'name' ? 'asc' : 'desc')
+    }
+  }
+
+  const visiblePlans = useMemo(() => {
+    const keyword = query.trim().toLocaleLowerCase('zh-CN')
+    const filtered = plans.filter((plan) => {
+      if (statusFilter === 'enabled' && !plan.enabled) return false
+      if (statusFilter === 'disabled' && plan.enabled) return false
+      if (statusFilter === 'unbound' && plan.profileId !== 0) return false
+      if (!keyword) return true
+      return [plan.name, plan.profileName, plan.speedNote, plan.remark].some((text) =>
+        text.toLocaleLowerCase('zh-CN').includes(keyword),
+      )
+    })
+    if (!sortKey) return filtered
+    const factor = sortDir === 'asc' ? 1 : -1
+    return [...filtered].sort((a, b) => {
+      switch (sortKey) {
+        case 'name':
+          return a.name.localeCompare(b.name, 'zh-CN') * factor
+        case 'trafficBytes':
+          return (a.trafficBytes - b.trafficBytes) * factor
+        case 'durationDays':
+          return (a.durationDays - b.durationDays) * factor
+        case 'userCount':
+          return (a.userCount - b.userCount) * factor
+        case 'enabled':
+          return (Number(a.enabled) - Number(b.enabled)) * factor
+      }
+    })
+  }, [plans, query, statusFilter, sortKey, sortDir])
+
+  const hasFilters = query.trim() !== '' || statusFilter !== 'all'
+
+  const openCreate = () => {
+    const next = { ...emptyDraft }
+    setShowErrors(false)
+    setInitialDraft(next)
+    setDraft(next)
   }
 
   const openEdit = (plan: Plan) => {
-    setShowErrors(false)
-    setDraft({
+    const next: Draft = {
       id: plan.id,
       name: plan.name,
       trafficGb: bytesToGb(plan.trafficBytes),
@@ -150,7 +219,10 @@ export function PlansPage() {
       profileId: plan.profileId,
       panelLimitsGb: Object.fromEntries(plan.panelLimits.map((limit) => [limit.panelId, bytesToGb(limit.trafficBytes)])),
       groupLimitsGb: Object.fromEntries(plan.groupLimits.map((limit) => [limit.groupId, bytesToGb(limit.trafficBytes)])),
-    })
+    }
+    setShowErrors(false)
+    setInitialDraft(next)
+    setDraft(next)
   }
 
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -254,7 +326,49 @@ export function PlansPage() {
             <RefreshButton loading={loading || refreshing} disabled={saving} onClick={() => void refresh()} />
           </CardAction>
         </CardHeader>
-        <CardContent className="px-0">
+        <CardContent className="flex flex-col gap-4 px-0">
+          {plans.length > 0 && (
+            <TableToolbar>
+              <SearchInput
+                value={query}
+                onChange={setQuery}
+                placeholder="按套餐名、分流方案或备注搜索…"
+                ariaLabel="搜索套餐"
+              />
+              <Select
+                items={STATUS_FILTER_ITEMS}
+                value={statusFilter}
+                onValueChange={(value) => setStatusFilter((value as StatusFilter) || 'all')}
+              >
+                <SelectTrigger aria-label="按状态筛选" className="w-36">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {STATUS_FILTER_ITEMS.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              {hasFilters && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setQuery('')
+                    setStatusFilter('all')
+                  }}
+                >
+                  <XIcon data-icon="inline-start" />
+                  清除筛选
+                </Button>
+              )}
+            </TableToolbar>
+          )}
           {loading ? (
             <TableSkeleton
               columns={[
@@ -290,6 +404,29 @@ export function PlansPage() {
                 </EmptyContent>
               )}
             </Empty>
+          ) : visiblePlans.length === 0 ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <SearchXIcon />
+                </EmptyMedia>
+                <EmptyTitle>没有匹配的套餐</EmptyTitle>
+                <EmptyDescription>尝试调整搜索词或筛选状态。</EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setQuery('')
+                    setStatusFilter('all')
+                  }}
+                >
+                  <XIcon data-icon="inline-start" />
+                  清除筛选
+                </Button>
+              </EmptyContent>
+            </Empty>
           ) : (
             <div className="flex flex-col gap-3">
               {loadError && (
@@ -304,18 +441,18 @@ export function PlansPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>名称</TableHead>
-                    <TableHead>流量</TableHead>
-                    <TableHead className="hidden md:table-cell">时长</TableHead>
+                    <SortableHead label="名称" active={sortKey === 'name'} direction={sortDir} onToggle={() => toggleSort('name')} />
+                    <SortableHead label="流量" active={sortKey === 'trafficBytes'} direction={sortDir} onToggle={() => toggleSort('trafficBytes')} />
+                    <SortableHead label="时长" className="hidden md:table-cell" active={sortKey === 'durationDays'} direction={sortDir} onToggle={() => toggleSort('durationDays')} />
                     <TableHead className="hidden lg:table-cell">设备数</TableHead>
                     <TableHead className="hidden sm:table-cell">分流方案</TableHead>
-                    <TableHead>用户</TableHead>
-                    <TableHead>状态</TableHead>
+                    <SortableHead label="用户" active={sortKey === 'userCount'} direction={sortDir} onToggle={() => toggleSort('userCount')} />
+                    <SortableHead label="状态" active={sortKey === 'enabled'} direction={sortDir} onToggle={() => toggleSort('enabled')} />
                     <TableHead><span className="sr-only">操作</span></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {plans.map((plan) => (
+                  {visiblePlans.map((plan) => (
                     <TableRow key={plan.id}>
                       <TableCell>
                         <div className="flex flex-col gap-1">
@@ -325,30 +462,36 @@ export function PlansPage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <div className="flex flex-col gap-1">
+                        <div className="flex flex-col items-start gap-1">
                           <span className="tabular-nums">{formatQuota(plan.trafficBytes)}</span>
                           {plan.trafficReset && plan.trafficReset !== 'none' && (
                             <span className="text-xs text-muted-foreground">{TRAFFIC_RESET_LABELS[plan.trafficReset]}重置</span>
                           )}
                           {plan.groupLimits.length > 0 && (
-                            <span
-                              className="text-xs text-muted-foreground"
-                              title={plan.groupLimits
+                            <InfoPopover
+                              label={`查看 ${plan.name} 的节点组限额明细`}
+                              title="节点组流量额度"
+                              content={plan.groupLimits
                                 .map((limit) => `${groups?.find((group) => group.id === limit.groupId)?.name ?? `#${limit.groupId}`}：${formatQuota(limit.trafficBytes)}`)
                                 .join('\n')}
                             >
-                              {plan.groupLimits.length} 个节点组限额
-                            </span>
+                              <span className="text-xs text-muted-foreground underline decoration-dotted underline-offset-4">
+                                {plan.groupLimits.length} 个节点组限额
+                              </span>
+                            </InfoPopover>
                           )}
                           {plan.panelLimits.length > 0 && (
-                            <span
-                              className="text-xs text-muted-foreground"
-                              title={plan.panelLimits
+                            <InfoPopover
+                              label={`查看 ${plan.name} 的单面板限额明细`}
+                              title="单面板流量上限"
+                              content={plan.panelLimits
                                 .map((limit) => `${panels?.find((panel) => panel.id === limit.panelId)?.name ?? `#${limit.panelId}`}：${formatQuota(limit.trafficBytes)}`)
                                 .join('\n')}
                             >
-                              {plan.panelLimits.length} 个面板单独限额
-                            </span>
+                              <span className="text-xs text-muted-foreground underline decoration-dotted underline-offset-4">
+                                {plan.panelLimits.length} 个面板单独限额
+                              </span>
+                            </InfoPopover>
                           )}
                         </div>
                       </TableCell>
@@ -427,216 +570,230 @@ export function PlansPage() {
         </CardFooter>
       </Card>
 
-      <Dialog
-        open={draft !== null}
-        onOpenChange={(open) => {
-          if (!open && !saving) {
-            setDraft(null)
-            setShowErrors(false)
-          }
-        }}
-      >
-        <DialogContent className="sm:max-w-2xl">
+      <Dialog open={draft !== null} onOpenChange={onDraftOpenChange}>
+        <DialogContent className="flex flex-col overflow-hidden sm:max-w-2xl">
           {draft && (
             <form className="contents" noValidate onSubmit={save}>
               <DialogHeader>
                 <DialogTitle>{draft.id ? '编辑套餐' : '新建套餐'}</DialogTitle>
                 <DialogDescription>套餐只管配额与时长，用户能用哪些节点由绑定的分流方案决定。保存后会立即同步到面板。</DialogDescription>
               </DialogHeader>
-              <FieldGroup>
-                <FieldGroup className="sm:grid sm:grid-cols-2">
-                  <Field data-invalid={nameInvalid || undefined} data-disabled={saving || undefined}>
-                    <FieldLabel htmlFor="plan-name">名称</FieldLabel>
-                    <Input id="plan-name" value={draft.name} required aria-invalid={nameInvalid || undefined} disabled={saving} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-                    {nameInvalid && <FieldError>请输入套餐名称。</FieldError>}
-                  </Field>
-                  <Field data-disabled={saving || undefined}>
-                    <FieldLabel htmlFor="plan-remark">备注</FieldLabel>
-                    <Input id="plan-remark" disabled={saving} value={draft.remark} onChange={(event) => setDraft({ ...draft, remark: event.target.value })} />
-                  </Field>
-                </FieldGroup>
+              <DialogBody>
+                <FieldGroup>
+                  <FieldGroup className="sm:grid sm:grid-cols-2">
+                    <Field data-invalid={nameInvalid || undefined} data-disabled={saving || undefined}>
+                      <FieldLabel htmlFor="plan-name">名称</FieldLabel>
+                      <Input id="plan-name" value={draft.name} required aria-invalid={nameInvalid || undefined} disabled={saving} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+                      {nameInvalid && <FieldError>请输入套餐名称。</FieldError>}
+                    </Field>
+                    <Field data-disabled={saving || undefined}>
+                      <FieldLabel htmlFor="plan-remark">备注</FieldLabel>
+                      <Input id="plan-remark" disabled={saving} value={draft.remark} onChange={(event) => setDraft({ ...draft, remark: event.target.value })} />
+                    </Field>
+                  </FieldGroup>
 
-                <FieldGroup className="sm:grid sm:grid-cols-2">
-                  <Field data-disabled={saving || undefined}>
-                    <FieldLabel htmlFor="plan-traffic">流量 (GB)</FieldLabel>
-                    <Input id="plan-traffic" disabled={saving} type="number" min={0} step="any" value={draft.trafficGb} onChange={(event) => setDraft({ ...draft, trafficGb: Number(event.target.value) })} />
-                    <FieldDescription>0 表示不限；新建用户时作为默认值。</FieldDescription>
-                  </Field>
-                  <Field data-disabled={saving || undefined}>
-                    <FieldLabel htmlFor="plan-duration">时长 (天)</FieldLabel>
-                    <Input id="plan-duration" disabled={saving} type="number" min={0} value={draft.durationDays} onChange={(event) => setDraft({ ...draft, durationDays: Number(event.target.value) })} />
-                    <FieldDescription>0 表示永久；用于计算新用户到期时间。</FieldDescription>
-                  </Field>
-                </FieldGroup>
+                  <FieldGroup className="sm:grid sm:grid-cols-2">
+                    <Field data-disabled={saving || undefined}>
+                      <FieldLabel htmlFor="plan-traffic">流量 (GB)</FieldLabel>
+                      <NumberInput id="plan-traffic" disabled={saving} min={0} step="any" zeroAsEmpty placeholder="不限" value={draft.trafficGb} onValueChange={(trafficGb) => setDraft({ ...draft, trafficGb })} />
+                      <FieldDescription>留空或 0 表示不限；新建用户时作为默认值。</FieldDescription>
+                    </Field>
+                    <Field data-disabled={saving || undefined}>
+                      <FieldLabel htmlFor="plan-duration">时长 (天)</FieldLabel>
+                      <NumberInput id="plan-duration" disabled={saving} min={0} step={1} integer zeroAsEmpty placeholder="永久" value={draft.durationDays} onValueChange={(durationDays) => setDraft({ ...draft, durationDays })} />
+                      <FieldDescription>留空或 0 表示永久；用于计算新用户到期时间。</FieldDescription>
+                    </Field>
+                  </FieldGroup>
 
-                <Field data-disabled={saving || undefined}>
-                  <FieldLabel htmlFor="plan-reset">流量重置</FieldLabel>
-                  <Select
-                    items={trafficResetItems}
-                    value={draft.trafficReset}
-                    disabled={saving}
-                    onValueChange={(value) => setDraft({ ...draft, trafficReset: value as TrafficReset })}
-                  >
-                    <SelectTrigger id="plan-reset" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {trafficResetItems.map((item) => (
-                          <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <FieldDescription>
-                    {draft.trafficReset === 'none'
-                      ? '流量上限在整个有效期内只算一次，用完即止。'
-                      : draft.trafficReset === 'monthly'
-                        ? '每月在用户开通日的 0 点清零已用流量（31 日开通的在小月按月末算），流量耗尽的用户会自动恢复。'
-                        : '每月 1 日 0 点清零所有用户的已用流量，流量耗尽的用户会自动恢复。'}
-                    {draft.id && draft.trafficReset !== (plans.find((plan) => plan.id === draft.id)?.trafficReset || 'none') &&
-                      ' 修改后从现在开始按新规则计算，不会立即清零现有用量。'}
-                  </FieldDescription>
-                </Field>
-
-                {grantedGroups && grantedGroups.length > 0 && (
-                  <FieldSet data-disabled={saving || undefined}>
-                    <FieldLegend variant="label">节点组流量额度 (GB)</FieldLegend>
+                  <Field data-disabled={saving || undefined}>
+                    <FieldLabel htmlFor="plan-reset">流量重置</FieldLabel>
+                    <Select
+                      items={trafficResetItems}
+                      value={draft.trafficReset}
+                      disabled={saving}
+                      onValueChange={(value) => setDraft({ ...draft, trafficReset: value as TrafficReset })}
+                    >
+                      <SelectTrigger id="plan-reset" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {trafficResetItems.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                     <FieldDescription>
-                      每个用户在该节点组的用量上限，按节点组里设好的比例拆到各面板；0 表示只受套餐总流量约束。用满一个面板只停用那个面板，随用户流量一起重置。
+                      {draft.trafficReset === 'none'
+                        ? '流量上限在整个有效期内只算一次，用完即止。'
+                        : draft.trafficReset === 'monthly'
+                          ? '每月在用户开通日的 0 点清零已用流量（31 日开通的在小月按月末算），流量耗尽的用户会自动恢复。'
+                          : '每月 1 日 0 点清零所有用户的已用流量，流量耗尽的用户会自动恢复。'}
+                      {draft.id && draft.trafficReset !== (plans.find((plan) => plan.id === draft.id)?.trafficReset || 'none') &&
+                        ' 修改后从现在开始按新规则计算，不会立即清零现有用量。'}
                     </FieldDescription>
-                    <FieldGroup className="gap-3">
-                      {grantedGroups.map((group) => {
-                        const gb = draft.groupLimitsGb[group.id] ?? 0
-                        return (
-                          <Field key={group.id} data-disabled={saving || undefined}>
-                            <div className="flex items-center gap-3">
-                              <FieldLabel htmlFor={`plan-group-limit-${group.id}`} className="min-w-0 flex-1 truncate" title={group.name}>
-                                {group.emoji && `${group.emoji} `}
-                                {group.name}
+                  </Field>
+
+                  {grantedGroups && grantedGroups.length > 0 && (
+                    <FieldSet data-disabled={saving || undefined}>
+                      <FieldLegend variant="label">节点组流量额度 (GB)</FieldLegend>
+                      <FieldDescription>
+                        每个用户在该节点组的用量上限，按节点组里设好的比例拆到各面板；留空表示只受套餐总流量约束。用满一个面板只停用那个面板，随用户流量一起重置。
+                      </FieldDescription>
+                      <FieldGroup className="gap-2.5">
+                        {grantedGroups.map((group) => {
+                          const gb = draft.groupLimitsGb[group.id] ?? 0
+                          return (
+                            <Field
+                              key={group.id}
+                              data-disabled={saving || undefined}
+                              className={cn(
+                                'rounded-lg border px-3 py-2 transition-colors',
+                                gb > 0 ? 'border-primary/40 bg-primary/5' : 'border-transparent bg-muted/30',
+                              )}
+                            >
+                              <div className="flex items-center gap-3">
+                                <FieldLabel htmlFor={`plan-group-limit-${group.id}`} className="min-w-0 flex-1 truncate" title={group.name}>
+                                  {group.emoji && `${group.emoji} `}
+                                  {group.name}
+                                </FieldLabel>
+                                <NumberInput
+                                  id={`plan-group-limit-${group.id}`}
+                                  className="w-28 bg-background"
+                                  min={0}
+                                  step="any"
+                                  zeroAsEmpty
+                                  placeholder="不限"
+                                  disabled={saving}
+                                  value={gb}
+                                  onValueChange={(next) =>
+                                    setDraft({
+                                      ...draft,
+                                      groupLimitsGb: { ...draft.groupLimitsGb, [group.id]: next },
+                                    })
+                                  }
+                                />
+                              </div>
+                              {gb > 0 && group.panelShares.length > 0 && (
+                                <FieldDescription>
+                                  {group.panelShares
+                                    .map(
+                                      (share) =>
+                                        `${panels?.find((panel) => panel.id === share.panelId)?.name ?? `#${share.panelId}`} ${share.weight}% ≈ ${formatQuota(Math.max(1, Math.floor((gbToBytes(gb) * share.weight) / 100)))}`,
+                                    )
+                                    .join('，')}
+                                </FieldDescription>
+                              )}
+                            </Field>
+                          )
+                        })}
+                      </FieldGroup>
+                    </FieldSet>
+                  )}
+
+                  {panels && panels.length > 0 && (
+                    <FieldSet data-disabled={saving || undefined}>
+                      <FieldLegend variant="label">单面板流量上限 (GB)</FieldLegend>
+                      <FieldDescription>
+                        可选，按面板单独再收紧：和节点组拆出来的额度同时存在时取较小值。留空表示不额外限制。
+                      </FieldDescription>
+                      <FieldGroup className="gap-2.5 sm:grid sm:grid-cols-2">
+                        {panels.map((panel) => {
+                          const gb = draft.panelLimitsGb[panel.id] ?? 0
+                          return (
+                            <Field
+                              key={panel.id}
+                              orientation="horizontal"
+                              data-disabled={saving || undefined}
+                              className={cn(
+                                'rounded-lg border px-3 py-2 transition-colors',
+                                gb > 0 ? 'border-primary/40 bg-primary/5' : 'border-transparent bg-muted/30',
+                              )}
+                            >
+                              <FieldLabel htmlFor={`plan-panel-limit-${panel.id}`} className="min-w-0 flex-1 truncate" title={panel.name}>
+                                {panel.name}
                               </FieldLabel>
-                              <Input
-                                id={`plan-group-limit-${group.id}`}
-                                className="w-28"
-                                type="number"
+                              <NumberInput
+                                id={`plan-panel-limit-${panel.id}`}
+                                className="w-24 bg-background"
                                 min={0}
                                 step="any"
+                                zeroAsEmpty
+                                placeholder="不限"
                                 disabled={saving}
                                 value={gb}
-                                onChange={(event) =>
+                                onValueChange={(next) =>
                                   setDraft({
                                     ...draft,
-                                    groupLimitsGb: { ...draft.groupLimitsGb, [group.id]: Number(event.target.value) },
+                                    panelLimitsGb: { ...draft.panelLimitsGb, [panel.id]: next },
                                   })
                                 }
                               />
-                            </div>
-                            {gb > 0 && group.panelShares.length > 0 && (
-                              <FieldDescription>
-                                {group.panelShares
-                                  .map(
-                                    (share) =>
-                                      `${panels?.find((panel) => panel.id === share.panelId)?.name ?? `#${share.panelId}`} ${share.weight}% ≈ ${formatQuota(Math.max(1, Math.floor((gbToBytes(gb) * share.weight) / 100)))}`,
-                                  )
-                                  .join('，')}
-                              </FieldDescription>
-                            )}
-                          </Field>
-                        )
-                      })}
-                    </FieldGroup>
-                  </FieldSet>
-                )}
+                            </Field>
+                          )
+                        })}
+                      </FieldGroup>
+                    </FieldSet>
+                  )}
 
-                {panels && panels.length > 0 && (
-                  <FieldSet data-disabled={saving || undefined}>
-                    <FieldLegend variant="label">单面板流量上限 (GB)</FieldLegend>
-                    <FieldDescription>
-                      可选，按面板单独再收紧：和节点组拆出来的额度同时存在时取较小值。0 表示不额外限制。
-                    </FieldDescription>
-                    <FieldGroup className="gap-3 sm:grid sm:grid-cols-2">
-                      {panels.map((panel) => (
-                        <Field key={panel.id} orientation="horizontal" data-disabled={saving || undefined}>
-                          <FieldLabel htmlFor={`plan-panel-limit-${panel.id}`} className="min-w-0 flex-1 truncate" title={panel.name}>
-                            {panel.name}
-                          </FieldLabel>
-                          <Input
-                            id={`plan-panel-limit-${panel.id}`}
-                            className="w-28"
-                            type="number"
-                            min={0}
-                            step="any"
-                            disabled={saving}
-                            value={draft.panelLimitsGb[panel.id] ?? 0}
-                            onChange={(event) =>
-                              setDraft({
-                                ...draft,
-                                panelLimitsGb: { ...draft.panelLimitsGb, [panel.id]: Number(event.target.value) },
-                              })
-                            }
-                          />
-                        </Field>
-                      ))}
-                    </FieldGroup>
-                  </FieldSet>
-                )}
+                  <FieldGroup className="sm:grid sm:grid-cols-2">
+                    <Field data-disabled={saving || undefined}>
+                      <FieldLabel htmlFor="plan-devices">设备数上限</FieldLabel>
+                      <NumberInput id="plan-devices" disabled={saving} min={0} step={1} integer zeroAsEmpty placeholder="不限" value={draft.deviceLimit} onValueChange={(deviceLimit) => setDraft({ ...draft, deviceLimit })} />
+                      <FieldDescription>留空或 0 表示不限，对应 3x-ui 的 IP 限制。</FieldDescription>
+                    </Field>
+                    <Field data-disabled={saving || undefined}>
+                      <FieldLabel htmlFor="plan-sort">排序</FieldLabel>
+                      <NumberInput id="plan-sort" disabled={saving} step={1} integer value={draft.sortOrder} onValueChange={(sortOrder) => setDraft({ ...draft, sortOrder })} />
+                    </Field>
+                  </FieldGroup>
 
-                <FieldGroup className="sm:grid sm:grid-cols-2">
                   <Field data-disabled={saving || undefined}>
-                    <FieldLabel htmlFor="plan-devices">设备数上限</FieldLabel>
-                    <Input id="plan-devices" disabled={saving} type="number" min={0} value={draft.deviceLimit} onChange={(event) => setDraft({ ...draft, deviceLimit: Number(event.target.value) })} />
-                    <FieldDescription>0 表示不限，对应 3x-ui 的 IP 限制。</FieldDescription>
+                    <FieldLabel htmlFor="plan-speed-note">速率说明</FieldLabel>
+                    <Input id="plan-speed-note" disabled={saving} placeholder="例如：峰值 500 Mbps" value={draft.speedNote} onChange={(event) => setDraft({ ...draft, speedNote: event.target.value })} />
+                    <FieldDescription>仅用于记录与辨识套餐，不参与限速。</FieldDescription>
                   </Field>
+
                   <Field data-disabled={saving || undefined}>
-                    <FieldLabel htmlFor="plan-sort">排序</FieldLabel>
-                    <Input id="plan-sort" disabled={saving} type="number" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })} />
+                    <FieldLabel htmlFor="plan-profile">分流方案</FieldLabel>
+                    <Select
+                      items={profileItems}
+                      value={String(draft.profileId)}
+                      disabled={saving}
+                      onValueChange={(value) => setDraft({ ...draft, profileId: Number(value) })}
+                    >
+                      <SelectTrigger id="plan-profile" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="0">不绑定（用户拿不到任何节点）</SelectItem>
+                          {profiles.map((profile) => (
+                            <SelectItem key={profile.id} value={String(profile.id)}>
+                              {profile.name}
+                              <span className="text-muted-foreground">{profile.usableInbounds} 个入站</span>
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>
+                      {profiles.length === 0
+                        ? '还没有分流方案，先到「分流」页建一个。'
+                        : '方案的可用节点组决定这个套餐的用户能连上哪些入站。'}
+                    </FieldDescription>
+                  </Field>
+
+                  <Field orientation="horizontal" data-disabled={saving || undefined}>
+                    <FieldLabel htmlFor="plan-enabled">启用套餐</FieldLabel>
+                    <Switch id="plan-enabled" disabled={saving} checked={draft.enabled} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} />
                   </Field>
                 </FieldGroup>
-
-                <Field data-disabled={saving || undefined}>
-                  <FieldLabel htmlFor="plan-speed-note">速率说明</FieldLabel>
-                  <Input id="plan-speed-note" disabled={saving} placeholder="例如：峰值 500 Mbps" value={draft.speedNote} onChange={(event) => setDraft({ ...draft, speedNote: event.target.value })} />
-                  <FieldDescription>仅用于记录与辨识套餐，不参与限速。</FieldDescription>
-                </Field>
-
-                <Field data-disabled={saving || undefined}>
-                  <FieldLabel htmlFor="plan-profile">分流方案</FieldLabel>
-                  <Select
-                    items={profileItems}
-                    value={String(draft.profileId)}
-                    disabled={saving}
-                    onValueChange={(value) => setDraft({ ...draft, profileId: Number(value) })}
-                  >
-                    <SelectTrigger id="plan-profile" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="0">不绑定（用户拿不到任何节点）</SelectItem>
-                        {profiles.map((profile) => (
-                          <SelectItem key={profile.id} value={String(profile.id)}>
-                            {profile.name}
-                            <span className="text-muted-foreground">{profile.usableInbounds} 个入站</span>
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <FieldDescription>
-                    {profiles.length === 0
-                      ? '还没有分流方案，先到「分流」页建一个。'
-                      : '方案的可用节点组决定这个套餐的用户能连上哪些入站。'}
-                  </FieldDescription>
-                </Field>
-
-                <Field orientation="horizontal" data-disabled={saving || undefined}>
-                  <FieldLabel htmlFor="plan-enabled">启用套餐</FieldLabel>
-                  <Switch id="plan-enabled" disabled={saving} checked={draft.enabled} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} />
-                </Field>
-              </FieldGroup>
+              </DialogBody>
 
               <DialogFooter>
-                <Button type="button" variant="outline" disabled={saving} onClick={() => setDraft(null)}>取消</Button>
+                <Button type="button" variant="outline" disabled={saving} onClick={closeDraft}>取消</Button>
                 <Button type="submit" disabled={saving}>
                   {saving && <Spinner data-icon="inline-start" />}
                   {saving ? '保存中…' : '保存套餐'}

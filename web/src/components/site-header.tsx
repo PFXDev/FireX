@@ -1,6 +1,6 @@
 import { Fragment } from 'react'
 import { useTheme } from 'next-themes'
-import { MoonIcon, SunIcon } from 'lucide-react'
+import { MonitorIcon, MoonIcon, SunIcon } from 'lucide-react'
 
 import {
   Breadcrumb,
@@ -11,6 +11,15 @@ import {
   BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { Separator } from '@/components/ui/separator'
 import { SidebarTrigger } from '@/components/ui/sidebar'
@@ -63,26 +72,34 @@ export function SiteHeader({ route }: { route: RouteKey }) {
 }
 
 function ThemeToggle() {
-  const { resolvedTheme, setTheme } = useTheme()
-  const dark = resolvedTheme !== 'light'
-  const label = dark ? '切换到浅色主题' : '切换到深色主题'
+  const { theme = 'dark', resolvedTheme, setTheme } = useTheme()
+  const icon = theme === 'system' ? <MonitorIcon /> : resolvedTheme === 'light' ? <SunIcon /> : <MoonIcon />
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={label}
-            onClick={() => setTheme(dark ? 'light' : 'dark')}
-          />
-        }
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={<Button variant="ghost" size="icon-sm" aria-label="切换外观主题" title="切换外观主题" />}
       >
-        {dark ? <SunIcon /> : <MoonIcon />}
-      </TooltipTrigger>
-      <TooltipContent side="bottom" align="end">
-        {label}
-      </TooltipContent>
-    </Tooltip>
+        {icon}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-36">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>外观主题</DropdownMenuLabel>
+          <DropdownMenuRadioGroup value={theme} onValueChange={setTheme}>
+            <DropdownMenuRadioItem value="system">
+              <MonitorIcon />
+              跟随系统
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="light">
+              <SunIcon />
+              浅色主题
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="dark">
+              <MoonIcon />
+              深色主题
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

@@ -121,6 +121,35 @@ export function parseRoute(hash: string): RouteKey {
   return ROUTE_KEYS.has(key) ? (key as RouteKey) : DEFAULT_ROUTE
 }
 
+/** Parses both the route key and query parameters from a URL hash. */
+export function parseHashLocation(hash: string): {
+  route: RouteKey
+  params: URLSearchParams
+  hash: string
+} {
+  const route = parseRoute(hash)
+  const qIndex = hash.indexOf('?')
+  const search = qIndex >= 0 ? hash.slice(qIndex + 1) : ''
+  const params = new URLSearchParams(search)
+  return {
+    route,
+    params,
+    hash: hash || routeHref(route),
+  }
+}
+
+/** Human-readable page title for the browser tab. */
+export function routeTitle(route: RouteKey): string {
+  for (const group of NAV_GROUPS) {
+    for (const item of group.items) {
+      const sub = item.items?.find((candidate) => candidate.route === route)
+      if (sub) return sub.title
+      if (item.route === route) return item.title
+    }
+  }
+  return '总览'
+}
+
 /** Whether the route is the item itself or one of its sub-pages. */
 export function isRouteWithin(item: NavItem, route: RouteKey) {
   return item.route === route || Boolean(item.items?.some((sub) => sub.route === route))

@@ -176,6 +176,26 @@ func TestManagedConfigReportsDriftAndRestoresIt(t *testing.T) {
 	if state := listedState(h, 1); state != configSynced {
 		t.Fatalf("restored state = %q", state)
 	}
+
+	// Adopting the drifted panel configuration resolves drift in one step.
+	h.fake.RemoveInbound(1)
+	h.fake.AddInbound(paneltest.Inbound{ID: 1, Port: 443, Protocol: "vless", Remark: "panel-changed", Enable: true,
+		StreamSettings: `{"network":"tcp","security":"reality","realitySettings":{"serverNames":["panel.example.com"],"privateKey":"panel-key","shortIds":["ef"]}}`})
+	h.mustDo("POST", "/api/panels/1/discover", nil)
+	if state := listedState(h, 1); state != configDrifted {
+		t.Fatalf("second drift state = %q", state)
+	}
+	managed := getManaged(h, 1)
+	var adopted managedResponse
+	json.Unmarshal(h.mustDo("PUT", managedPath(1), map[string]any{"revision": managed.Config.Revision, "adoptPanel": true}), &adopted)
+	if adopted.State != configSynced || listedState(h, 1) != configSynced {
+		t.Fatalf("adoptPanel state = %q, listed = %q", adopted.State, listedState(h, 1))
+	}
+	var mc model.InboundConfig
+	h.db.First(&mc, "inbound_id = ?", 1)
+	if !strings.Contains(mc.Applied, "panel-key") || !strings.Contains(mc.Config, "panel-key") {
+		t.Fatalf("adoptPanel did not store panel configuration: config=%s applied=%s", mc.Config, mc.Applied)
+	}
 }
 
 func TestManagedConfigRecreatesMissingInboundWithIdentity(t *testing.T) {

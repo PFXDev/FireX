@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ThemeProvider } from 'next-themes'
 import { CircleAlertIcon, FlameIcon } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { ApiError, FIREX_UNAUTHORIZED_EVENT, api } from '@/api'
 import { AppSidebar } from '@/components/app-sidebar'
+import { PasswordInput } from '@/components/password-input'
 import { SiteHeader } from '@/components/site-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -20,9 +22,10 @@ import { Input } from '@/components/ui/input'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { Spinner } from '@/components/ui/spinner'
 import { Toaster } from '@/components/ui/sonner'
-import { useHashRoute } from '@/hooks/use-hash-route'
+import { replaceHash, useHashRoute } from '@/hooks/use-hash-route'
+import { UnsavedChangesDialog } from '@/hooks/use-unsaved-guard'
 import { errorMessage } from '@/lib/format'
-import { canAccess, DEFAULT_ROUTE, type RouteKey } from '@/lib/navigation'
+import { canAccess, DEFAULT_ROUTE, routeHref, routeTitle, type RouteKey } from '@/lib/navigation'
 import { SessionProvider, type Admin } from '@/lib/session'
 import { BackupPage } from '@/pages/Backup'
 import { OverviewPage } from '@/pages/Overview'
@@ -48,8 +51,9 @@ function sidebarDefaultOpen() {
 
 export function App() {
   return (
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
       <Shell />
+      <UnsavedChangesDialog />
       <Toaster position="bottom-right" />
     </ThemeProvider>
   )
@@ -91,6 +95,27 @@ function Shell() {
     return () => window.removeEventListener(FIREX_UNAUTHORIZED_EVENT, onUnauthorized)
   }, [])
 
+  const isSuperAdmin = admin?.role === 'super_admin'
+  const allowed = admin ? canAccess(route, { isSuperAdmin: Boolean(isSuperAdmin), canViewConfig: admin.canViewConfig }) : true
+  const visibleRoute = allowed ? route : DEFAULT_ROUTE
+
+  useEffect(() => {
+    if (checking) {
+      document.title = 'FireX'
+    } else if (!admin) {
+      document.title = '登录 · FireX'
+    } else {
+      document.title = `${routeTitle(visibleRoute)} · FireX`
+    }
+  }, [checking, admin, visibleRoute])
+
+  useEffect(() => {
+    if (admin && !allowed) {
+      replaceHash(routeHref(DEFAULT_ROUTE))
+      toast.info('当前账号无权访问该页面，已返回总览')
+    }
+  }, [admin, allowed])
+
   if (checking) {
     return (
       <div className="flex min-h-svh items-center justify-center bg-background">
@@ -107,11 +132,6 @@ function Shell() {
   }
 
   if (!admin) return <Login onSignedIn={check} />
-
-  const isSuperAdmin = admin.role === 'super_admin'
-  // A hash typed by hand must not open a page the role cannot use; the server
-  // would answer 403 and the page would look broken.
-  const visibleRoute = canAccess(route, { isSuperAdmin, canViewConfig: admin.canViewConfig }) ? route : DEFAULT_ROUTE
 
   return (
     <SessionProvider value={admin}>
@@ -277,16 +297,15 @@ function Login({ onSignedIn }: { onSignedIn: () => Promise<void> }) {
                   </Field>
                   <Field data-invalid={Boolean(errors.password) || undefined} data-disabled={busy || undefined}>
                     <FieldLabel htmlFor="login-password">密码</FieldLabel>
-                    <Input
+                    <PasswordInput
                       id="login-password"
-                      type="password"
                       autoComplete="current-password"
                       required
                       disabled={busy}
                       aria-invalid={Boolean(errors.password)}
                       aria-describedby={errors.password ? 'login-password-error' : undefined}
-                      onChange={(event) => {
-                        setPassword(event.target.value)
+                      onChangeValue={(value) => {
+                        setPassword(value)
                         if (errors.password) setErrors((current) => ({ ...current, password: undefined }))
                       }}
                       value={password}

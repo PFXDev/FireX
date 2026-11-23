@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from '@/components/ui/sidebar'
-import { confirmUnsavedNavigation } from '@/hooks/use-unsaved-guard'
+import { requestUnsavedConfirmation } from '@/hooks/use-unsaved-guard'
 import { errorMessage } from '@/lib/format'
 import { routeHref } from '@/lib/navigation'
 import { useSession, type Admin } from '@/lib/session'
@@ -24,7 +24,7 @@ export function NavUser({ admin, onSignedOut }: { admin: Admin; onSignedOut: () 
   const initials = admin.username.slice(0, 2).toUpperCase()
 
   const signOut = async () => {
-    if (!confirmUnsavedNavigation()) return
+    if (!(await requestUnsavedConfirmation())) return
     try {
       await api.post('/auth/logout')
       onSignedOut()
@@ -73,7 +73,7 @@ export function NavUser({ admin, onSignedOut }: { admin: Admin; onSignedOut: () 
               <DropdownMenuItem
                 render={
                   <a
-                    href={routeHref('settings')}
+                    href={`${routeHref('settings')}?tab=security`}
                     onClick={() => {
                       if (isMobile) setOpenMobile(false)
                     }}
@@ -81,7 +81,7 @@ export function NavUser({ admin, onSignedOut }: { admin: Admin; onSignedOut: () 
                 }
               >
                 <SettingsIcon />
-                {isSuperAdmin ? '设置' : '账号安全'}
+                账号安全
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />

@@ -585,3 +585,53 @@ func TestSnapshotAddsPanelThenGroupsItsInbounds(t *testing.T) {
 		t.Fatalf("user on p2 holds %v, want [7]", got)
 	}
 }
+
+func TestSnapshotDiffTracksExternalSubscriptions(t *testing.T) {
+	h := newHarness(t)
+	h.seed()
+	h.db.Create(&model.ExternalSubscription{
+		Name: "ext-a", URL: "https://old.example.com/sub?token=secret", Enabled: true, UpdateInterval: 3600,
+	})
+
+	revision, doc := h.snapshot()
+	doc.ExternalSubscriptions[0].URL = "https://new.example.com/sub?token=newsecret"
+	doc.ExternalSubscriptions = append(doc.ExternalSubscriptions, snapshotExternalSubscription{
+		Name: "ext-b", URL: "https://b.example.com/sub", Enabled: new(true), UpdateInterval: new(3600),
+	})
+	preview := h.previewSnapshot(snapshotRequest{snapshotDoc: doc, Revision: revision})
+
+	var sawUpdate, sawCreate bool
+	encoded, _ := json.Marshal(preview)
+	if strings.Contains(string(encoded), "newsecret") {
+		t.Fatal("snapshot diff leaked external subscription URL")
+	}
+	for _, ch := range preview.Changes {
+		if ch.Section == "externalSubscriptions" && ch.Key == "ext-a" && ch.Action == "update" {
+			for _, f := range ch.Fields {
+				if f.Path == "url" {
+					sawUpdate = true
+				}
+			}
+		}
+		if ch.Section == "externalSubscriptions" && ch.Key == "ext-b" && ch.Action == "create" {
+			sawCreate = true
+		}
+	}
+	if !sawUpdate || !sawCreate {
+		t.Fatalf("missing externalSubscriptions diff changes: %+v", preview.Changes)
+	}
+
+	h.applySnapshot(snapshotRequest{snapshotDoc: doc, Revision: revision}, false)
+	revision, doc = h.snapshot()
+	doc.ExternalSubscriptions = doc.ExternalSubscriptions[:1]
+	delPreview := h.previewSnapshot(snapshotRequest{snapshotDoc: doc, Revision: revision})
+	sawDelete := false
+	for _, ch := range delPreview.Changes {
+		if ch.Section == "externalSubscriptions" && ch.Key == "ext-b" && ch.Action == "delete" {
+			sawDelete = true
+		}
+	}
+	if !sawDelete {
+		t.Fatalf("missing externalSubscriptions delete diff: %+v", delPreview.Changes)
+	}
+}

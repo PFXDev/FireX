@@ -42,6 +42,7 @@ func paramID(c *gin.Context) (uint, bool) {
 // ------------------------------------------------------------------- panels
 
 type panelRequest struct {
+	ID            uint   `json:"id"`
 	Name          string `json:"name"`
 	BaseURL       string `json:"baseUrl"`
 	APIToken      string `json:"apiToken"`
@@ -316,8 +317,11 @@ func (s *Server) testPanel(c *gin.Context) {
 	token := strings.TrimSpace(req.APIToken)
 	if token == "" {
 		// Re-testing an existing panel: the UI cannot resend a token it never got.
+		// Prefer the panel id when editing so changing baseUrl still reuses the stored token.
 		var existing model.Panel
-		if err := s.db.First(&existing, "base_url = ?", strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")).Error; err == nil {
+		if req.ID > 0 && s.db.First(&existing, req.ID).Error == nil {
+			token = existing.APIToken
+		} else if err := s.db.First(&existing, "base_url = ?", strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")).Error; err == nil {
 			token = existing.APIToken
 		}
 	}
@@ -533,9 +537,12 @@ func (s *Server) updateInbound(c *gin.Context) {
 }
 
 type inboundBulkRequest struct {
-	IDs       []uint `json:"ids"`
-	Enabled   *bool  `json:"enabled"`
-	SortOrder *int   `json:"sortOrder"`
+	IDs           []uint `json:"ids"`
+	Enabled       *bool  `json:"enabled"`
+	SortOrder     *int   `json:"sortOrder"`
+	Vision        *bool  `json:"vision"`
+	AddToGroupID  uint   `json:"addToGroupId"`
+	RemoveMissing bool   `json:"removeMissing"`
 }
 
 func (s *Server) bulkUpdateInbounds(c *gin.Context) {
@@ -548,25 +555,120 @@ func (s *Server) bulkUpdateInbounds(c *gin.Context) {
 		failMsg(c, http.StatusBadRequest, "no inbounds selected")
 		return
 	}
+
+	if req.RemoveMissing {
+		var inbounds []model.Inbound
+		if err := s.db.Where("id IN ?", req.IDs).Find(&inbounds).Error; err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
+		for _, ib := range inbounds {
+			if !ib.Missing {
+				failMsg(c, http.StatusConflict, "包含尚未失联的入站，请先在面板上删除")
+				return
+			}
+		}
+		var plans []uint
+		for _, ib := range inbounds {
+			plans = append(plans, routing.PlansUsingInbound(s.db, ib.ID)...)
+			if err := deleteInboundRows(s.db.DB, ib.ID); err != nil {
+				fail(c, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		s.subs.InvalidateAll()
+		syncErr := s.reconcilePlans(uniquePlans(plans))
+		c.JSON(http.StatusOK, gin.H{"ok": true, "updated": len(inbounds), "syncError": errString(syncErr)})
+		return
+	}
+
+	var inbounds []model.Inbound
+	if req.Vision != nil || req.AddToGroupID > 0 {
+		if err := s.db.Where("id IN ?", req.IDs).Find(&inbounds).Error; err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
+	}
+
+	if req.Vision != nil && *req.Vision {
+		for _, ib := range inbounds {
+			if reason := inboundVisionReason(ib); reason != "" {
+				failMsg(c, http.StatusBadRequest, ib.DisplayName()+"："+reason)
+				return
+			}
+		}
+	}
+
+	if req.AddToGroupID > 0 {
+		var group model.NodeGroup
+		if err := s.db.First(&group, req.AddToGroupID).Error; err != nil {
+			failMsg(c, http.StatusNotFound, "node group not found")
+			return
+		}
+	}
+
 	updates := map[string]any{"updated_at": provision.NowMs()}
+	hasFieldUpdates := false
 	if req.Enabled != nil {
 		updates["enabled"] = *req.Enabled
+		hasFieldUpdates = true
 	}
 	if req.SortOrder != nil {
 		updates["sort_order"] = *req.SortOrder
+		hasFieldUpdates = true
 	}
-	if err := s.db.Model(&model.Inbound{}).Where("id IN ?", req.IDs).Updates(updates).Error; err != nil {
-		fail(c, http.StatusInternalServerError, err)
-		return
+	if req.Vision != nil {
+		updates["vision"] = *req.Vision
+		hasFieldUpdates = true
 	}
+	if hasFieldUpdates {
+		if err := s.db.Model(&model.Inbound{}).Where("id IN ?", req.IDs).Updates(updates).Error; err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
+	}
+
+	groupAdded := false
+	if req.AddToGroupID > 0 {
+		var existing []model.NodeGroupInbound
+		if err := s.db.Where("group_id = ? AND inbound_id IN ?", req.AddToGroupID, req.IDs).Find(&existing).Error; err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
+		seen := make(map[uint]bool, len(existing))
+		for _, link := range existing {
+			seen[link.InboundID] = true
+		}
+		var links []model.NodeGroupInbound
+		for _, ib := range inbounds {
+			if ib.Missing || seen[ib.ID] {
+				continue
+			}
+			links = append(links, model.NodeGroupInbound{GroupID: req.AddToGroupID, InboundID: ib.ID})
+		}
+		if len(links) > 0 {
+			if err := s.db.Create(&links).Error; err != nil {
+				fail(c, http.StatusInternalServerError, err)
+				return
+			}
+			groupAdded = true
+		}
+	}
+
 	s.subs.InvalidateAll()
-	var syncErr error
-	if req.Enabled != nil {
-		// One pass for the whole selection: several inbounds usually reach the
-		// same plans, and reconciling each separately would re-push every user
-		// once per inbound.
-		syncErr = s.reconcileInbounds(req.IDs)
+	var plans []uint
+	if req.Enabled != nil || req.Vision != nil {
+		for _, id := range req.IDs {
+			plans = append(plans, routing.PlansUsingInbound(s.db, id)...)
+		}
 	}
+	if groupAdded {
+		plans = append(plans, routing.PlansUsingNodeGroup(s.db, req.AddToGroupID)...)
+	}
+	// One pass for the whole selection: several inbounds usually reach the
+	// same plans, and reconciling each separately would re-push every user
+	// once per inbound.
+	syncErr := s.reconcilePlans(uniquePlans(plans))
 	c.JSON(http.StatusOK, gin.H{"ok": true, "updated": len(req.IDs), "syncError": errString(syncErr)})
 }
 
@@ -607,14 +709,6 @@ func deleteInboundRows(handle *gorm.DB, inboundID uint) error {
 // reconcileInbound re-pushes everyone whose profile reaches this inbound.
 func (s *Server) reconcileInbound(inboundID uint) error {
 	return s.reconcilePlans(routing.PlansUsingInbound(s.db, inboundID))
-}
-
-func (s *Server) reconcileInbounds(inboundIDs []uint) error {
-	var plans []uint
-	for _, id := range inboundIDs {
-		plans = append(plans, routing.PlansUsingInbound(s.db, id)...)
-	}
-	return s.reconcilePlans(plans)
 }
 
 // reconcilePlans pushes every user on these plans and returns the first panel

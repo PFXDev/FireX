@@ -643,6 +643,106 @@ func (s *Server) resetUserTraffic(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "remoteFailures": remoteFailures, "syncError": errString(err)})
 }
 
+type userBulkRequest struct {
+	IDs        []uint `json:"ids"`
+	Action     string `json:"action"`
+	ExtendDays int    `json:"extendDays"`
+}
+
+func (s *Server) bulkUsers(c *gin.Context) {
+	var req userBulkRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	if len(req.IDs) == 0 {
+		failMsg(c, http.StatusBadRequest, "no users selected")
+		return
+	}
+	switch req.Action {
+	case "resync", "enable", "disable":
+	case "extend":
+		if req.ExtendDays <= 0 {
+			failMsg(c, http.StatusBadRequest, "extendDays must be positive")
+			return
+		}
+	default:
+		failMsg(c, http.StatusBadRequest, "invalid bulk action")
+		return
+	}
+
+	var users []model.User
+	if err := s.db.Where("id IN ?", req.IDs).Order("id ASC").Find(&users).Error; err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	if len(users) == 0 {
+		failMsg(c, http.StatusNotFound, "users not found")
+		return
+	}
+
+	now := provision.NowMs()
+	updated := 0
+	failed := 0
+	var firstErr error
+
+	for i := range users {
+		u := &users[i]
+		switch req.Action {
+		case "enable", "disable":
+			u.Enabled = req.Action == "enable"
+			u.UpdatedAt = now
+			if err := s.db.Save(u).Error; err != nil {
+				failed++
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			updated++
+		case "extend":
+			if u.ExpiresAt == 0 {
+				// Permanent accounts do not carry an expiry boundary to extend.
+				continue
+			}
+			base := u.ExpiresAt
+			if base < now {
+				base = now
+			}
+			u.ExpiresAt = base + int64(req.ExtendDays)*24*60*60*1000
+			u.UpdatedAt = now
+			if err := s.db.Save(u).Error; err != nil {
+				failed++
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			updated++
+		}
+
+		s.subs.InvalidateUser(u)
+		ctx, cancel := opCtx()
+		err := s.mgr.ReconcileUser(ctx, u)
+		cancel()
+		if err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else if req.Action == "resync" {
+			updated++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":        true,
+		"updated":   updated,
+		"failed":    failed,
+		"syncError": errString(firstErr),
+	})
+}
+
 func (s *Server) previewSubscription(c *gin.Context) {
 	id, ok := paramID(c)
 	if !ok {
@@ -662,10 +762,28 @@ func (s *Server) previewSubscription(c *gin.Context) {
 	}
 	yaml, renderErr := s.subs.Clash(result, s.subBase(c))
 
+	panelNames := map[uint]string{}
+	var panelIDs []uint
+	seenPanel := map[uint]bool{}
+	for _, e := range result.Entries {
+		if e.Inbound.PanelID > 0 && !seenPanel[e.Inbound.PanelID] {
+			seenPanel[e.Inbound.PanelID] = true
+			panelIDs = append(panelIDs, e.Inbound.PanelID)
+		}
+	}
+	if len(panelIDs) > 0 {
+		var panels []model.Panel
+		s.db.Select("id", "name").Where("id IN ?", panelIDs).Find(&panels)
+		for _, p := range panels {
+			panelNames[p.ID] = p.Name
+		}
+	}
+
 	type entryView struct {
 		Name                     string `json:"name"`
 		Protocol                 string `json:"protocol"`
 		Panel                    uint   `json:"panelId"`
+		PanelName                string `json:"panelName"`
 		ExternalSubscriptionID   uint   `json:"externalSubscriptionId"`
 		ExternalSubscriptionName string `json:"externalSubscriptionName"`
 		Clash                    bool   `json:"clashSupported"`
@@ -674,7 +792,7 @@ func (s *Server) previewSubscription(c *gin.Context) {
 	views := make([]entryView, 0, len(result.Entries))
 	for _, e := range result.Entries {
 		views = append(views, entryView{
-			Name: e.Name, Protocol: e.Protocol, Panel: e.Inbound.PanelID,
+			Name: e.Name, Protocol: e.Protocol, Panel: e.Inbound.PanelID, PanelName: panelNames[e.Inbound.PanelID],
 			ExternalSubscriptionID: e.ExternalSubscriptionID, ExternalSubscriptionName: e.ExternalSubscriptionName,
 			Clash: e.Clash != nil, Link: e.Link,
 		})

@@ -30,6 +30,7 @@ import {
 import { Progress, ProgressLabel, ProgressValue } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
+import { usePageVisible } from '@/hooks/use-page-visible'
 import { errorMessage, formatTime } from '@/lib/format'
 
 // A downloaded update waiting for a restart is good news, not a warning.
@@ -66,6 +67,7 @@ export function SystemPage() {
   const statusRequestVersion = useRef(0)
 
   const busy = status ? BUSY_STATES.includes(status.state) : false
+  const visible = usePageVisible()
 
   const commitStatus = useCallback((nextStatus: UpdateStatus) => {
     statusRequestVersion.current += 1
@@ -113,13 +115,30 @@ export function SystemPage() {
   // download instead of jumping.
   useEffect(() => {
     if (!status) return
+    if (!visible && status.state !== 'applying') return
 
+    if (visible) {
+      void loadStatus().catch(() => {})
+    }
     const timer = setInterval(() => {
       // A restart briefly kills the server; keep polling until it answers.
       void loadStatus().catch(() => {})
     }, busy ? 1500 : 5000)
     return () => clearInterval(timer)
-  }, [busy, loadStatus, status])
+  }, [busy, loadStatus, status, visible])
+
+  const refreshSummary = useCallback(async () => {
+    try {
+      const [nextInfo, nextStatus] = await Promise.all([
+        api.get<VersionInfo>('/version'),
+        loadStatus(true),
+      ])
+      setInfo(nextInfo)
+      commitStatus(nextStatus)
+    } catch {
+      // Top-level summary will catch up on the next status poll.
+    }
+  }, [commitStatus, loadStatus])
 
   // The page itself was served by the binary that just got replaced, so once a
   // new version answers, reload to pick up the matching UI bundle.
@@ -407,7 +426,7 @@ export function SystemPage() {
           )}
         </Card>
       </div>
-      <ServerConfigEditor />
+      <ServerConfigEditor onSaved={() => void refreshSummary()} />
     </div>
   )
 }

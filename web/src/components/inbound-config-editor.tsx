@@ -1,8 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 
-import { PlusIcon, Trash2Icon } from 'lucide-react'
+import { EyeIcon, PlusIcon, Trash2Icon } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { CodeText, CodeTextarea } from '@/components/code-display'
+import { NumberInput } from '@/components/number-input'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '@/components/ui/field'
@@ -118,10 +120,23 @@ function JSONValue({ value, onChange, path, disabled, reveal }: {
               </Button>
             </div>
           ))}
-          <Button type="button" variant="outline" size="sm" className="self-start" disabled={disabled} onClick={() => onChange([...value, blankValue(value[0])])}>
-            <PlusIcon data-icon="inline-start" />
-            添加条目
-          </Button>
+          {value.length === 0 ? (
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={() => onChange([...value, ''])}>
+                <PlusIcon data-icon="inline-start" />
+                添加文本
+              </Button>
+              <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={() => onChange([...value, {}])}>
+                <PlusIcon data-icon="inline-start" />
+                添加对象
+              </Button>
+            </div>
+          ) : (
+            <Button type="button" variant="outline" size="sm" className="self-start" disabled={disabled} onClick={() => onChange([...value, blankValue(value[0])])}>
+              <PlusIcon data-icon="inline-start" />
+              添加条目
+            </Button>
+          )}
         </FieldGroup>
       </FieldSet>
     )
@@ -133,17 +148,21 @@ function JSONValue({ value, onChange, path, disabled, reveal }: {
         <Switch id={id} checked={value} disabled={disabled} onCheckedChange={onChange} />
       ) : value === null ? (
         <JSONText id={id} value={value} disabled={disabled || (secret && !reveal)} onChange={onChange} />
+      ) : typeof value === 'number' ? (
+        <NumberInput
+          id={id}
+          disabled={disabled}
+          value={value}
+          step="any"
+          onValueChange={onChange}
+        />
       ) : (
         <Input
           id={id}
-          type={secret && !reveal ? 'password' : typeof value === 'number' ? 'number' : 'text'}
+          type={secret && !reveal ? 'password' : 'text'}
           disabled={disabled}
           value={String(value ?? '')}
-          onChange={(event) => {
-            const next = event.target.value
-            if (typeof value !== 'number') onChange(next)
-            else if (next !== '' && Number.isFinite(Number(next))) onChange(Number(next))
-          }}
+          onChange={(event) => onChange(event.target.value)}
         />
       )}
       <FieldDescription><CodeText>{path}</CodeText></FieldDescription>
@@ -155,12 +174,13 @@ function JSONValue({ value, onChange, path, disabled, reveal }: {
  * Edits a complete inbound configuration by section or as raw JSON. Secrets
  * stay masked, and raw JSON is read-only, until reveal is on.
  */
-export function ConfigEditor({ parameters, onChange, onInvalidChange, disabled, reveal, children }: {
+export function ConfigEditor({ parameters, onChange, onInvalidChange, disabled, reveal, onRequestReveal, children }: {
   parameters: Parameters
   onChange: (next: Parameters) => void
   onInvalidChange: (invalid: boolean) => void
   disabled: boolean
   reveal: boolean
+  onRequestReveal?: () => void
   /** Extra fields shown first on the connection tab. */
   children?: React.ReactNode
 }) {
@@ -197,7 +217,10 @@ export function ConfigEditor({ parameters, onChange, onInvalidChange, disabled, 
       <Tabs
         value={tab}
         onValueChange={(value) => {
-          if (hasError) return
+          if (hasError) {
+            toast.warning('当前标签页存在无效的 JSON 字段，请先修正后再切换')
+            return
+          }
           setTab(String(value))
         }}
       >
@@ -231,7 +254,15 @@ export function ConfigEditor({ parameters, onChange, onInvalidChange, disabled, 
         })}
         <TabsContent value="json" className="pt-5">
           <Field data-invalid={!!rawError || undefined} data-disabled={disabled || !reveal || undefined}>
-            <FieldLabel htmlFor="config-json">完整参数</FieldLabel>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <FieldLabel htmlFor="config-json">完整参数</FieldLabel>
+              {!reveal && !disabled && onRequestReveal && (
+                <Button type="button" variant="outline" size="xs" onClick={onRequestReveal}>
+                  <EyeIcon data-icon="inline-start" />
+                  显示密钥以编辑 JSON
+                </Button>
+              )}
+            </div>
             <CodeTextarea
               id="config-json"
               className="min-h-96"

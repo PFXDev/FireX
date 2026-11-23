@@ -167,7 +167,11 @@ export function BackupPage() {
         <CardHeader>
           <CardTitle>备份列表</CardTitle>
           <CardDescription>
-            只有自动备份会按“保留份数”清理，其余备份需手动删除。间隔和份数在“系统”页的服务端配置中设置。
+            只有自动备份会按“保留份数”清理，其余备份需手动删除。间隔和份数在
+            <a href="#/system" className="mx-1 underline underline-offset-4 hover:text-foreground">
+              系统 → 服务端配置
+            </a>
+            中设置。
             {data && (
               <>
                 {' '}存储目录 <CodeText>{data.dir}</CodeText>
@@ -222,7 +226,14 @@ export function BackupPage() {
                 <TableBody>
                   {items.map((entry) => (
                     <TableRow key={entry.name}>
-                      <TableCell className="font-mono text-xs">{entry.name}</TableCell>
+                      <TableCell className="whitespace-normal">
+                        <div className="flex flex-col gap-0.5">
+                          <span className="font-mono text-xs break-all">{entry.name}</span>
+                          <span className="text-xs text-muted-foreground tabular-nums sm:hidden">
+                            {formatBytes(entry.size)} · {formatTime(entry.createdAt)}
+                          </span>
+                        </div>
+                      </TableCell>
                       <TableCell>
                         <StatusBadge tone={KINDS[entry.kind].tone}>{KINDS[entry.kind].label}</StatusBadge>
                       </TableCell>

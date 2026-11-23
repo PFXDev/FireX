@@ -1,13 +1,29 @@
-import { useCallback, useEffect, useState } from 'react'
-import { EyeIcon, ListIcon, PencilIcon, PlusIcon, RefreshCwIcon, RssIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  EyeIcon,
+  ListIcon,
+  MoreHorizontalIcon,
+  PencilIcon,
+  PlusIcon,
+  PowerIcon,
+  RefreshCwIcon,
+  RssIcon,
+  SearchXIcon,
+  Trash2Icon,
+  TriangleAlertIcon,
+  XIcon,
+} from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api } from '@/api'
 import type { ExternalSubscription, ExternalSubscriptionDetail } from '@/api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { InfoPopover } from '@/components/info-popover'
 import { LoadErrorAlert, RefreshButton, TableSkeleton } from '@/components/load-state'
+import { NumberInput } from '@/components/number-input'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
+import { SearchInput, TableToolbar } from '@/components/table-toolbar'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -22,18 +38,29 @@ import {
 } from '@/components/ui/card'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { useDirtyDialog } from '@/hooks/use-unsaved-guard'
 import { errorMessage, formatTime } from '@/lib/format'
 import { useSession } from '@/lib/session'
 
@@ -50,6 +77,15 @@ type MutationResponse = {
   subscription: ExternalSubscription
   refreshError: string
 }
+
+type StatusFilter = 'all' | 'ok' | 'warning' | 'disabled'
+
+const STATUS_FILTER_ITEMS: Array<{ value: StatusFilter; label: string }> = [
+  { value: 'all', label: '全部状态' },
+  { value: 'ok', label: '正常' },
+  { value: 'warning', label: '有告警或失败' },
+  { value: 'disabled', label: '已停用' },
+]
 
 const emptyDraft: Draft = {
   name: '',
@@ -78,11 +114,16 @@ export function ExternalSubscriptionsPage() {
   const [items, setItems] = useState<ExternalSubscription[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [refreshingAll, setRefreshingAll] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [initialDraft, setInitialDraft] = useState<Draft | null>(null)
   const [showErrors, setShowErrors] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [refreshingID, setRefreshingID] = useState<number | null>(null)
+  const [refreshingIDs, setRefreshingIDs] = useState<Set<number>>(new Set())
+  const [toggling, setToggling] = useState<Set<number>>(new Set())
   const [pendingDelete, setPendingDelete] = useState<ExternalSubscription | null>(null)
   const [detail, setDetail] = useState<ExternalSubscriptionDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -113,21 +154,32 @@ export function ExternalSubscriptionsPage() {
     if (!(await load())) toast.error('操作已完成，但列表刷新失败，请手动重试')
   }
 
-  const openCreate = () => {
+  const draftDirty = Boolean(!readOnly && draft && initialDraft && JSON.stringify(draft) !== JSON.stringify(initialDraft))
+  const closeDraft = useCallback(() => {
+    setDraft(null)
     setShowErrors(false)
-    setDraft({ ...emptyDraft })
+  }, [])
+  const onDraftOpenChange = useDirtyDialog(draftDirty, saving, closeDraft)
+
+  const openCreate = () => {
+    const next = { ...emptyDraft }
+    setShowErrors(false)
+    setInitialDraft(next)
+    setDraft(next)
   }
 
   const openEdit = (item: ExternalSubscription) => {
-    setShowErrors(false)
-    setDraft({
+    const next: Draft = {
       id: item.id,
       name: item.name,
       url: item.url,
       enabled: item.enabled,
       updateInterval: item.updateInterval,
       remark: item.remark,
-    })
+    }
+    setShowErrors(false)
+    setInitialDraft(next)
+    setDraft(next)
   }
 
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -152,18 +204,85 @@ export function ExternalSubscriptionsPage() {
     }
   }
 
+  const toggleEnabled = async (item: ExternalSubscription) => {
+    setToggling((current) => new Set(current).add(item.id))
+    try {
+      const result = await api.put<MutationResponse>(`/external-subscriptions/${item.id}`, {
+        name: item.name,
+        url: item.url,
+        enabled: !item.enabled,
+        updateInterval: item.updateInterval,
+        remark: item.remark,
+      })
+      setItems((current) => current.map((row) => (row.id === item.id ? result.subscription : row)))
+      toast.success(item.enabled ? `已停用「${item.name}」` : `已启用「${item.name}」`)
+    } catch (err) {
+      toast.error(errorMessage(err, '切换状态失败'))
+    } finally {
+      setToggling((current) => {
+        const next = new Set(current)
+        next.delete(item.id)
+        return next
+      })
+    }
+  }
+
   const refreshOne = async (item: ExternalSubscription) => {
-    if (refreshingID !== null) return
-    setRefreshingID(item.id)
+    if (refreshingIDs.has(item.id)) return
+    setRefreshingIDs((current) => new Set(current).add(item.id))
     try {
       const result = await api.post<MutationResponse>(`/external-subscriptions/${item.id}/refresh`)
       setItems((current) => current.map((row) => (row.id === item.id ? result.subscription : row)))
       if (result.refreshError) toast.warning(`刷新失败，已保留旧节点：${result.refreshError}`)
-      else toast.success(`已更新 ${result.subscription.nodeCount} 个节点`)
+      else toast.success(`「${item.name}」已更新 ${result.subscription.nodeCount} 个节点`)
     } catch (err) {
-      toast.error(errorMessage(err, '刷新失败'))
+      toast.error(errorMessage(err, `刷新「${item.name}」失败`))
     } finally {
-      setRefreshingID(null)
+      setRefreshingIDs((current) => {
+        const next = new Set(current)
+        next.delete(item.id)
+        return next
+      })
+    }
+  }
+
+  const refreshAll = async () => {
+    const targets = items.filter((item) => item.enabled)
+    if (targets.length === 0) {
+      toast.info('没有已启用的外部订阅')
+      return
+    }
+    setRefreshingAll(true)
+    setRefreshingIDs((current) => {
+      const next = new Set(current)
+      targets.forEach((item) => next.add(item.id))
+      return next
+    })
+    let ok = 0
+    let failed = 0
+    try {
+      await Promise.all(
+        targets.map(async (item) => {
+          try {
+            const result = await api.post<MutationResponse>(`/external-subscriptions/${item.id}/refresh`)
+            setItems((current) => current.map((row) => (row.id === item.id ? result.subscription : row)))
+            if (result.refreshError) failed++
+            else ok++
+          } catch {
+            failed++
+          } finally {
+            setRefreshingIDs((current) => {
+              const next = new Set(current)
+              next.delete(item.id)
+              return next
+            })
+          }
+        }),
+      )
+      if (failed === 0) toast.success(`全部刷新完成，共更新 ${ok} 个订阅`)
+      else toast.warning(`刷新完成：${ok} 个成功，${failed} 个有告警或失败`)
+    } finally {
+      setRefreshingAll(false)
     }
   }
 
@@ -191,6 +310,18 @@ export function ExternalSubscriptionsPage() {
     }
   }
 
+  const visibleItems = useMemo(() => {
+    const keyword = query.trim().toLocaleLowerCase('zh-CN')
+    return items.filter((item) => {
+      if (statusFilter === 'ok' && (!item.enabled || Boolean(item.lastError) || item.lastUpdateAt === 0)) return false
+      if (statusFilter === 'warning' && (!item.enabled || !item.lastError)) return false
+      if (statusFilter === 'disabled' && item.enabled) return false
+      if (!keyword) return true
+      return [item.name, item.url, item.remark].some((text) => text.toLocaleLowerCase('zh-CN').includes(keyword))
+    })
+  }, [items, query, statusFilter])
+
+  const hasFilters = query.trim() !== '' || statusFilter !== 'all'
   const locked = saving || readOnly
   const nameInvalid = Boolean(showErrors && draft && !draft.name.trim())
   const urlInvalid = Boolean(showErrors && draft && !validHTTPURL(draft.url.trim()))
@@ -206,10 +337,18 @@ export function ExternalSubscriptionsPage() {
             只读
           </Badge>
         ) : (
-          <Button onClick={openCreate}>
-            <PlusIcon data-icon="inline-start" />
-            添加订阅
-          </Button>
+          <>
+            {items.length > 0 && (
+              <Button type="button" variant="outline" disabled={refreshingAll || saving} onClick={() => void refreshAll()}>
+                {refreshingAll ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
+                {refreshingAll ? '刷新中…' : '全部刷新'}
+              </Button>
+            )}
+            <Button onClick={openCreate}>
+              <PlusIcon data-icon="inline-start" />
+              添加订阅
+            </Button>
+          </>
         )}
       </PageHeader>
 
@@ -226,10 +365,52 @@ export function ExternalSubscriptionsPage() {
           <CardTitle>订阅列表</CardTitle>
           <CardDescription>分享链接可用于全部输出格式；仅存在于 YAML 的节点会用于 mihomo 输出。</CardDescription>
           <CardAction>
-            <RefreshButton loading={loading || refreshing} disabled={saving || refreshingID !== null} onClick={() => void refresh()} />
+            <RefreshButton loading={loading || refreshing} disabled={saving || refreshingAll} onClick={() => void refresh()} />
           </CardAction>
         </CardHeader>
-        <CardContent className="px-0">
+        <CardContent className="flex flex-col gap-4 px-0">
+          {items.length > 0 && (
+            <TableToolbar>
+              <SearchInput
+                value={query}
+                onChange={setQuery}
+                placeholder="按名称、地址或备注搜索…"
+                ariaLabel="搜索外部订阅"
+              />
+              <Select
+                items={STATUS_FILTER_ITEMS}
+                value={statusFilter}
+                onValueChange={(value) => setStatusFilter((value as StatusFilter) || 'all')}
+              >
+                <SelectTrigger aria-label="按状态筛选" className="w-36">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {STATUS_FILTER_ITEMS.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              {hasFilters && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setQuery('')
+                    setStatusFilter('all')
+                  }}
+                >
+                  <XIcon data-icon="inline-start" />
+                  清除筛选
+                </Button>
+              )}
+            </TableToolbar>
+          )}
           {loading ? (
             <TableSkeleton
               columns={[
@@ -264,6 +445,29 @@ export function ExternalSubscriptionsPage() {
                 </EmptyContent>
               )}
             </Empty>
+          ) : visibleItems.length === 0 ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <SearchXIcon />
+                </EmptyMedia>
+                <EmptyTitle>没有匹配的外部订阅</EmptyTitle>
+                <EmptyDescription>换一个关键词或状态筛选条件试试。</EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setQuery('')
+                    setStatusFilter('all')
+                  }}
+                >
+                  <XIcon data-icon="inline-start" />
+                  清除筛选
+                </Button>
+              </EmptyContent>
+            </Empty>
           ) : (
             <div className="flex flex-col gap-3">
               {loadError && (
@@ -288,62 +492,114 @@ export function ExternalSubscriptionsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {items.map((item) => (
-                    <TableRow key={item.id}>
-                      <TableCell>
-                        <div className="flex min-w-0 flex-col gap-1">
-                          <span className="font-medium">{item.name}</span>
-                          <span className="max-w-64 truncate text-xs text-muted-foreground" title={item.url}>{item.url}</span>
-                          {item.remark && <span className="text-xs text-muted-foreground">{item.remark}</span>}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Button type="button" variant="link" size="sm" className="px-0 tabular-nums" onClick={() => void viewNodes(item)}>
-                          {item.nodeCount}
-                        </Button>
-                      </TableCell>
-                      <TableCell className="hidden tabular-nums md:table-cell">{item.groupCount}</TableCell>
-                      <TableCell className="hidden lg:table-cell">{intervalLabel(item.updateInterval)}</TableCell>
-                      <TableCell className="hidden text-muted-foreground lg:table-cell">{formatTime(item.lastUpdateAt)}</TableCell>
-                      <TableCell>
-                        {!item.enabled ? (
-                          <StatusBadge tone="idle">停用</StatusBadge>
-                        ) : item.lastError ? (
-                          <StatusBadge tone={item.nodeCount > 0 ? 'warn' : 'bad'} title={item.lastError}>
-                            {item.nodeCount > 0 ? '有警告' : '刷新失败'}
-                          </StatusBadge>
-                        ) : item.lastUpdateAt > 0 ? (
-                          <StatusBadge tone="good">正常</StatusBadge>
-                        ) : (
-                          <StatusBadge tone="idle">待更新</StatusBadge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-1">
-                          <Button type="button" variant="outline" size="sm" aria-label={`查看 ${item.name} 的节点`} onClick={() => void viewNodes(item)}>
-                            <ListIcon data-icon="inline-start" />
-                            <span className="hidden xl:inline">节点</span>
+                  {visibleItems.map((item) => {
+                    const rowRefreshing = refreshingIDs.has(item.id)
+                    const rowToggling = toggling.has(item.id)
+                    return (
+                      <TableRow key={item.id}>
+                        <TableCell>
+                          <div className="flex min-w-0 flex-col gap-1">
+                            <span className="font-medium">{item.name}</span>
+                            <span className="max-w-64 truncate text-xs text-muted-foreground" title={item.url}>{item.url}</span>
+                            {item.remark && <span className="text-xs text-muted-foreground">{item.remark}</span>}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Button type="button" variant="link" size="sm" className="px-0 tabular-nums" onClick={() => void viewNodes(item)}>
+                            {item.nodeCount}
                           </Button>
-                          <Button type="button" variant="outline" size="sm" aria-label={`${readOnly ? '查看' : '编辑'} ${item.name}`} onClick={() => openEdit(item)}>
-                            {readOnly ? <EyeIcon data-icon="inline-start" /> : <PencilIcon data-icon="inline-start" />}
-                            <span className="hidden xl:inline">{readOnly ? '查看' : '编辑'}</span>
-                          </Button>
-                          {!readOnly && (
-                            <>
-                              <Button type="button" variant="outline" size="sm" disabled={refreshingID !== null} aria-label={`刷新 ${item.name}`} onClick={() => void refreshOne(item)}>
-                                {refreshingID === item.id ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
-                                <span className="hidden xl:inline">刷新</span>
+                        </TableCell>
+                        <TableCell className="hidden tabular-nums md:table-cell">{item.groupCount}</TableCell>
+                        <TableCell className="hidden lg:table-cell">{intervalLabel(item.updateInterval)}</TableCell>
+                        <TableCell className="hidden text-muted-foreground lg:table-cell">{formatTime(item.lastUpdateAt)}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            {!readOnly && (
+                              <Switch
+                                size="sm"
+                                aria-label={`${item.enabled ? '停用' : '启用'} ${item.name}`}
+                                checked={item.enabled}
+                                disabled={rowToggling || rowRefreshing}
+                                onCheckedChange={() => void toggleEnabled(item)}
+                              />
+                            )}
+                            {!item.enabled ? (
+                              <StatusBadge tone="idle">停用</StatusBadge>
+                            ) : item.lastError ? (
+                              <InfoPopover
+                                label={`查看 ${item.name} 的刷新错误`}
+                                title={`${item.name} 刷新错误`}
+                                content={item.lastError}
+                                copyValue={item.lastError}
+                              >
+                                <StatusBadge tone={item.nodeCount > 0 ? 'warn' : 'bad'}>
+                                  {item.nodeCount > 0 ? '有警告' : '刷新失败'}
+                                </StatusBadge>
+                              </InfoPopover>
+                            ) : item.lastUpdateAt > 0 ? (
+                              <StatusBadge tone="good">正常</StatusBadge>
+                            ) : (
+                              <StatusBadge tone="idle">待更新</StatusBadge>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex justify-end gap-1">
+                            {!readOnly && (
+                              <Button type="button" variant="outline" size="sm" disabled={rowRefreshing} aria-label={`刷新 ${item.name}`} onClick={() => void refreshOne(item)}>
+                                {rowRefreshing ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
+                                <span className="hidden sm:inline">刷新</span>
                               </Button>
-                              <Button type="button" variant="ghost" size="sm" aria-label={`删除 ${item.name}`} onClick={() => setPendingDelete(item)}>
-                                <Trash2Icon data-icon="inline-start" />
-                                <span className="hidden xl:inline">删除</span>
+                            )}
+                            <Button type="button" variant="outline" size="sm" aria-label={`查看 ${item.name} 的节点`} onClick={() => void viewNodes(item)}>
+                              <ListIcon data-icon="inline-start" />
+                              <span className="hidden sm:inline">节点</span>
+                            </Button>
+                            {readOnly ? (
+                              <Button type="button" variant="outline" size="sm" aria-label={`查看 ${item.name}`} onClick={() => openEdit(item)}>
+                                <EyeIcon data-icon="inline-start" />
+                                <span className="hidden sm:inline">查看</span>
                               </Button>
-                            </>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                            ) : (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger
+                                  render={
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      aria-label={`${item.name} 的更多操作`}
+                                    />
+                                  }
+                                >
+                                  <MoreHorizontalIcon />
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuGroup>
+                                    <DropdownMenuItem onClick={() => openEdit(item)}>
+                                      <PencilIcon />
+                                      编辑
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => void toggleEnabled(item)}>
+                                      <PowerIcon />
+                                      {item.enabled ? '停用订阅' : '启用订阅'}
+                                    </DropdownMenuItem>
+                                  </DropdownMenuGroup>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuGroup>
+                                    <DropdownMenuItem variant="destructive" onClick={() => setPendingDelete(item)}>
+                                      <Trash2Icon />
+                                      删除订阅
+                                    </DropdownMenuItem>
+                                  </DropdownMenuGroup>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -355,42 +611,44 @@ export function ExternalSubscriptionsPage() {
         </CardFooter>
       </Card>
 
-      <Dialog open={draft !== null} onOpenChange={(open) => !open && !saving && setDraft(null)}>
-        <DialogContent className="sm:max-w-xl">
+      <Dialog open={draft !== null} onOpenChange={onDraftOpenChange}>
+        <DialogContent className="flex flex-col overflow-hidden sm:max-w-xl">
           {draft && (
             <form className="contents" noValidate onSubmit={save}>
               <DialogHeader>
                 <DialogTitle>{readOnly ? '查看外部订阅' : draft.id ? '编辑外部订阅' : '添加外部订阅'}</DialogTitle>
                 <DialogDescription>保存后会立即刷新一次；自动更新只处理启用的订阅。</DialogDescription>
               </DialogHeader>
-              <FieldGroup>
-                <Field data-invalid={nameInvalid || undefined} data-disabled={locked || undefined}>
-                  <FieldLabel htmlFor="external-name">名称</FieldLabel>
-                  <Input id="external-name" required disabled={locked} placeholder="机场 A" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-                  {nameInvalid && <FieldError>请输入订阅名称。</FieldError>}
-                </Field>
-                <Field data-invalid={urlInvalid || undefined} data-disabled={locked || undefined}>
-                  <FieldLabel htmlFor="external-url">订阅地址</FieldLabel>
-                  <Input id="external-url" type="url" required disabled={locked} placeholder="https://example.com/sub?token=…" value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} />
-                  <FieldDescription>支持 Base64、纯文本分享链接，以及包含 proxies 的 mihomo / Clash YAML。</FieldDescription>
-                  {urlInvalid && <FieldError>请输入有效的 HTTP(S) 订阅地址。</FieldError>}
-                </Field>
-                <Field data-disabled={locked || undefined}>
-                  <FieldLabel htmlFor="external-interval">更新周期（秒）</FieldLabel>
-                  <Input id="external-interval" type="number" min={60} step={60} required disabled={locked} value={draft.updateInterval} onChange={(event) => setDraft({ ...draft, updateInterval: Number(event.target.value) })} />
-                  <FieldDescription>默认 3600 秒（1 小时），最短 60 秒。</FieldDescription>
-                </Field>
-                <Field orientation="horizontal" data-disabled={locked || undefined}>
-                  <FieldLabel htmlFor="external-enabled">启用订阅</FieldLabel>
-                  <Switch id="external-enabled" disabled={locked} checked={draft.enabled} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} />
-                </Field>
-                <Field data-disabled={locked || undefined}>
-                  <FieldLabel htmlFor="external-remark">备注</FieldLabel>
-                  <Input id="external-remark" disabled={locked} value={draft.remark} onChange={(event) => setDraft({ ...draft, remark: event.target.value })} />
-                </Field>
-              </FieldGroup>
+              <DialogBody>
+                <FieldGroup>
+                  <Field data-invalid={nameInvalid || undefined} data-disabled={locked || undefined}>
+                    <FieldLabel htmlFor="external-name">名称</FieldLabel>
+                    <Input id="external-name" required disabled={locked} placeholder="机场 A" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+                    {nameInvalid && <FieldError>请输入订阅名称。</FieldError>}
+                  </Field>
+                  <Field data-invalid={urlInvalid || undefined} data-disabled={locked || undefined}>
+                    <FieldLabel htmlFor="external-url">订阅地址</FieldLabel>
+                    <Input id="external-url" type="url" required disabled={locked} placeholder="https://example.com/sub?token=…" value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} />
+                    <FieldDescription>支持 Base64、纯文本分享链接，以及包含 proxies 的 mihomo / Clash YAML。</FieldDescription>
+                    {urlInvalid && <FieldError>请输入有效的 HTTP(S) 订阅地址。</FieldError>}
+                  </Field>
+                  <Field data-disabled={locked || undefined}>
+                    <FieldLabel htmlFor="external-interval">更新周期（秒）</FieldLabel>
+                    <NumberInput id="external-interval" min={60} step={60} integer required disabled={locked} value={draft.updateInterval} onValueChange={(updateInterval) => setDraft({ ...draft, updateInterval })} />
+                    <FieldDescription>默认 3600 秒（1 小时），最短 60 秒。</FieldDescription>
+                  </Field>
+                  <Field orientation="horizontal" data-disabled={locked || undefined}>
+                    <FieldLabel htmlFor="external-enabled">启用订阅</FieldLabel>
+                    <Switch id="external-enabled" disabled={locked} checked={draft.enabled} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} />
+                  </Field>
+                  <Field data-disabled={locked || undefined}>
+                    <FieldLabel htmlFor="external-remark">备注</FieldLabel>
+                    <Input id="external-remark" disabled={locked} value={draft.remark} onChange={(event) => setDraft({ ...draft, remark: event.target.value })} />
+                  </Field>
+                </FieldGroup>
+              </DialogBody>
               <DialogFooter>
-                <Button type="button" variant="outline" disabled={saving} onClick={() => setDraft(null)}>{readOnly ? '关闭' : '取消'}</Button>
+                <Button type="button" variant="outline" disabled={saving} onClick={closeDraft}>{readOnly ? '关闭' : '取消'}</Button>
                 {!readOnly && (
                   <Button type="submit" disabled={saving}>
                     {saving && <Spinner data-icon="inline-start" />}
@@ -409,14 +667,14 @@ export function ExternalSubscriptionsPage() {
             <DialogTitle>{detail?.subscription.name} · 节点明细</DialogTitle>
             <DialogDescription>这里展示最近一次成功解析的缓存，不会实时请求外部站点。</DialogDescription>
           </DialogHeader>
-          {detail?.subscription.lastError && (
-            <Alert variant="warning">
-              <TriangleAlertIcon />
-              <AlertTitle>最近刷新有警告</AlertTitle>
-              <AlertDescription>{detail.subscription.lastError}</AlertDescription>
-            </Alert>
-          )}
-          <div className="min-h-0 overflow-y-auto">
+          <DialogBody className="flex flex-col gap-4">
+            {detail?.subscription.lastError && (
+              <Alert variant="warning">
+                <TriangleAlertIcon />
+                <AlertTitle>最近刷新有警告</AlertTitle>
+                <AlertDescription>{detail.subscription.lastError}</AlertDescription>
+              </Alert>
+            )}
             {detailLoading ? (
               <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground"><Spinner />正在读取节点…</div>
             ) : detail?.nodes.length === 0 ? (
@@ -443,7 +701,7 @@ export function ExternalSubscriptionsPage() {
                 </TableBody>
               </Table>
             )}
-          </div>
+          </DialogBody>
           <DialogFooter>
             <Button type="button" variant="outline" disabled={detailLoading} onClick={() => setDetail(null)}>关闭</Button>
           </DialogFooter>

@@ -54,6 +54,10 @@ var auditActions = map[string]string{
 	"POST /api/node-groups":                       "新增节点组",
 	"PUT /api/node-groups/:id":                    "修改节点组",
 	"DELETE /api/node-groups/:id":                 "删除节点组",
+	"POST /api/external-subscriptions":            "新增外部订阅",
+	"PUT /api/external-subscriptions/:id":         "修改外部订阅",
+	"DELETE /api/external-subscriptions/:id":      "删除外部订阅",
+	"POST /api/external-subscriptions/:id/refresh": "刷新外部订阅",
 	"POST /api/profiles":                          "新增分流方案",
 	"PUT /api/profiles/:id":                       "修改分流方案",
 	"DELETE /api/profiles/:id":                    "删除分流方案",
@@ -63,6 +67,7 @@ var auditActions = map[string]string{
 	"PUT /api/plans/:id":                          "修改套餐",
 	"DELETE /api/plans/:id":                       "删除套餐",
 	"POST /api/users":                             "新增用户",
+	"POST /api/users/bulk":                        "批量操作用户",
 	"PUT /api/users/:id":                          "修改用户",
 	"DELETE /api/users/:id":                       "删除用户",
 	"POST /api/users/:id/resync":                  "重新下发用户",
@@ -94,8 +99,9 @@ var auditNames = map[string]struct{ table, column string }{
 	"panels":            {"panels", "name"},
 	"inbounds":          {"inbounds", "COALESCE(NULLIF(name, ''), remote_remark)"},
 	"inbound-templates": {"inbound_templates", "name"},
-	"node-groups":       {"node_groups", "name"},
-	"profiles":          {"profiles", "name"},
+	"node-groups":            {"node_groups", "name"},
+	"external-subscriptions": {"external_subscriptions", "name"},
+	"profiles":               {"profiles", "name"},
 	"plans":             {"plans", "name"},
 	"users":             {"users", "username"},
 	"agent-sessions":    {"agent_sessions", "task"},
@@ -187,8 +193,27 @@ func (s *Server) auditTarget(c *gin.Context) string {
 }
 
 func (s *Server) listAuditLogs(c *gin.Context) {
-	query := s.db.Model(&model.AuditLog{}).Order("id DESC").Limit(auditPageSize + 1)
-	if before, err := strconv.ParseUint(c.Query("before"), 10, 64); err == nil && before > 0 {
+	base := s.db.Model(&model.AuditLog{})
+	if actor := strings.TrimSpace(c.Query("actor")); actor != "" {
+		base = base.Where("actor = ?", actor)
+	}
+	if action := strings.TrimSpace(c.Query("action")); action != "" {
+		base = base.Where("action = ?", action)
+	}
+	if q := strings.TrimSpace(c.Query("q")); q != "" {
+		like := "%" + strings.ToLower(q) + "%"
+		base = base.Where("LOWER(target) LIKE ? OR LOWER(action) LIKE ? OR LOWER(actor) LIKE ? OR LOWER(ip) LIKE ?", like, like, like, like)
+	}
+
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+
+	query := base.Order("id DESC").Limit(auditPageSize + 1)
+	beforeStr := c.Query("before")
+	if before, err := strconv.ParseUint(beforeStr, 10, 64); err == nil && before > 0 {
 		query = query.Where("id < ?", before)
 	}
 	var items []model.AuditLog
@@ -200,5 +225,14 @@ func (s *Server) listAuditLogs(c *gin.Context) {
 	if more {
 		items = items[:auditPageSize]
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items, "more": more})
+	resp := gin.H{"items": items, "more": more, "total": total}
+	if beforeStr == "" {
+		var actors []string
+		var actions []string
+		s.db.Model(&model.AuditLog{}).Where("actor <> ''").Distinct().Order("actor ASC").Pluck("actor", &actors)
+		s.db.Model(&model.AuditLog{}).Where("action <> ''").Distinct().Order("action ASC").Pluck("action", &actions)
+		resp["actors"] = jsonList(actors)
+		resp["actions"] = jsonList(actions)
+	}
+	c.JSON(http.StatusOK, resp)
 }
