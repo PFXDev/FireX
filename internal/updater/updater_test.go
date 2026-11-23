@@ -132,6 +132,131 @@ func TestCheckOnlyAcrossSourcesAndChannels(t *testing.T) {
 	}
 }
 
+func TestCheckOnlyReleaseNotes(t *testing.T) {
+	const manifestNotes = "## Development build\n\n### ✨ Features\n\n- Show commit summaries · [`bbbbbbb`](https://github.com/owner/repo/commit/bbbbbbb)\n"
+	largeNotes := "## Release\n\n" + strings.Repeat("- entry line with details\n", 1000)
+
+	cases := []struct {
+		name         string
+		cfg          Config
+		localVersion string
+		localCommit  string
+		remote       releaseVersionInfo
+		proxyBody    string
+		direct       bool
+		wantNotes    string
+	}{
+		{
+			name:         "github direct dev reads release_notes from version.json",
+			cfg:          Config{Channel: "dev", Source: SourceGitHub, Repo: "owner/repo"},
+			localVersion: "dev-0007-20260401-aaaaaaa",
+			localCommit:  "aaaaaaa",
+			remote: releaseVersionInfo{
+				Version:      "dev-0042-20260425-bbbbbbb",
+				Commit:       "bbbbbbb",
+				Tag:          "dev",
+				ReleaseNotes: manifestNotes,
+			},
+			direct:    true,
+			wantNotes: manifestNotes,
+		},
+		{
+			name:         "github direct stable reads large release_notes over 16 KiB",
+			cfg:          Config{Channel: "stable", Source: SourceGitHub, Repo: "owner/repo"},
+			localVersion: "v1.0.0",
+			remote: releaseVersionInfo{
+				Version:      "v1.4.0",
+				Commit:       "bbbbbbb",
+				Tag:          "v1.4.0",
+				ReleaseNotes: largeNotes,
+			},
+			direct:    true,
+			wantNotes: largeNotes,
+		},
+		{
+			name:         "proxy dev prefers version.json release_notes over stale proxy body",
+			cfg:          Config{Channel: "dev", Source: SourceProxy, Repo: "owner/repo"},
+			localVersion: "dev-0007-20260401-aaaaaaa",
+			localCommit:  "aaaaaaa",
+			remote: releaseVersionInfo{
+				Version:      "dev-0042-20260425-bbbbbbb",
+				Commit:       "bbbbbbb",
+				Tag:          "dev",
+				ReleaseNotes: manifestNotes,
+			},
+			proxyBody: "stale proxy notes",
+			wantNotes: manifestNotes,
+		},
+		{
+			name:         "proxy dev falls back to proxy body for old manifests without release_notes",
+			cfg:          Config{Channel: "dev", Source: SourceProxy, Repo: "owner/repo"},
+			localVersion: "dev-0007-20260401-aaaaaaa",
+			localCommit:  "aaaaaaa",
+			remote: releaseVersionInfo{
+				Version: "dev-0042-20260425-bbbbbbb",
+				Commit:  "bbbbbbb",
+				Tag:     "dev",
+			},
+			proxyBody: "fallback proxy notes",
+			wantNotes: "fallback proxy notes",
+		},
+		{
+			name:         "proxy stable uses release body",
+			cfg:          Config{Channel: "stable", Source: SourceProxy, Repo: "owner/repo"},
+			localVersion: "v1.0.0",
+			remote:       releaseVersionInfo{Tag: "v1.4.0"},
+			proxyBody:    "## Release\n\n`v1.4.0`\n",
+			wantNotes:    "## Release\n\n`v1.4.0`\n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestVersion(t, tc.localVersion, tc.localCommit)
+			cfg := tc.cfg
+
+			if tc.direct {
+				metadata, err := json.Marshal(tc.remote)
+				if err != nil {
+					t.Fatal(err)
+				}
+				server := httptest.NewServer(routes(t, map[string]http.HandlerFunc{
+					"/owner/repo/releases/download/" + tc.remote.Tag + "/version.json": writeBytes(metadata),
+					"/owner/repo/releases/latest/download/version.json":                writeBytes(metadata),
+				}))
+				defer server.Close()
+				setTestGitHubBaseURL(t, server.URL)
+			} else {
+				server := httptest.NewServer(routes(t, map[string]http.HandlerFunc{
+					"/api/releases/owner/repo/latest": writeJSON(releaseInfo{TagName: tc.remote.Tag, Body: tc.proxyBody}),
+					"/api/releases/owner/repo/dev": writeJSON(releaseInfo{
+						TagName:    "dev",
+						Prerelease: true,
+						Body:       tc.proxyBody,
+						Assets: []assetInfo{{
+							Name:               "version.json",
+							BrowserDownloadURL: "https://github.com/owner/repo/releases/download/dev/version.json",
+						}},
+					}),
+					"/download/owner/repo/dev/version.json": writeJSON(tc.remote),
+				}))
+				defer server.Close()
+				cfg.ProxyBaseURL = server.URL
+			}
+
+			u := testUpdater(cfg)
+			result, err := u.CheckOnly(context.Background())
+			if err != nil {
+				t.Fatalf("CheckOnly returned error: %v", err)
+			}
+			if !result.HasUpdate || result.ReleaseNotes != tc.wantNotes || u.Status().ReleaseNotes != tc.wantNotes {
+				t.Fatalf("notes mismatch: hasUpdate=%v result=%q status=%q want=%q",
+					result.HasUpdate, result.ReleaseNotes, u.Status().ReleaseNotes, tc.wantNotes)
+			}
+		})
+	}
+}
+
 func TestPerformUpdateDownloadsAndVerifiesPrerelease(t *testing.T) {
 	setTestVersion(t, "dev-0007-20260401-aaaaaaa", "aaaaaaa")
 
@@ -337,13 +462,17 @@ func TestDismissPendingRemovesDownloadedBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	u.status.State = "ready"
+	u.status.LatestVersion = "dev-0042-20260425-bbbbbbb"
+	u.status.IsPrerelease = true
+	u.status.ReleaseNotes = "## Development build"
 	u.pendingBinaryPath = pending
 	u.pendingTag = "dev"
 
 	u.DismissPending()
 
-	if state := u.Status().State; state != "idle" {
-		t.Fatalf("state = %q, want idle", state)
+	status := u.Status()
+	if status.State != "idle" || status.LatestVersion != "" || status.IsPrerelease || status.ReleaseNotes != "" {
+		t.Fatalf("status after dismiss = %+v, want cleared idle state", status)
 	}
 	if _, err := os.Stat(pending); !os.IsNotExist(err) {
 		t.Fatalf("pending binary still present: %v", err)

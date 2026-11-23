@@ -94,9 +94,10 @@ type Updater struct {
 }
 
 const (
-	idleWaitTimeout  = 10 * time.Minute
-	idlePollInterval = 5 * time.Second
-	downloadTimeout  = 30 * time.Minute
+	idleWaitTimeout        = 10 * time.Minute
+	idlePollInterval       = 5 * time.Second
+	downloadTimeout        = 30 * time.Minute
+	maxVersionMetadataSize = 64 << 10
 
 	// SourceGitHub reads release assets from github.com/<repo>/releases/...
 	// download links. Those are CDN redirects rather than REST API calls, so
@@ -288,9 +289,11 @@ func (u *Updater) DismissPending() {
 		u.pendingTag = ""
 		u.status.State = "idle"
 		u.status.LatestVersion = ""
+		u.status.IsPrerelease = false
 		u.status.Progress = 0
 		u.status.DownloadProgress = 0
 		u.status.Error = ""
+		u.status.ReleaseNotes = ""
 	}
 }
 
@@ -524,10 +527,11 @@ type assetInfo struct {
 }
 
 type releaseVersionInfo struct {
-	Version   string `json:"version"`
-	Commit    string `json:"commit"`
-	BuildTime string `json:"build_time"`
-	Tag       string `json:"tag"`
+	Version      string `json:"version"`
+	Commit       string `json:"commit"`
+	BuildTime    string `json:"build_time"`
+	Tag          string `json:"tag"`
+	ReleaseNotes string `json:"release_notes,omitempty"`
 }
 
 func (r releaseInfo) displayVersion() string {
@@ -578,7 +582,7 @@ func (u *Updater) fetchReleaseFromGitHub(ctx context.Context, cfg Config) (*rele
 	}
 	u.logger.Printf("firex: checking %s", versionURL)
 
-	body, status, err := u.httpGet(ctx, versionURL, 16*1024)
+	body, status, err := u.httpGet(ctx, versionURL, maxVersionMetadataSize)
 	if err != nil {
 		return nil, err
 	}
@@ -609,9 +613,14 @@ func (u *Updater) fetchReleaseFromGitHub(ctx context.Context, cfg Config) (*rele
 			BrowserDownloadURL: base + "/download/" + tag + "/" + name,
 		})
 	}
+	var notes string
+	if strings.TrimSpace(info.ReleaseNotes) != "" {
+		notes = info.ReleaseNotes
+	}
 	return &releaseInfo{
 		TagName:    tag,
 		Prerelease: cfg.Channel != "stable",
+		Body:       notes,
 		Assets:     assets,
 		Version:    strings.TrimSpace(info.Version),
 		Commit:     strings.TrimSpace(info.Commit),
@@ -672,7 +681,7 @@ func (u *Updater) loadReleaseVersion(ctx context.Context, cfg Config, release *r
 		return fmt.Errorf("version.json asset not found")
 	}
 
-	body, status, err := u.httpGet(ctx, u.resolveDownloadURL(cfg, versionAsset.BrowserDownloadURL), 16*1024)
+	body, status, err := u.httpGet(ctx, u.resolveDownloadURL(cfg, versionAsset.BrowserDownloadURL), maxVersionMetadataSize)
 	if err != nil {
 		return err
 	}
@@ -687,6 +696,11 @@ func (u *Updater) loadReleaseVersion(ctx context.Context, cfg Config, release *r
 	release.Version = strings.TrimSpace(info.Version)
 	release.Commit = strings.TrimSpace(info.Commit)
 	release.BuildTime = strings.TrimSpace(info.BuildTime)
+	// Prefer notes bound to this build; the proxy's rolling release body may
+	// already describe a different revision. Keep the fallback for old manifests.
+	if strings.TrimSpace(info.ReleaseNotes) != "" {
+		release.Body = info.ReleaseNotes
+	}
 	return nil
 }
 

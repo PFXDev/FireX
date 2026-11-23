@@ -155,6 +155,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -162,19 +168,36 @@ jobs:
           path: release
           merge-multiple: true
 
+      - name: Generate dev changelog before moving the rolling tag
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          COMMIT: ${{ github.sha }}
+          BUILD_TIME: ${{ needs.meta.outputs.build_time }}
+        run: |
+          go run ./scripts/release-notes \
+            -repo "$GITHUB_REPOSITORY" \
+            -version "$VERSION" \
+            -commit "$COMMIT" \
+            -build-time "$BUILD_TIME" \
+            > release-notes.md
+
       # The updater's direct mode discovers releases through this file, so a
       # release without it is invisible to every client.
       - name: Add version metadata
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          COMMIT: ${{ needs.meta.outputs.commit }}
+          BUILD_TIME: ${{ needs.meta.outputs.build_time }}
         run: |
           set -euo pipefail
-          cat > release/version.json <<'EOF'
-          {
-            "version": "${{ needs.meta.outputs.version }}",
-            "commit": "${{ needs.meta.outputs.commit }}",
-            "build_time": "${{ needs.meta.outputs.build_time }}",
-            "tag": "dev"
-          }
-          EOF
+          jq -n \
+            --arg version "$VERSION" \
+            --arg commit "$COMMIT" \
+            --arg build_time "$BUILD_TIME" \
+            --arg tag "dev" \
+            --rawfile release_notes release-notes.md \
+            '{version:$version,commit:$commit,build_time:$build_time,tag:$tag,release_notes:$release_notes}' \
+            > release/version.json
 
       - name: Generate SHA256SUMS
         run: |
@@ -190,6 +213,7 @@ jobs:
       - name: Refresh dev tag and prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.meta.outputs.version }}
         run: |
           set -euo pipefail
           # Delete rather than edit, so binaries for a platform that was
@@ -201,8 +225,8 @@ jobs:
           # releases/latest redirect that the stable channel follows.
           gh release create dev release/* \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "Dev Build #${GITHUB_RUN_NUMBER} (${{ needs.meta.outputs.commit }})" \
-            --notes "Dev build for ${GITHUB_SHA}" \
+            --title "Dev Build · ${VERSION}" \
+            --notes-file release-notes.md \
             --prerelease \
             --target "${GITHUB_SHA}" \
             --latest=false
@@ -215,6 +239,17 @@ jobs:
       - build
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -222,17 +257,36 @@ jobs:
           path: release
           merge-multiple: true
 
+      - name: Generate release changelog
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          COMMIT: ${{ github.sha }}
+          BUILD_TIME: ${{ needs.meta.outputs.build_time }}
+        run: |
+          go run ./scripts/release-notes \
+            -channel stable \
+            -repo "$GITHUB_REPOSITORY" \
+            -version "$VERSION" \
+            -commit "$COMMIT" \
+            -build-time "$BUILD_TIME" \
+            > release-notes.md
+
       - name: Add version metadata
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          COMMIT: ${{ needs.meta.outputs.commit }}
+          BUILD_TIME: ${{ needs.meta.outputs.build_time }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          cat > release/version.json <<'EOF'
-          {
-            "version": "${{ needs.meta.outputs.version }}",
-            "commit": "${{ needs.meta.outputs.commit }}",
-            "build_time": "${{ needs.meta.outputs.build_time }}",
-            "tag": "${{ github.ref_name }}"
-          }
-          EOF
+          jq -n \
+            --arg version "$VERSION" \
+            --arg commit "$COMMIT" \
+            --arg build_time "$BUILD_TIME" \
+            --arg tag "$RELEASE_TAG" \
+            --rawfile release_notes release-notes.md \
+            '{version:$version,commit:$commit,build_time:$build_time,tag:$tag,release_notes:$release_notes}' \
+            > release/version.json
 
       - name: Generate SHA256SUMS
         run: |
@@ -247,8 +301,8 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
+          body_path: release-notes.md
           prerelease: false
-          generate_release_notes: true
           make_latest: true
           files: release/*
 

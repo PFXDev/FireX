@@ -11,9 +11,10 @@ import {
 
 import { api } from '@/api'
 import type { UpdateCheck, UpdateStatus, VersionInfo } from '@/api'
-import { CodeBlock, CodeText } from '@/components/code-display'
+import { CodeText } from '@/components/code-display'
 import { FieldsSkeleton, LoadErrorAlert } from '@/components/load-state'
 import { PageHeader } from '@/components/page-header'
+import { ReleaseNotes } from '@/components/release-notes'
 import { ServerConfigEditor } from '@/components/server-config-editor'
 import { StatusBadge, type Tone } from '@/components/status-badge'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -242,6 +243,7 @@ export function SystemPage() {
   const updateAvailable = check?.hasUpdate === true
   const showApply = status.state === 'ready' || (updateAvailable && !busy)
   const checking = action === 'check' || status.state === 'checking'
+  const releaseNotes = (check ? check.releaseNotes : status.releaseNotes).trim()
 
   return (
     <div className="flex flex-col gap-6">
@@ -373,24 +375,12 @@ export function SystemPage() {
               </dl>
             )}
 
-            {status.releaseNotes ? (
-              <section className="flex flex-col gap-1" aria-labelledby="release-notes-title">
-                <h3 id="release-notes-title" className="text-xs text-muted-foreground">
-                  发布说明
-                </h3>
-                <CodeBlock
-                  tabIndex={0}
-                  role="region"
-                  aria-labelledby="release-notes-title"
-                  className="max-h-60"
-                >
-                  {status.releaseNotes}
-                </CodeBlock>
-              </section>
+            {releaseNotes ? (
+              <ReleaseNotes notes={releaseNotes} />
             ) : (
-              <p className="text-xs text-muted-foreground">
-                {info.updateSource === 'github' ? '直连模式不获取发布说明。' : '暂无发布说明。'}
-              </p>
+              (check || status.latestVersion || status.lastCheck) && (
+                <p className="text-xs text-muted-foreground">暂无变更说明。</p>
+              )
             )}
           </CardContent>
           {showApply && (

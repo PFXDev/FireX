@@ -428,6 +428,11 @@ discovery and reconcile cycle re-converges every panel.
 
 Releases come from `.github/workflows/cross-compile.yml`: pushes to `main`
 refresh the rolling `dev` prerelease, and a `v*` tag publishes a stable release.
+Both release jobs generate a grouped commit changelog via
+`scripts/release-notes` (comparing against the previous `dev` tag or previous
+`v*` tag, capped at the latest 30 commits) and include the same Markdown in
+both the GitHub release body and `version.json`, so both direct and proxy
+update checks render formatted release notes on the System page.
 CI builds Linux and macOS binaries for amd64 and arm64; Windows artifacts are
 not published. Asset names are `firex-{goos}-{goarch}` and must stay identical to
 `targetName()` in `internal/updater` — a name only one side knows about is a
