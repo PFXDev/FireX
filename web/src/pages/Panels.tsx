@@ -62,6 +62,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { useHashLocation } from '@/hooks/use-hash-route'
 import { useDirtyDialog } from '@/hooks/use-unsaved-guard'
 import { bytesToGb, errorMessage, formatBytes, formatQuota, formatTime, gbToBytes } from '@/lib/format'
 import { useSession } from '@/lib/session'
@@ -92,6 +93,8 @@ const STATUS_FILTER_ITEMS = [
   { value: 'disabled', label: '已停用' },
   { value: 'overQuota', label: '已用满' },
 ]
+
+const VALID_STATUS_FILTERS = new Set<StatusFilter>(['all', 'online', 'offline', 'disabled', 'overQuota'])
 
 const emptyDraft: Draft = {
   name: '',
@@ -133,11 +136,21 @@ function validateDraft(draft: Draft): DraftErrors {
 }
 
 export function PanelsPage() {
+  const { params } = useHashLocation()
+  const initialStatus = params.get('status') as StatusFilter | null
+
   const [panels, setPanels] = useState<Panel[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [loadError, setLoadError] = useState('')
   const [query, setQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() =>
+    initialStatus && VALID_STATUS_FILTERS.has(initialStatus) ? initialStatus : 'all',
+  )
+
+  useEffect(() => {
+    const next = params.get('status') as StatusFilter | null
+    if (next && VALID_STATUS_FILTERS.has(next)) setStatusFilter(next)
+  }, [params])
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<SortDirection>('asc')
   const [draft, setDraft] = useState<Draft | null>(null)

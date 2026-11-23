@@ -121,7 +121,16 @@ type RowAction = {
   kind: 'resync' | 'preview' | 'toggle'
 }
 
-type StatusFilter = 'all' | 'normal' | 'failed' | 'pending' | 'expired' | 'depleted' | 'disabled'
+type StatusFilter =
+  | 'all'
+  | 'normal'
+  | 'failed'
+  | 'pending'
+  | 'expired'
+  | 'depleted'
+  | 'disabled'
+  | 'expiring'
+  | 'nearDepletion'
 type SortKey = 'username' | 'used' | 'expiresAt' | 'lastSubAt'
 type BulkResult = {
   ok: boolean
@@ -138,6 +147,8 @@ const VALID_STATUS_FILTERS = new Set<StatusFilter>([
   'expired',
   'depleted',
   'disabled',
+  'expiring',
+  'nearDepletion',
 ])
 
 const STATUS_FILTER_ITEMS: { label: string; value: StatusFilter }[] = [
@@ -145,6 +156,8 @@ const STATUS_FILTER_ITEMS: { label: string; value: StatusFilter }[] = [
   { label: '正常可用', value: 'normal' },
   { label: '下发失败', value: 'failed' },
   { label: '待下发', value: 'pending' },
+  { label: '7 天内到期', value: 'expiring' },
+  { label: '流量 ≥85%', value: 'nearDepletion' },
   { label: '已过期', value: 'expired' },
   { label: '流量耗尽', value: 'depleted' },
   { label: '已停用', value: 'disabled' },
@@ -281,6 +294,12 @@ export function UsersPage() {
         if (!user.depleted) return false
       } else if (statusFilter === 'disabled') {
         if (user.enabled) return false
+      } else if (statusFilter === 'expiring') {
+        const active = user.enabled && !user.depleted && !(user.expiresAt > 0 && user.expiresAt <= now)
+        if (!active || !(user.expiresAt > now && user.expiresAt <= now + 7 * 86400000)) return false
+      } else if (statusFilter === 'nearDepletion') {
+        const active = user.enabled && !user.depleted && !(user.expiresAt > 0 && user.expiresAt <= now)
+        if (!active || user.trafficLimit <= 0 || user.used / user.trafficLimit < 0.85) return false
       }
 
       if (planFilter !== 'all' && String(user.planId) !== planFilter) return false

@@ -7,9 +7,11 @@ test('live stream backs off only after permanent closure and stops on logout or 
   class MockSource extends EventTarget {
     static CLOSED = 2
     readyState = 0
+    url: string
     onerror?: () => Promise<void>
-    constructor() {
+    constructor(url: string) {
       super()
+      this.url = url
       sources.push(this)
     }
     close() { this.readyState = MockSource.CLOSED }
@@ -62,7 +64,8 @@ test('live stream backs off only after permanent closure and stops on logout or 
   stop()
 
   status = 200
-  const unsubscribe = subscribeLiveStats(() => {}, () => {})
+  const unsubscribe = subscribeLiveStats(() => {}, () => {}, 5)
+  assert.equal(sources[4].url, '/api/overview/live?interval=5')
   sources[4].close()
   const checking = sources[4].onerror!()
   unsubscribe()

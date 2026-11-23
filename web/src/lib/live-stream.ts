@@ -1,13 +1,21 @@
 import { verifySession, type LiveSnapshot } from '../api.ts'
 
-export function subscribeLiveStats(onSnapshot: (snapshot: LiveSnapshot) => void, onError: () => void) {
+export function subscribeLiveStats(
+  onSnapshot: (snapshot: LiveSnapshot) => void,
+  onError: () => void,
+  intervalSeconds?: number,
+) {
   let source: EventSource | null = null
   let retryTimer: ReturnType<typeof setTimeout> | undefined
   let delay = 1000
   let stopped = false
+  const streamUrl =
+    intervalSeconds && intervalSeconds > 0
+      ? `/api/overview/live?interval=${intervalSeconds}`
+      : '/api/overview/live'
 
   function connect() {
-    const es = new EventSource('/api/overview/live', { withCredentials: true })
+    const es = new EventSource(streamUrl, { withCredentials: true })
     source = es
     es.addEventListener('snapshot', (event: MessageEvent<string>) => {
       if (source !== es) return

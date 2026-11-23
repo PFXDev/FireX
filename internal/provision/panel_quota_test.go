@@ -62,6 +62,19 @@ func TestCollectTrafficSumsPanelAndPerPanelUsage(t *testing.T) {
 	if total.Upload != 45 || total.Download != 65 {
 		t.Errorf("global cumulative traffic = %d/%d, want 45/65", total.Upload, total.Download)
 	}
+	var buckets []model.TrafficBucket
+	f.db.Where("panel_id = ?", f.panel.ID).Find(&buckets)
+	if len(buckets) == 0 {
+		t.Fatalf("expected hourly traffic bucket to be recorded")
+	}
+	var bucketUp, bucketDown int64
+	for _, b := range buckets {
+		bucketUp += b.Upload
+		bucketDown += b.Download
+	}
+	if bucketUp != 45 || bucketDown != 65 {
+		t.Errorf("hourly bucket sum = %d/%d, want 45/65", bucketUp, bucketDown)
+	}
 }
 
 func TestPanelQuotaDisablesEveryClientUntilReset(t *testing.T) {

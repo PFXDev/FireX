@@ -1,6 +1,12 @@
-import type { LivePanelStat, LiveSnapshot, LiveTrendPoint, SystemLoadLevel } from '../api'
+import type {
+  LivePanelStat,
+  LiveSnapshot,
+  LiveTrendPoint,
+  OverviewPanelHealth,
+  SystemLoadLevel,
+} from '../api'
 
-export const LIVE_HISTORY_CAP = 30
+export const LIVE_HISTORY_CAP = 60
 
 export function mergeLiveHistory(
   prev: LiveTrendPoint[],
@@ -74,7 +80,7 @@ export function buildSparklinePath(
     }
     if (points.length === 0) groups.push(points)
     const ratio = (Math.min(maxVal, Math.max(minVal, value)) - minVal) / span
-    points.push({ x: index * width / (series.length - 1), y: padTop + (1 - ratio) * usableHeight })
+    points.push({ x: (index * width) / (series.length - 1), y: padTop + (1 - ratio) * usableHeight })
   }
   const paths = groups.map((group) => sparklineSegment(group, height))
   return { line: paths.map((p) => p.line).join(' '), area: paths.map((p) => p.area).join(' ') }
@@ -111,6 +117,50 @@ export function sortPanelsBySpeed(panels: LivePanelStat[]): LivePanelStat[] {
     if (nameCmp !== 0) return nameCmp
     return a.id - b.id
   })
+}
+
+export function isXrayAbnormal(stat?: Pick<LivePanelStat, 'online' | 'xrayState'> | null): boolean {
+  if (!stat?.online) return false
+  const state = stat.xrayState?.trim().toLowerCase()
+  return Boolean(state) && state !== 'running'
+}
+
+/**
+ * Ranks a panel's operational urgency for default "problems first" sorting:
+ * lower numbers bubble to the top of the Panel Health table.
+ */
+export function panelSeverityRank(panel: OverviewPanelHealth, stat?: LivePanelStat): number {
+  if (!panel.enabled) return 6
+  const effectiveOnline = stat ? stat.online : panel.status === 'online'
+  if (!effectiveOnline) return 0
+  if (isXrayAbnormal(stat)) return 1
+  if (panel.overQuota) return 2
+  if (stat && stat.diskTotal > 0 && stat.diskPercent >= 85) return 3
+  if (stat?.loadIndex != null && stat.loadIndex >= 85) return 4
+  if (panel.trafficLimit > 0 && (panel.upload + panel.download) / panel.trafficLimit >= 0.8) return 4
+  return 5
+}
+
+export function metricSeverity(value: number | null | undefined, warnAt: number, badAt: number): 'normal' | 'warn' | 'bad' {
+  if (value == null || !Number.isFinite(value)) return 'normal'
+  if (value >= badAt) return 'bad'
+  if (value >= warnAt) return 'warn'
+  return 'normal'
+}
+
+export function formatWindowSpan(points: { t: number }[], fallbackIntervalMs = 2000): string {
+  if (points.length <= 1) {
+    const secs = Math.max(1, Math.round(fallbackIntervalMs / 1000))
+    return `采样 ${secs}s`
+  }
+  const spanSec = Math.max(
+    1,
+    Math.round((points[points.length - 1].t - points[0].t) / 1000),
+  )
+  if (spanSec < 60) return `近 ${spanSec} 秒`
+  const mins = Math.floor(spanSec / 60)
+  const rem = spanSec % 60
+  return rem >= 15 ? `近 ${mins} 分 ${rem} 秒` : `近 ${mins} 分钟`
 }
 
 export function loadLevelMeta(level: SystemLoadLevel): {

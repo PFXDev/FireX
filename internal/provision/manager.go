@@ -48,8 +48,25 @@ type Manager struct {
 	trafficMu sync.Mutex
 	// loc is where reset boundaries fall at midnight; now is the reset clock.
 	// Both are fields so tests can pin them.
-	loc *time.Location
-	now func() time.Time
+	loc             *time.Location
+	now             func() time.Time
+	lastBucketPrune int64
+}
+
+// Loc returns the timezone used for traffic reset and reporting boundaries.
+func (m *Manager) Loc() *time.Location {
+	if m.loc != nil {
+		return m.loc
+	}
+	return time.Local
+}
+
+// Now returns the current time according to the manager's clock.
+func (m *Manager) Now() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
 }
 
 type cachedClient struct {
@@ -742,6 +759,7 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 
 	var firstErr error
 	var globalUp, globalDown int64
+	collectNow := m.Now()
 	for i := range panels {
 		p := &panels[i]
 		client := m.ClientFor(p)
@@ -822,9 +840,15 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 			}).Error; err != nil && firstErr == nil {
 			firstErr = err
 		}
+		if err := m.recordTrafficBucket(p.ID, collectNow, panelUp, panelDown); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	if globalUp > 0 || globalDown > 0 {
 		if err := m.addGlobalTraffic(globalUp, globalDown); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if err := m.pruneTrafficBuckets(collectNow); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -845,6 +869,10 @@ func (m *Manager) CollectTraffic(ctx context.Context) error {
 	return firstErr
 }
 
+// trafficBucketRetention keeps 90 days of hourly per-panel deltas, enough for
+// 24h / 7d / 30d trend charts plus a comfortable comparison buffer.
+const trafficBucketRetention = 90 * 24 * time.Hour
+
 // addGlobalTraffic folds this poll's usage across all panels into the singleton
 // all-time counter. It never resets and survives user or panel deletions.
 func (m *Manager) addGlobalTraffic(up, down int64) error {
@@ -858,6 +886,33 @@ func (m *Manager) addGlobalTraffic(up, down int64) error {
 			updated_at = excluded.updated_at`,
 		up, down, now,
 	).Error
+}
+
+// recordTrafficBucket folds a panel's traffic delta into its UTC hour bucket.
+func (m *Manager) recordTrafficBucket(panelID uint, at time.Time, up, down int64) error {
+	bucketTs := at.UTC().Truncate(time.Hour).UnixMilli()
+	nowMs := at.UnixMilli()
+	return m.db.Exec(`
+		INSERT INTO traffic_buckets (panel_id, bucket_ts, upload, download, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(panel_id, bucket_ts) DO UPDATE SET
+			upload = upload + excluded.upload,
+			download = download + excluded.download,
+			updated_at = excluded.updated_at`,
+		panelID, bucketTs, up, down, nowMs,
+	).Error
+}
+
+// pruneTrafficBuckets drops hourly buckets older than trafficBucketRetention.
+// Throttled to once per hour; trafficMu is held by the caller.
+func (m *Manager) pruneTrafficBuckets(now time.Time) error {
+	nowMs := now.UnixMilli()
+	if m.lastBucketPrune > 0 && nowMs-m.lastBucketPrune < int64(time.Hour/time.Millisecond) {
+		return nil
+	}
+	m.lastBucketPrune = nowMs
+	cutoff := now.UTC().Add(-trafficBucketRetention).Truncate(time.Hour).UnixMilli()
+	return m.db.Where("bucket_ts < ?", cutoff).Delete(&model.TrafficBucket{}).Error
 }
 
 // ResetTraffic starts a new traffic period for the user now: FireX's totals go

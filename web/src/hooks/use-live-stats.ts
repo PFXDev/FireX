@@ -5,12 +5,16 @@ import { subscribeLiveStats } from '@/lib/live-stream'
 import { mergeLiveHistory } from '@/lib/live-stats'
 
 const STORAGE_KEY = 'firex.overview.live'
+const INTERVAL_STORAGE_KEY = 'firex.overview.liveInterval'
 
+export type LiveInterval = 2 | 5 | 10
 export type LiveStatus = 'off' | 'connecting' | 'live' | 'reconnecting' | 'paused'
 
 export interface LiveStatsState {
   enabled: boolean
   setEnabled: (next: boolean) => void
+  interval: LiveInterval
+  setInterval: (next: LiveInterval) => void
   status: LiveStatus
   snapshot: LiveSnapshot | null
   history: LiveTrendPoint[]
@@ -25,8 +29,20 @@ function readStoredEnabled(): boolean {
   }
 }
 
+function readStoredInterval(): LiveInterval {
+  if (typeof window === 'undefined') return 2
+  try {
+    const raw = Number(window.localStorage.getItem(INTERVAL_STORAGE_KEY))
+    if (raw === 5 || raw === 10) return raw
+  } catch {
+    // Ignore storage failures.
+  }
+  return 2
+}
+
 export function useLiveStats(): LiveStatsState {
   const [enabled, setEnabledState] = useState<boolean>(readStoredEnabled)
+  const [interval, setIntervalState] = useState<LiveInterval>(readStoredInterval)
   const [visible, setVisible] = useState<boolean>(() =>
     typeof document === 'undefined' ? true : document.visibilityState === 'visible',
   )
@@ -59,6 +75,15 @@ export function useLiveStats(): LiveStatsState {
     }
   }, [])
 
+  const setInterval = useCallback((next: LiveInterval) => {
+    try {
+      window.localStorage.setItem(INTERVAL_STORAGE_KEY, String(next))
+    } catch {
+      // Ignore storage failures.
+    }
+    setIntervalState(next)
+  }, [])
+
   useEffect(() => {
     if (!enabled) {
       setStatus('off')
@@ -77,12 +102,15 @@ export function useLiveStats(): LiveStatsState {
         setStatus('live')
       },
       () => setStatus('reconnecting'),
+      interval,
     )
-  }, [enabled, visible])
+  }, [enabled, visible, interval])
 
   return {
     enabled,
     setEnabled,
+    interval,
+    setInterval,
     status,
     snapshot,
     history,

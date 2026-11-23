@@ -94,6 +94,7 @@ func (s *Server) routes() {
 	// them. Users are the one thing both roles manage.
 	authed.GET("/overview", s.handleOverview)
 	authed.GET("/overview/live", s.handleOverviewLive)
+	authed.GET("/overview/traffic-history", s.handleOverviewTrafficHistory)
 	authed.POST("/sync", s.superAdminOnly, s.handleSyncNow)
 
 	// An agent session hands the configuration to an outside agent: it edits

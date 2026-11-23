@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { LivePanelStat, LiveSnapshot, LiveSummary, LiveTrendPoint } from '../src/api.ts'
-import { formatSpeed } from '../src/lib/format.ts'
+import type {
+  LivePanelStat,
+  LiveSnapshot,
+  LiveSummary,
+  LiveTrendPoint,
+  OverviewPanelHealth,
+} from '../src/api.ts'
+import { formatDeltaPercent, formatSpeed, formatUptime } from '../src/lib/format.ts'
 import {
   buildSparklinePath,
+  formatWindowSpan,
+  isXrayAbnormal,
   loadLevelMeta,
   mergeLiveHistory,
+  metricSeverity,
+  panelSeverityRank,
   sortPanelsBySpeed,
 } from '../src/lib/live-stats.ts'
 
@@ -29,6 +39,8 @@ function makeSummary(): LiveSummary {
     totalPanels: 1,
     onlinePanels: 1,
     activePanels: 1,
+    xrayAbnormalPanels: 0,
+    highDiskPanels: 0,
     totalNetUp: 50,
     totalNetDown: 100,
     totalTcp: 10,
@@ -41,14 +53,18 @@ function makeSummary(): LiveSummary {
     totalCpuCores: 4,
     totalMemUsed: 1000,
     totalMemTotal: 4000,
+    fleetMemPercent: 25,
     fleetLoad1: 0.4,
     fleetLoad5: 0.3,
     fleetLoad15: 0.2,
+    fleetLoadPerCore: 0.1,
     systemLoadIndex: 30,
     systemLoadLevel: 'idle',
     cpu: { samples: 1, avg: 20, min: zeroExtreme, max: zeroExtreme },
     mem: { samples: 1, avg: 40, min: zeroExtreme, max: zeroExtreme },
     loadIndex: { samples: 1, avg: 25, min: zeroExtreme, max: zeroExtreme },
+    rtt: { samples: 1, avg: 15, min: zeroExtreme, max: zeroExtreme },
+    disk: { samples: 1, avg: 30, min: zeroExtreme, max: zeroExtreme },
   }
 }
 
@@ -59,6 +75,19 @@ test('formatSpeed formats bytes per second across units', () => {
   assert.equal(formatSpeed(12.4 * 1024 * 1024), '12.4 MB/s')
   assert.equal(formatSpeed(1.25 * 1024 ** 3), '1.25 GB/s')
   assert.equal(formatSpeed(256 * 1024), '256 KB/s')
+})
+
+test('formatUptime and formatDeltaPercent format durations and comparisons', () => {
+  assert.equal(formatUptime(0), '—')
+  assert.equal(formatUptime(90), '1分')
+  assert.equal(formatUptime(3 * 3600 + 15 * 60), '3小时 15分')
+  assert.equal(formatUptime(2 * 86400 + 5 * 3600), '2天 5小时')
+
+  assert.equal(formatDeltaPercent(0, 0), null)
+  assert.deepEqual(formatDeltaPercent(100, 0), { label: '+100%', direction: 'up' })
+  assert.deepEqual(formatDeltaPercent(120, 100), { label: '+20.0%', direction: 'up' })
+  assert.deepEqual(formatDeltaPercent(80, 100), { label: '-20.0%', direction: 'down' })
+  assert.deepEqual(formatDeltaPercent(100.2, 100), { label: '持平', direction: 'flat' })
 })
 
 test('mergeLiveHistory seeds from catch-up history, deduplicates timestamps, and caps length', () => {
@@ -128,6 +157,7 @@ test('sortPanelsBySpeed orders online panels first and then by total throughput 
     memPercent: 10,
     diskUsed: 100,
     diskTotal: 1000,
+    diskPercent: 10,
     load1: 0.1,
     load5: 0.1,
     load15: 0.1,
@@ -154,6 +184,76 @@ test('sortPanelsBySpeed orders online panels first and then by total throughput 
     sorted.map((p) => p.name),
     ['fast', 'slow', 'offline-fast'],
   )
+})
+
+test('severity ranking places offline, xray error, and overQuota ahead of healthy and disabled panels', () => {
+  const basePanel: OverviewPanelHealth = {
+    id: 1,
+    name: 'p',
+    enabled: true,
+    status: 'online',
+    lastError: '',
+    lastSeenAt: 0,
+    xrayVersion: '25.1.1',
+    inboundCount: 1,
+    enabledInbounds: 1,
+    missingInbounds: 0,
+    userCount: 1,
+    trafficLimit: 1000,
+    upload: 100,
+    download: 100,
+    totalUpload: 100,
+    totalDownload: 100,
+    overQuota: false,
+    nextTrafficReset: 0,
+  }
+  const liveOk: LivePanelStat = {
+    id: 1,
+    name: 'p',
+    online: true,
+    rttMs: 20,
+    cpu: 10,
+    cpuCores: 2,
+    memUsed: 100,
+    memTotal: 1000,
+    memPercent: 10,
+    diskUsed: 100,
+    diskTotal: 1000,
+    diskPercent: 10,
+    load1: 0.1,
+    load5: 0.1,
+    load15: 0.1,
+    loadIndex: 20,
+    netUp: 0,
+    netDown: 0,
+    tcpCount: 0,
+    udpCount: 0,
+    onlineUsers: 0,
+    onlineClients: 0,
+    xrayState: 'running',
+    xrayVersion: '25.1.1',
+    uptime: 100,
+    sampledAt: 1000,
+  }
+
+  assert.equal(isXrayAbnormal(liveOk), false)
+  assert.equal(isXrayAbnormal({ ...liveOk, xrayState: 'error' }), true)
+  assert.equal(metricSeverity(50, 75, 90), 'normal')
+  assert.equal(metricSeverity(80, 75, 90), 'warn')
+  assert.equal(metricSeverity(95, 75, 90), 'bad')
+  assert.equal(formatWindowSpan([{ t: 0 }, { t: 120_000 }]), '近 2 分钟')
+
+  const ranks = [
+    panelSeverityRank({ ...basePanel, status: 'offline' }),
+    panelSeverityRank(basePanel, { ...liveOk, xrayState: 'stop' }),
+    panelSeverityRank({ ...basePanel, overQuota: true }, liveOk),
+    panelSeverityRank(basePanel, { ...liveOk, diskPercent: 92 }),
+    panelSeverityRank(basePanel, liveOk),
+    panelSeverityRank({ ...basePanel, enabled: false, status: 'offline' }),
+  ]
+  for (let i = 1; i < ranks.length; i++) {
+    assert.ok(ranks[i - 1] < ranks[i], `expected rank ${ranks[i - 1]} < ${ranks[i]} at index ${i}`)
+  }
 })
 
 test('loadLevelMeta returns expected labels and tones', () => {

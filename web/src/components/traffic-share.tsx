@@ -12,6 +12,12 @@ export type ShareSlice = {
   key: string | number
   label: string
   value: number
+  upload?: number
+  download?: number
+  limit?: number
+  overQuota?: boolean
+  href?: string
+  meta?: string
 }
 
 /**
@@ -22,8 +28,23 @@ export function foldSlices(slices: ShareSlice[], otherLabel = '其他'): ShareSl
   const sorted = [...slices].filter((slice) => slice.value > 0).sort((a, b) => b.value - a.value)
   if (sorted.length <= SERIES_COLORS.length) return sorted
   const kept = sorted.slice(0, SERIES_COLORS.length - 1)
-  const rest = sorted.slice(SERIES_COLORS.length - 1).reduce((sum, slice) => sum + slice.value, 0)
-  return [...kept, { key: '__other', label: otherLabel, value: rest }]
+  const tail = sorted.slice(SERIES_COLORS.length - 1)
+  const rest = tail.reduce((sum, slice) => sum + slice.value, 0)
+  const hasDir = tail.some((s) => s.upload !== undefined || s.download !== undefined)
+  return [
+    ...kept,
+    {
+      key: '__other',
+      label: otherLabel,
+      value: rest,
+      ...(hasDir
+        ? {
+            upload: tail.reduce((sum, slice) => sum + (slice.upload ?? 0), 0),
+            download: tail.reduce((sum, slice) => sum + (slice.download ?? 0), 0),
+          }
+        : {}),
+    },
+  ]
 }
 
 function percent(value: number, total: number) {
@@ -33,19 +54,20 @@ function percent(value: number, total: number) {
 }
 
 /**
- * TrafficShareBar is a part-to-whole bar of byte counts with a legend that
- * carries every value, so the colors never have to be read on their own.
- * Colors follow the slice's position in the list the caller passes, so keep
- * that order stable across renders.
+ * TrafficShareBar is a part-to-whole bar of byte counts (or custom counts via
+ * formatValue) with a legend that carries every value, optional up/down
+ * breakdown, quota hints, and deep-link navigation.
  */
 export function TrafficShareBar({
   slices,
   ariaLabel,
   emptyText = '当前周期还没有流量。',
+  formatValue = formatBytes,
 }: {
   slices: ShareSlice[]
   ariaLabel: string
   emptyText?: string
+  formatValue?: (value: number) => string
 }) {
   const total = slices.reduce((sum, slice) => sum + slice.value, 0)
   if (total <= 0) {
@@ -60,27 +82,88 @@ export function TrafficShareBar({
               render={
                 <span
                   className="h-full min-w-1 first:rounded-l-full last:rounded-r-full"
-                  style={{ flexGrow: slice.value, flexBasis: 0, background: SERIES_COLORS[i] }}
+                  style={{ flexGrow: slice.value, flexBasis: 0, background: SERIES_COLORS[i % SERIES_COLORS.length] }}
                 />
               }
             />
             <TooltipContent>
-              {slice.label}：{formatBytes(slice.value)}（{percent(slice.value, total)}）
+              <div className="flex flex-col gap-0.5 tabular-nums">
+                <span>
+                  {slice.label}：{formatValue(slice.value)}（{percent(slice.value, total)}）
+                </span>
+                {(slice.upload !== undefined || slice.download !== undefined) && (
+                  <span className="text-[11px] opacity-85">
+                    ↓ {formatBytes(slice.download ?? 0)} · ↑ {formatBytes(slice.upload ?? 0)}
+                  </span>
+                )}
+                {slice.limit != null && slice.limit > 0 && (
+                  <span className="text-[11px] opacity-85">
+                    配额 {formatBytes(slice.value)} / {formatBytes(slice.limit)}（
+                    {Math.min(999, Math.round((slice.value / slice.limit) * 100))}%）
+                  </span>
+                )}
+              </div>
             </TooltipContent>
           </Tooltip>
         ))}
       </div>
-      <ul className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
-        {slices.map((slice, i) => (
-          <li key={slice.key} className="flex min-w-0 items-center gap-2">
-            <span aria-hidden className="size-2.5 shrink-0 rounded-sm" style={{ background: SERIES_COLORS[i] }} />
-            <span className="min-w-0 flex-1 truncate" title={slice.label}>
-              {slice.label}
-            </span>
-            <span className="tabular-nums">{formatBytes(slice.value)}</span>
-            <span className="w-10 text-right tabular-nums text-muted-foreground">{percent(slice.value, total)}</span>
-          </li>
-        ))}
+      <ul className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+        {slices.map((slice, i) => {
+          const quotaPct =
+            slice.limit && slice.limit > 0 ? Math.round((slice.value / slice.limit) * 100) : null
+          return (
+            <li key={slice.key} className="flex min-w-0 flex-col gap-0.5">
+              <div className="flex min-w-0 items-center gap-2">
+                <span
+                  aria-hidden
+                  className="size-2.5 shrink-0 rounded-sm"
+                  style={{ background: SERIES_COLORS[i % SERIES_COLORS.length] }}
+                />
+                {slice.href ? (
+                  <a
+                    href={slice.href}
+                    className="min-w-0 flex-1 truncate underline-offset-4 hover:underline"
+                    title={slice.label}
+                  >
+                    {slice.label}
+                  </a>
+                ) : (
+                  <span className="min-w-0 flex-1 truncate" title={slice.label}>
+                    {slice.label}
+                  </span>
+                )}
+                <span className="shrink-0 font-medium tabular-nums">{formatValue(slice.value)}</span>
+                <span className="w-10 shrink-0 text-right tabular-nums text-muted-foreground">
+                  {percent(slice.value, total)}
+                </span>
+              </div>
+              {(slice.upload !== undefined || slice.meta || quotaPct !== null) && (
+                <div className="flex items-center justify-between gap-2 pl-4.5 text-[11px] text-muted-foreground tabular-nums">
+                  <span className="truncate">
+                    {slice.upload !== undefined && slice.download !== undefined
+                      ? `↓ ${formatBytes(slice.download)} / ↑ ${formatBytes(slice.upload)}`
+                      : slice.meta ?? ''}
+                    {slice.upload !== undefined && slice.meta ? ` · ${slice.meta}` : ''}
+                  </span>
+                  {quotaPct !== null && (
+                    <span
+                      className={cn(
+                        'shrink-0',
+                        slice.overQuota || quotaPct >= 100
+                          ? 'font-medium text-destructive'
+                          : quotaPct >= 80
+                            ? 'font-medium text-warning'
+                            : '',
+                      )}
+                    >
+                      配额 {quotaPct}%
+                    </span>
+                  )}
+                </div>
+              )}
+            </li>
+          )
+        })}
       </ul>
     </div>
   )
@@ -108,8 +191,6 @@ export function WeightSplitter({
 }) {
   const barRef = useRef<HTMLDivElement>(null)
 
-  // Moves the divider after slice i so that slices 0..i add up to `upTo`,
-  // keeping every slice at 1% or more.
   const moveDivider = (i: number, upTo: number) => {
     const before = slices.slice(0, i).reduce((sum, slice) => sum + slice.weight, 0)
     const pair = slices[i].weight + slices[i + 1].weight

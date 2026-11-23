@@ -425,28 +425,119 @@ export interface UserPanelUsage {
   blocked: string
 }
 
+export interface OverviewPanelHealth {
+  id: number
+  name: string
+  enabled: boolean
+  status: string
+  lastError: string
+  lastSeenAt: number
+  xrayVersion: string
+  inboundCount: number
+  enabledInbounds: number
+  missingInbounds: number
+  userCount: number
+  trafficLimit: number
+  upload: number
+  download: number
+  totalUpload: number
+  totalDownload: number
+  overQuota: boolean
+  nextTrafficReset: number
+}
+
+export interface OverviewUserBreakdown {
+  active: number
+  disabled: number
+  expired: number
+  depleted: number
+  expiringSoon: number
+  nearDepletion: number
+  pendingSyncs: number
+  subActive24h: number
+  subActive7d: number
+  subFetched: number
+}
+
+export interface OverviewClientShare {
+  name: string
+  count: number
+}
+
+export interface OverviewAttention {
+  routingNeedsReview: boolean
+  pendingAgentSessions: number
+  updateAvailable: string
+  updateReady: boolean
+}
+
+export interface OverviewTodayTraffic {
+  todayUpload: number
+  todayDownload: number
+  yesterdayUpload: number
+  yesterdayDownload: number
+  yesterdaySameTimeUpload: number
+  yesterdaySameTimeDownload: number
+}
+
+export interface UserTrafficSlice {
+  id: number
+  username: string
+  planName: string
+  upload: number
+  download: number
+  totalUpload: number
+  totalDownload: number
+  trafficLimit: number
+  active: boolean
+}
+
 export interface Overview {
   counts: {
     panels: number
+    enabledPanels: number
+    disabledPanels: number
+    onlinePanels: number
+    offlinePanels: number
+    overQuotaPanels: number
+    nearQuotaPanels: number
     inbounds: number
     enabledInbounds: number
     missingInbounds: number
+    driftedInbounds: number
+    pendingInbounds: number
+    ungroupedInbounds: number
     nodeGroups: number
     profiles: number
     plans: number
     users: number
     activeUsers: number
+    externalSubscriptions: number
+    failedExternalSubscriptions: number
   }
   upload: number
   download: number
+  panelPeriodUpload: number
+  panelPeriodDownload: number
   totalUpload: number
   totalDownload: number
   failedSyncs: number
-  panels: { id: number; name: string; status: string; lastError: string; lastSeenAt: number }[]
+  panels: OverviewPanelHealth[]
   /** FireX traffic in each panel's current period and all-time. */
   trafficByPanel: TrafficSlice[]
   /** The same traffic summed over each node group's panels; id 0 is panels in no group. */
   trafficByGroup: TrafficSlice[]
+  /** User traffic summed by plan (period & all-time). */
+  trafficByPlan: TrafficSlice[]
+  /** Top users by period and cumulative traffic. */
+  topUsers: {
+    period: UserTrafficSlice[]
+    total: UserTrafficSlice[]
+  }
+  userBreakdown: OverviewUserBreakdown
+  clients: OverviewClientShare[]
+  todayTraffic: OverviewTodayTraffic
+  attention: OverviewAttention
 }
 
 export interface TrafficSlice {
@@ -456,6 +547,31 @@ export interface TrafficSlice {
   download: number
   totalUpload: number
   totalDownload: number
+  trafficLimit?: number
+  overQuota?: boolean
+}
+
+export type TrafficHistoryRange = '24h' | '7d' | '30d'
+
+export interface TrafficHistoryPoint {
+  ts: number
+  upload: number
+  download: number
+}
+
+export interface TrafficHistoryResponse {
+  range: TrafficHistoryRange
+  granularity: 'hour' | 'day'
+  totalUpload: number
+  totalDownload: number
+  peakBucketTs: number
+  peakTotal: number
+  buckets: TrafficHistoryPoint[]
+}
+
+export interface LiveOnlineUser {
+  username: string
+  panels: string[]
 }
 
 export interface LivePanelStat {
@@ -471,6 +587,7 @@ export interface LivePanelStat {
   memPercent: number
   diskUsed: number
   diskTotal: number
+  diskPercent: number
   load1: number
   load5: number
   load15: number
@@ -482,7 +599,9 @@ export interface LivePanelStat {
   onlineUsers: number | null
   onlineClients: number | null
   xrayState: string
+  xrayError?: string
   xrayVersion: string
+  panelVersion?: string
   uptime: number
   sampledAt: number
 }
@@ -518,6 +637,8 @@ export interface LiveSummary {
   totalPanels: number
   onlinePanels: number
   activePanels: number
+  xrayAbnormalPanels: number
+  highDiskPanels: number
   totalNetUp: number
   totalNetDown: number
   totalTcp: number
@@ -530,14 +651,18 @@ export interface LiveSummary {
   totalCpuCores: number
   totalMemUsed: number
   totalMemTotal: number
+  fleetMemPercent: number
   fleetLoad1: number
   fleetLoad5: number
   fleetLoad15: number
+  fleetLoadPerCore: number
   systemLoadIndex: number
   systemLoadLevel: SystemLoadLevel
   cpu: LiveMetricStats
   mem: LiveMetricStats
   loadIndex: LiveMetricStats
+  rtt: LiveMetricStats
+  disk: LiveMetricStats
 }
 
 export interface LiveSnapshot {
@@ -545,6 +670,7 @@ export interface LiveSnapshot {
   intervalMs: number
   summary: LiveSummary
   panels: LivePanelStat[]
+  onlineUsers?: LiveOnlineUser[]
   point: LiveTrendPoint
   history?: LiveTrendPoint[]
 }

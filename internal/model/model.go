@@ -629,6 +629,17 @@ type TrafficTotal struct {
 	UpdatedAt int64 `json:"updatedAt"`
 }
 
+// TrafficBucket accumulates FireX traffic deltas per (panel, hour). BucketTs is
+// the start of the UTC hour in Unix milliseconds. Rows survive panel traffic
+// resets and are pruned automatically past the retention horizon.
+type TrafficBucket struct {
+	PanelID   uint  `json:"panelId" gorm:"primaryKey;autoIncrement:false"`
+	BucketTs  int64 `json:"bucketTs" gorm:"primaryKey;autoIncrement:false;index"`
+	Upload    int64 `json:"upload" gorm:"not null;default:0"`
+	Download  int64 `json:"download" gorm:"not null;default:0"`
+	UpdatedAt int64 `json:"updatedAt"`
+}
+
 // Setting is the key/value store for admin-editable runtime config such as the
 // Clash template.
 type Setting struct {
@@ -756,7 +767,7 @@ func AllModels() []any {
 		&ExternalSubscription{}, &NodeGroupExternalSubscription{},
 		&Policy{}, &Rule{}, &RuleSet{},
 		&Profile{}, &ProfileNodeGroup{}, &Egress{}, &EgressMember{},
-		&Plan{}, &PlanPanelLimit{}, &PlanGroupLimit{}, &User{}, &UserPanel{}, &TrafficTotal{}, &Setting{},
+		&Plan{}, &PlanPanelLimit{}, &PlanGroupLimit{}, &User{}, &UserPanel{}, &TrafficTotal{}, &TrafficBucket{}, &Setting{},
 		&InboundConfig{}, &InboundTemplate{}, &InboundDeployment{},
 	}
 }

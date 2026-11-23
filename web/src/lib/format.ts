@@ -45,6 +45,30 @@ export function formatTime(ms: number): string {
   return new Date(ms).toLocaleString('zh-CN', { hour12: false })
 }
 
+export function formatUptime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '—'
+  const totalMinutes = Math.floor(seconds / 60)
+  const days = Math.floor(totalMinutes / (60 * 24))
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60)
+  const mins = totalMinutes % 60
+  if (days > 0) return hours > 0 ? `${days}天 ${hours}小时` : `${days}天`
+  if (hours > 0) return mins > 0 ? `${hours}小时 ${mins}分` : `${hours}小时`
+  return `${Math.max(1, mins)}分`
+}
+
+export function formatDeltaPercent(
+  current: number,
+  baseline: number,
+): { label: string; direction: 'up' | 'down' | 'flat' } | null {
+  if (baseline <= 0 && current <= 0) return null
+  if (baseline <= 0) return { label: '+100%', direction: 'up' }
+  const ratio = ((current - baseline) / baseline) * 100
+  if (Math.abs(ratio) < 0.5) return { label: '持平', direction: 'flat' }
+  const abs = Math.abs(ratio)
+  const text = abs >= 100 ? `${Math.round(abs)}%` : `${abs.toFixed(1)}%`
+  return ratio > 0 ? { label: `+${text}`, direction: 'up' } : { label: `-${text}`, direction: 'down' }
+}
+
 export const TRAFFIC_RESET_LABELS = {
   none: '不重置',
   monthly: '每月（按开通日）',
